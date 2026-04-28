@@ -1,0 +1,2333 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Генератор размерных сеток (без установки программ)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous"></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      :root {
+        --title-color: #d9232e;
+        --header-bg: #0b52a8;
+        --header-text: #ffffff;
+        --row-odd: #e6edf8;
+        --row-even: #ffffff;
+        --data-text: #111111;
+        --panel-bg: #fafafa;
+        --border: #e2e2e2;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Montserrat", system-ui, -apple-system, sans-serif;
+        background: linear-gradient(160deg, #f8f9fb 0%, #eef1f6 100%);
+        color: #1a1a1a;
+      }
+      #app {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 3rem;
+      }
+      .page-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin: 0 0 1.5rem;
+        text-align: center;
+      }
+      .hint-top {
+        background: #e8f4ff;
+        border: 1px solid #b8d9ff;
+        border-radius: 10px;
+        padding: 0.85rem 1rem;
+        margin-bottom: 1.25rem;
+        font-size: 0.9rem;
+        line-height: 1.45;
+        color: #1a3d5c;
+      }
+      .panel {
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+      }
+      .field {
+        margin-bottom: 1rem;
+      }
+      .field:last-child {
+        margin-bottom: 0;
+      }
+      .field label {
+        display: block;
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.4rem;
+        color: #333;
+      }
+      .field input[type="text"],
+      .field input[type="number"],
+      .field input[type="file"] {
+        width: 100%;
+        font: inherit;
+      }
+      .field input[type="text"],
+      .field input[type="number"] {
+        padding: 0.65rem 0.85rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+      }
+      .field input[type="text"]:focus,
+      .field input[type="number"]:focus {
+        outline: 2px solid #0d7bff33;
+        border-color: #0d7bff;
+      }
+      .field-hint {
+        margin: 0.35rem 0 0;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #666;
+        line-height: 1.35;
+      }
+      .color-panel {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1rem 1.1rem;
+        margin-bottom: 1rem;
+        background: #fff;
+      }
+      .color-panel legend {
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: #444;
+        padding: 0 0.35rem;
+      }
+      .color-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 0.85rem 1rem;
+      }
+      .color-field label {
+        display: block;
+        font-size: 0.78rem;
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+        color: #444;
+      }
+      .color-row-inputs {
+        display: flex;
+        align-items: stretch;
+        gap: 0.5rem;
+      }
+      .color-row-inputs input[type="color"] {
+        flex: 0 0 52px;
+        width: 52px;
+        min-width: 52px;
+        height: 40px;
+        padding: 2px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        cursor: pointer;
+        background: #fff;
+      }
+      .color-hex {
+        flex: 1;
+        min-width: 0;
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.45rem 0.6rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+      }
+      .color-hex:focus {
+        outline: 2px solid #0d7bff33;
+        border-color: #0d7bff;
+      }
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+      .checkbox-row input {
+        width: 1.1rem;
+        height: 1.1rem;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+      .template-ribbon {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
+      }
+      .template-ribbon-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+      .palette-ribbon {
+        margin-top: 0.75rem;
+      }
+      .template-ribbon-row input[type="file"] {
+        flex: 1 1 220px;
+        min-width: 0;
+        font: inherit;
+      }
+      .btn {
+        font: inherit;
+        font-weight: 700;
+        padding: 0.75rem 1.35rem;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: transform 0.08s ease, box-shadow 0.15s ease;
+      }
+      .btn:active {
+        transform: scale(0.98);
+      }
+      .btn-primary {
+        background: linear-gradient(135deg, #0d7bff, #0060d4);
+        color: #fff;
+        box-shadow: 0 4px 14px rgba(13, 123, 255, 0.35);
+      }
+      .btn-primary:hover:not(:disabled) {
+        box-shadow: 0 6px 20px rgba(13, 123, 255, 0.45);
+      }
+      .btn-primary:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+      .btn-secondary {
+        background: #fff;
+        color: #0d58c4;
+        border: 2px solid #0d7bff;
+        box-shadow: none;
+      }
+      .btn-secondary:hover:not(:disabled) {
+        background: #f0f7ff;
+      }
+      .btn-secondary:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .btn-ghost {
+        background: #eef4fc;
+        color: #1a4a8a;
+        border: 1px solid #c5d9f5;
+        padding: 0.5rem 0.9rem;
+        font-size: 0.875rem;
+      }
+      .btn-ghost:hover:not(:disabled) {
+        background: #e2ecf9;
+      }
+      .msg {
+        font-size: 0.875rem;
+        margin: 0;
+      }
+      .msg-error {
+        color: #c62828;
+      }
+      .msg-hint {
+        color: #555;
+      }
+      .preview-wrap {
+        margin-top: 1.5rem;
+        overflow: auto;
+        border-radius: 12px;
+        border: 1px dashed var(--border);
+        padding: 1rem;
+        background: #fff;
+      }
+      .preview-wrap h2 {
+        font-size: 1rem;
+        font-weight: 700;
+        margin: 0 0 0.75rem;
+        color: #444;
+      }
+      .preview-hint {
+        font-size: 0.85rem;
+        color: #555;
+        margin: 0 0 0.75rem;
+        line-height: 1.45;
+      }
+      .preview-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        align-items: center;
+      }
+      .preview-toolbar--foot {
+        padding-top: 0.65rem;
+        margin-bottom: 0;
+        border-top: 1px dashed var(--border);
+      }
+      .preview-toolbars-sticky {
+        position: sticky;
+        top: 0;
+        z-index: 8;
+        background: #fff;
+        padding-bottom: 0.35rem;
+        margin-bottom: 0.65rem;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+      }
+      .preview-toolbar-label {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #555;
+        margin-right: 0.15rem;
+      }
+      .preview-toolbar-sep {
+        width: 1px;
+        height: 1.25rem;
+        background: var(--border);
+        margin: 0 0.35rem;
+        align-self: center;
+      }
+      .export-fit-frame {
+        width: 100%;
+        max-width: 1400px;
+        margin: 0 auto;
+        overflow-x: auto;
+        overflow-y: visible;
+        box-sizing: border-box;
+        background: #ffffff;
+      }
+      .export-root {
+        display: block;
+        background: #ffffff;
+        padding: 36px 40px 40px;
+        box-sizing: border-box;
+        width: max(100%, max-content);
+        min-width: 640px;
+        max-width: none;
+      }
+      .export-template-ref {
+        margin: 0 0 20px;
+        text-align: center;
+      }
+      .export-template-ref__img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        margin: 0 auto;
+        border-radius: 10px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+      }
+      .export-title {
+        margin: 0 0 20px;
+        text-align: center;
+        font-family: "Montserrat", system-ui, sans-serif;
+        font-size: 32px;
+        font-weight: 700;
+        color: var(--export-title-color, var(--title-color));
+        line-height: 1.2;
+        outline: none;
+      }
+      .export-title:focus-visible {
+        box-shadow: 0 0 0 3px rgba(13, 123, 255, 0.28);
+        border-radius: 8px;
+      }
+      .export-body {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .export-subtitle-banner {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        background: var(--export-sub1-bg, var(--header-bg));
+        color: var(--export-sub1-text, var(--header-text));
+        text-align: center;
+        padding: 16px 24px 18px;
+        border-top-left-radius: 12px;
+        border-top-right-radius: 12px;
+        overflow-x: auto;
+        overflow-y: visible;
+      }
+      .export-subtitle-line {
+        margin: 0;
+        font-family: "Montserrat", system-ui, sans-serif;
+        font-weight: 700;
+        font-size: 16px;
+        line-height: 1.45;
+        text-align: center;
+        width: 100%;
+        color: var(--export-sub1-text, var(--header-text));
+        outline: none;
+        white-space: nowrap;
+      }
+      .export-subtitle-line:focus-visible {
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+        border-radius: 6px;
+      }
+      .export-subtitle-line + .export-subtitle-line {
+        margin-top: 6px;
+      }
+      .export-table-wrap {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        overflow-x: auto;
+        overflow-y: visible;
+        max-width: 100%;
+        container-type: inline-size;
+        container-name: export-table;
+      }
+      .export-table-wrap:not(.has-banner) thead th:first-child {
+        border-top-left-radius: 12px;
+      }
+      .export-table-wrap:not(.has-banner) thead th:last-child {
+        border-top-right-radius: 12px;
+      }
+      .export-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 6px 6px;
+        font-family: "Montserrat", system-ui, sans-serif;
+        table-layout: fixed;
+      }
+      .export-cell-editable {
+        outline: none;
+        cursor: text;
+        white-space: nowrap;
+      }
+      .export-cell-editable:focus {
+        box-shadow: inset 0 0 0 2px rgba(13, 123, 255, 0.35);
+        border-radius: 4px;
+      }
+      .export-table thead th {
+        min-width: 0;
+        box-sizing: border-box;
+        background: var(--export-thead-bg, var(--header-bg));
+        color: var(--export-thead-text, var(--header-text));
+        font-weight: 700;
+        text-align: center;
+        padding: 10px 6px;
+        border: none;
+        border-radius: 10px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        line-height: 1.2;
+        vertical-align: middle;
+        hyphens: manual;
+        font-size: min(14px, max(8px, calc(100cqi / max(1, var(--export-col-count, 8)) / 10)));
+      }
+      .export-table tbody td {
+        min-width: 0;
+        box-sizing: border-box;
+        font-weight: 700;
+        text-align: center;
+        color: var(--data-text);
+        padding: 12px 6px;
+        border: none;
+        white-space: nowrap;
+        font-size: min(15px, max(10px, calc(100cqi / max(1, var(--export-col-count, 8)) / 14)));
+      }
+      .export-table tbody tr:nth-child(odd) td {
+        background: var(--export-row-even, var(--row-even));
+      }
+      .export-table tbody tr:nth-child(even) td {
+        background: var(--export-row-odd, var(--row-odd));
+      }
+      .export-table tbody tr td:first-child {
+        border-top-left-radius: 10px;
+        border-bottom-left-radius: 10px;
+      }
+      .export-table tbody tr td:last-child {
+        border-top-right-radius: 10px;
+        border-bottom-right-radius: 10px;
+      }
+      .export-foot-block {
+        margin-top: 22px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .export-foot-banner.export-subtitle-banner {
+        margin-bottom: 0;
+      }
+      .export-foot-table-wrap {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        overflow-x: auto;
+        overflow-y: visible;
+        container-type: inline-size;
+        container-name: export-foot-table;
+      }
+      .export-foot-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 6px 6px;
+        font-family: "Montserrat", system-ui, sans-serif;
+        table-layout: fixed;
+      }
+      .export-foot-table td.export-foot-cell--headerlike {
+        min-width: 0;
+        box-sizing: border-box;
+        background: var(--export-thead-bg, var(--header-bg));
+        color: var(--export-thead-text, var(--header-text));
+        font-weight: 700;
+        text-align: center;
+        padding: 10px 6px;
+        border: none;
+        border-radius: 10px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        line-height: 1.2;
+        vertical-align: middle;
+        hyphens: manual;
+        font-size: min(14px, max(8px, calc(100cqi / max(1, var(--export-col-count, 8)) / 10)));
+      }
+      .export-foot-table tr td.export-foot-cell--headerlike:first-child {
+        border-top-left-radius: 10px;
+        border-bottom-left-radius: 10px;
+      }
+      .export-foot-table tr td.export-foot-cell--headerlike:last-child {
+        border-top-right-radius: 10px;
+        border-bottom-right-radius: 10px;
+      }
+      .export-foot-table tbody > tr.export-foot-data-row:nth-child(even) td.export-foot-body-cell {
+        background: var(--export-row-even, var(--row-even));
+      }
+      .export-foot-table tbody > tr.export-foot-data-row:nth-child(odd) td.export-foot-body-cell {
+        background: var(--export-row-odd, var(--row-odd));
+      }
+      .export-foot-table td.export-foot-body-cell {
+        min-width: 0;
+        box-sizing: border-box;
+        font-weight: 700;
+        text-align: center;
+        color: var(--data-text);
+        padding: 12px 6px;
+        border: none;
+        white-space: nowrap;
+        font-size: min(15px, max(10px, calc(100cqi / max(1, var(--export-col-count, 8)) / 14)));
+      }
+      .export-foot-table tbody tr.export-foot-data-row td.export-foot-body-cell:first-child {
+        border-top-left-radius: 10px;
+        border-bottom-left-radius: 10px;
+      }
+      .export-foot-table tbody tr.export-foot-data-row td.export-foot-body-cell:last-child {
+        border-top-right-radius: 10px;
+        border-bottom-right-radius: 10px;
+      }
+      .preview-foot-tools {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+    </style>
+    <link rel="stylesheet" href="/assistant-embed.css" />
+  </head>
+  <body class="embed-assistant-size">
+    <div id="app">
+      <h1 class="page-title">Генератор размерных сеток (JPG)</h1>
+      <p class="hint-top">
+        <strong>Без Node.js и без терминала:</strong> нужны только этот файл и браузер (Chrome или Edge).
+        Откройте файл двойным щелчком. Нужен интернет — один раз подгрузятся шрифт и библиотеки с CDN.
+        Чтобы дать ссылку коллегам, загрузите этот же файл на хостинг (например, Netlify Drop) или положите в общую папку.
+      </p>
+      <div class="panel">
+        <div class="field">
+          <label for="title-input">Основной заголовок</label>
+          <input type="text" id="title-input" placeholder="Например: Размерная таблица Nike Skims" />
+        </div>
+        <div class="field">
+          <label for="sub1-input">Подзаголовок 1 (блок над таблицей, по центру)</label>
+          <input
+            type="text"
+            id="sub1-input"
+            placeholder="Например: Универсальная размерная сетка (низ и верх)"
+          />
+        </div>
+        <fieldset class="color-panel">
+          <legend>Цвета макета — палитра и код #RRGGBB / #RGB</legend>
+          <div class="color-grid">
+            <div class="color-field">
+              <label for="color-title">Основной заголовок (текст)</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-title" value="#d9232e" />
+                <input type="text" id="color-title-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#D9232E" autocomplete="off" />
+              </div>
+            </div>
+            <div class="color-field">
+              <label for="color-sub1-bg">Подзаголовок 1 — фон</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-sub1-bg" value="#0b52a8" />
+                <input type="text" id="color-sub1-bg-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#0B52A8" autocomplete="off" />
+              </div>
+            </div>
+            <div class="color-field">
+              <label for="color-sub1-text">Подзаголовок 1 — текст</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-sub1-text" value="#ffffff" />
+                <input type="text" id="color-sub1-text-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#FFFFFF" autocomplete="off" />
+              </div>
+            </div>
+            <div class="color-field">
+              <label for="color-thead-bg">Шапка таблицы (INT, RU…) — фон</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-thead-bg" value="#0b52a8" />
+                <input type="text" id="color-thead-bg-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#0B52A8" autocomplete="off" />
+              </div>
+            </div>
+            <div class="color-field">
+              <label for="color-thead-text">Шапка таблицы — текст</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-thead-text" value="#ffffff" />
+                <input type="text" id="color-thead-text-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#FFFFFF" autocomplete="off" />
+              </div>
+            </div>
+            <div class="color-field">
+              <label for="color-row-even">Строки таблицы — нечётные (1, 3, 5…)</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-row-even" value="#ffffff" />
+                <input type="text" id="color-row-even-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#FFFFFF" autocomplete="off" />
+              </div>
+            </div>
+            <div class="color-field">
+              <label for="color-row-odd">Строки таблицы — чётные (зебра)</label>
+              <div class="color-row-inputs">
+                <input type="color" id="color-row-odd" value="#e6edf8" />
+                <input type="text" id="color-row-odd-hex" class="color-hex" spellcheck="false" maxlength="7" placeholder="#E6EDF8" autocomplete="off" />
+              </div>
+            </div>
+          </div>
+          <div class="template-ribbon-row palette-ribbon">
+            <button type="button" class="btn btn-secondary" id="btn-theme-sportmaster">Спортмастер</button>
+            <button type="button" class="btn btn-secondary" id="btn-palette-download">Скачать палитру (.json)</button>
+            <input type="file" id="palette-json-input" accept=".json,application/json" hidden />
+            <button type="button" class="btn btn-secondary" id="btn-palette-upload">Загрузить палитру…</button>
+          </div>
+          <p class="field-hint">
+            В код можно вставить #RRGGBB или короткий #RGB — цвет и превью обновятся. «Спортмастер» — готовая палитра (синяя шапка #1551E5, заголовок #FF0016, зебра #E8EEFC). Все цвета разом: «Скачать палитру» / «Загрузить палитру» или блок theme в «Сохранить сетку (.json)».
+          </p>
+        </fieldset>
+        <div class="field">
+          <label for="blue-row-input">Строка Excel для синих заголовков колонок (INT, RU размер…)</label>
+          <input type="number" id="blue-row-input" min="1" step="1" value="2" />
+          <p class="field-hint">
+            Номер строки как слева в Excel. Строки выше не попадут в таблицу.
+          </p>
+        </div>
+        <div class="field">
+          <label for="file-input">Файл Excel (.xlsx, .xls)</label>
+          <input type="file" id="file-input" accept=".xlsx,.xls,.csv" />
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btn-primary" id="btn-build" disabled>Построить в редакторе</button>
+          <button type="button" class="btn btn-secondary" id="btn-jpg" disabled>Скачать JPG 1500×2000</button>
+          <button type="button" class="btn btn-secondary" id="btn-json-save" disabled>Сохранить сетку (.json)</button>
+          <p class="msg msg-hint" id="status-msg">Загрузите таблицу Excel.</p>
+        </div>
+        <div class="template-ribbon">
+          <label for="template-image-input">Образец макета (.jpg, .png)</label>
+          <div class="template-ribbon-row">
+            <input type="file" id="template-image-input" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+            <button type="button" class="btn btn-secondary" id="btn-layout-blank">Макет сетки (пустая сетка)</button>
+          </div>
+          <p class="field-hint" id="template-hint">
+            Загрузите картинку-эталон: она появится над таблицей и в JPG. Колонки автоматически подстраиваются под типовой макет (RU, EU, US, UK, длина стопы), если таблица не построена из Excel.
+          </p>
+        </div>
+      </div>
+      <div class="preview-wrap" id="preview-section" hidden>
+        <h2>Редактор сетки</h2>
+        <p class="preview-hint">
+          Строки основной таблицы — «+ Строка» (панель закреплена при прокрутке). В блоке под таблицей — «+ Строка под шапкой» для светлых строк под синими заголовками. Цвета — в форме выше. Итог — «Скачать JPG».
+        </p>
+        <div class="preview-toolbars-sticky">
+          <div class="preview-toolbar">
+            <button type="button" class="btn btn-ghost" id="btn-add-row">+ Строка</button>
+            <button type="button" class="btn btn-ghost" id="btn-del-row">− Удалить последнюю строку</button>
+            <button type="button" class="btn btn-ghost" id="btn-add-col">+ Столбец</button>
+            <button type="button" class="btn btn-ghost" id="btn-del-col">− Удалить последний столбец</button>
+          </div>
+          <div class="preview-toolbar preview-toolbar--foot">
+            <button type="button" class="btn btn-ghost" id="btn-foot1-add">+ Блок под таблицей (как шапка)</button>
+            <span id="foot1-tools" class="preview-foot-tools" hidden>
+              <span class="preview-toolbar-label">Блок 1</span>
+              <button type="button" class="btn btn-ghost" id="btn-foot1-add-row">+ Строка под шапкой</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot1-del-row">− Строка под шапкой</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot1-add-col">+ Столбец</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot1-del-col">− Столбец</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot1-remove">Убрать блок</button>
+            </span>
+            <span class="preview-toolbar-sep" id="foot-toolbar-sep" aria-hidden="true"></span>
+            <button type="button" class="btn btn-ghost" id="btn-foot2-add">+ Второй блок под таблицей</button>
+            <span id="foot2-tools" class="preview-foot-tools" hidden>
+              <span class="preview-toolbar-label">Блок 2</span>
+              <button type="button" class="btn btn-ghost" id="btn-foot2-add-row">+ Строка под шапкой</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot2-del-row">− Строка под шапкой</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot2-add-col">+ Столбец</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot2-del-col">− Столбец</button>
+              <button type="button" class="btn btn-ghost" id="btn-foot2-remove">Убрать блок</button>
+            </span>
+          </div>
+        </div>
+        <div id="export-mount"></div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        if (typeof XLSX === "undefined" || typeof html2canvas === "undefined") {
+          document.getElementById("status-msg").textContent =
+            "Не загрузились библиотеки. Проверьте интернет или откройте страницу через сайт (https), а не только с диска.";
+          document.getElementById("status-msg").className = "msg msg-error";
+          return;
+        }
+
+        var MONTH_ABBR = {
+          jan: 1,
+          feb: 2,
+          mar: 3,
+          apr: 4,
+          may: 5,
+          jun: 6,
+          jul: 7,
+          aug: 8,
+          sep: 9,
+          oct: 10,
+          nov: 11,
+          dec: 12,
+        };
+
+        function fixMisreadDateRange(s) {
+          var t = String(s).trim();
+          var m1 = /^(\d{1,2})\s*-\s*([A-Za-z]{3})$/i.exec(t);
+          if (m1) {
+            var a = parseInt(m1[1], 10);
+            var mn = MONTH_ABBR[m1[2].toLowerCase()];
+            if (mn && a >= 1 && a <= 31) {
+              var lo = Math.min(a, mn);
+              var hi = Math.max(a, mn);
+              return lo + "-" + hi;
+            }
+          }
+          var m2 = /^([A-Za-z]{3})\s*-\s*(\d{1,2})$/i.exec(t);
+          if (m2) {
+            var mn2 = MONTH_ABBR[m2[1].toLowerCase()];
+            var b = parseInt(m2[2], 10);
+            if (mn2 && b >= 1 && b <= 31) {
+              var lo2 = Math.min(mn2, b);
+              var hi2 = Math.max(mn2, b);
+              return lo2 + "-" + hi2;
+            }
+          }
+          return t;
+        }
+
+        function cellToString(v) {
+          if (v === null || v === undefined) return "";
+          if (typeof v === "number" && isFinite(v)) {
+            return v % 1 === 0 ? String(v) : String(v);
+          }
+          return String(v).trim();
+        }
+
+        function formatCellRaw(wb, cell) {
+          if (!cell || cell.t === "z") return "";
+          try {
+            if (typeof XLSX.utils.format_cell === "function") {
+              var fs = XLSX.utils.format_cell(cell, undefined, wb);
+              if (fs != null && String(fs).trim() !== "") return String(fs).trim();
+            }
+          } catch (e) {}
+          if (cell.w != null && String(cell.w).trim() !== "") return String(cell.w).trim();
+          var v = cell.v;
+          if (v === null || v === undefined || v === "") return "";
+          if (typeof v === "number" && isFinite(v)) {
+            return v % 1 === 0 ? String(v) : String(v);
+          }
+          return String(v).trim();
+        }
+
+        function cellTextFromWorkbook(wb, sheet, addr) {
+          var cell = sheet[addr];
+          return fixMisreadDateRange(formatCellRaw(wb, cell));
+        }
+
+        function readFirstSheetRows(buf) {
+          var wb = XLSX.read(buf, { type: "array", cellDates: false, cellNF: true });
+          var sheetName = wb.SheetNames[0];
+          if (!sheetName) return [];
+          var sheet = wb.Sheets[sheetName];
+          if (!sheet) return [];
+          var ref = sheet["!ref"];
+          if (!ref) return [];
+          var dr = XLSX.utils.decode_range(ref);
+          var rows = [];
+          for (var R = 0; R <= dr.e.r; R++) {
+            var row = [];
+            for (var C = dr.s.c; C <= dr.e.c; C++) {
+              var addr = XLSX.utils.encode_cell({ r: R, c: C });
+              row.push(cellTextFromWorkbook(wb, sheet, addr));
+            }
+            rows.push(row);
+          }
+          while (rows.length > 0 && rows[rows.length - 1].every(function (c) { return c === ""; })) {
+            rows.pop();
+          }
+          return rows;
+        }
+
+        function getColCount(table) {
+          var tr = table.querySelector("thead tr");
+          return tr ? tr.querySelectorAll("th").length : 0;
+        }
+
+        function syncMainExportTableColCss() {
+          var table = document.getElementById("export-table");
+          if (!table) return;
+          table.style.setProperty("--export-col-count", String(Math.max(1, getColCount(table))));
+        }
+
+        function syncFootExportTableColCss(which) {
+          var bid = which === 1 ? "export-foot-block-1" : "export-foot-block-2";
+          var tbl = document.querySelector("#" + bid + " .export-foot-table");
+          var tr = document.getElementById(which === 1 ? "export-foot-row-1" : "export-foot-row-2");
+          if (!tbl || !tr) return;
+          tbl.style.setProperty("--export-col-count", String(Math.max(1, tr.cells.length)));
+        }
+
+        var EXPORT_FIT_MAX_W = 1400;
+        var EXPORT_FIT_MIN_ZOOM = 0.18;
+
+        function applyExportFit() {
+          var frame = document.getElementById("export-fit-frame");
+          var root = document.getElementById("export-root");
+          if (!frame || !root) return;
+          root.style.zoom = "1";
+          frame.style.width = "100%";
+          frame.style.maxWidth = EXPORT_FIT_MAX_W + "px";
+          root.style.removeProperty("width");
+          root.style.boxSizing = "border-box";
+          void root.offsetWidth;
+          void frame.offsetWidth;
+          var innerW = Math.max(1, Math.ceil(root.scrollWidth));
+          var avail = Math.max(1, frame.clientWidth);
+          if (innerW > avail + 1) {
+            var z = Math.max(EXPORT_FIT_MIN_ZOOM, avail / innerW);
+            root.style.zoom = String(z);
+          } else {
+            root.style.zoom = "1";
+          }
+          frame.style.minHeight = Math.ceil(root.getBoundingClientRect().height + 4) + "px";
+        }
+
+        function scheduleExportFit() {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(applyExportFit);
+          });
+        }
+
+        function attachPasteGrid(table) {
+          table.addEventListener("paste", function (e) {
+            var clip = e.clipboardData && e.clipboardData.getData("text/plain");
+            if (!clip) return;
+            e.preventDefault();
+            var sel = window.getSelection();
+            var node = sel ? sel.anchorNode : null;
+            if (node && node.nodeType === 3) node = node.parentElement;
+            var start = node && node.closest ? node.closest("th, td") : null;
+            if (!start || !table.contains(start)) return;
+            var startRow = start.parentElement;
+            var theadTr = table.querySelector("thead tr");
+            var body = table.tBodies[0];
+            if (!body) return;
+            var allRows = [];
+            if (theadTr) allRows.push(theadTr);
+            for (var i = 0; i < body.rows.length; i++) allRows.push(body.rows[i]);
+            var startRi = allRows.indexOf(startRow);
+            var startCi = Array.prototype.indexOf.call(startRow.cells, start);
+            if (startRi < 0 || startCi < 0) return;
+            var matrix = clip
+              .replace(/\r\n/g, "\n")
+              .replace(/\r/g, "\n")
+              .split("\n")
+              .map(function (line) {
+                return line.split("\t");
+              });
+            var ncol = getColCount(table);
+            for (var ri = 0; ri < matrix.length; ri++) {
+              var line = matrix[ri];
+              if (!line) continue;
+              var targetRi = startRi + ri;
+              while (targetRi >= allRows.length) {
+                var tr = document.createElement("tr");
+                for (var c = 0; c < ncol; c++) {
+                  var td = document.createElement("td");
+                  td.contentEditable = "true";
+                  td.spellcheck = false;
+                  td.className = "export-cell-editable";
+                  td.textContent = "\u00a0";
+                  tr.appendChild(td);
+                }
+                body.appendChild(tr);
+                allRows.push(tr);
+              }
+              var tr2 = allRows[targetRi];
+              var cells = tr2.cells;
+              for (var ci = 0; ci < line.length; ci++) {
+                var targetCi = startCi + ci;
+                if (targetCi >= cells.length) continue;
+                var raw = (line[ci] || "").trim();
+                cells[targetCi].textContent = fixMisreadDateRange(raw) || "\u00a0";
+              }
+            }
+            scheduleExportFit();
+          });
+        }
+
+        var LEGACY_FOOT1_TITLE = "Подзаголовок 1 (под таблицей)";
+        var LEGACY_FOOT2_TITLE = "Дозаголовок 2 (под таблицей)";
+        var DEFAULT_FOOTER_BLOCKS = {
+          foot1Enabled: false,
+          foot2Enabled: false,
+          foot1Title: "",
+          foot1: ["", "", ""],
+          foot1Body: [],
+          foot2Title: "",
+          foot2: ["", "", ""],
+          foot2Body: [],
+        };
+
+        function cloneFooterBlocks(s) {
+          return {
+            foot1Enabled: s.foot1Enabled,
+            foot2Enabled: s.foot2Enabled,
+            foot1Title: s.foot1Title,
+            foot1: s.foot1.slice(),
+            foot1Body: s.foot1Body.map(function (r) {
+              return r.slice();
+            }),
+            foot2Title: s.foot2Title,
+            foot2: s.foot2.slice(),
+            foot2Body: s.foot2Body.map(function (r) {
+              return r.slice();
+            }),
+          };
+        }
+
+        function mergeFootRow(raw, fallback) {
+          if (Array.isArray(raw) && raw.length > 0) {
+            return raw.map(function (c) {
+              return String(c != null ? c : "");
+            });
+          }
+          return fallback.slice();
+        }
+
+        function mergeFootBody(raw, ncol) {
+          var n = Math.max(1, ncol);
+          if (!Array.isArray(raw) || raw.length === 0) return [];
+          return raw.map(function (row) {
+            var line = Array.isArray(row) ? row.map(function (c) { return String(c != null ? c : ""); }) : [];
+            while (line.length < n) line.push("");
+            if (line.length > n) line.length = n;
+            return line;
+          });
+        }
+
+        function inferLegacyFoot1Enabled(snap) {
+          var hasCells =
+            Array.isArray(snap.footDown1) &&
+            snap.footDown1.some(function (c) {
+              return String(c).trim() !== "";
+            });
+          var hasBody =
+            Array.isArray(snap.footDown1Body) &&
+            snap.footDown1Body.some(function (row) {
+              return Array.isArray(row) && row.some(function (c) { return String(c).trim() !== ""; });
+            });
+          var t = (snap.footDown1Title || "").trim();
+          var meaningfulTitle = t !== "" && t !== LEGACY_FOOT1_TITLE;
+          return hasCells || meaningfulTitle || hasBody;
+        }
+
+        function inferLegacyFoot2Enabled(snap) {
+          var hasCells =
+            Array.isArray(snap.footDown2) &&
+            snap.footDown2.some(function (c) {
+              return String(c).trim() !== "";
+            });
+          var hasBody =
+            Array.isArray(snap.footDown2Body) &&
+            snap.footDown2Body.some(function (row) {
+              return Array.isArray(row) && row.some(function (c) { return String(c).trim() !== ""; });
+            });
+          var t = (snap.footDown2Title || "").trim();
+          var meaningfulTitle = t !== "" && t !== LEGACY_FOOT2_TITLE;
+          return hasCells || meaningfulTitle || hasBody;
+        }
+
+        function resolveFooterBlocks(snap) {
+          if (!snap) return cloneFooterBlocks(DEFAULT_FOOTER_BLOCKS);
+          var foot1Enabled =
+            snap.footDown1Enabled === true ||
+            (snap.footDown1Enabled !== false && inferLegacyFoot1Enabled(snap));
+          var foot2Enabled =
+            snap.footDown2Enabled === true ||
+            (snap.footDown2Enabled !== false && inferLegacyFoot2Enabled(snap));
+          var foot1 = mergeFootRow(snap.footDown1, DEFAULT_FOOTER_BLOCKS.foot1);
+          var foot2 = mergeFootRow(snap.footDown2, DEFAULT_FOOTER_BLOCKS.foot2);
+          return {
+            foot1Enabled: foot1Enabled,
+            foot2Enabled: foot2Enabled,
+            foot1Title: typeof snap.footDown1Title === "string" ? snap.footDown1Title : "",
+            foot1: foot1,
+            foot1Body: mergeFootBody(snap.footDown1Body, foot1.length),
+            foot2Title: typeof snap.footDown2Title === "string" ? snap.footDown2Title : "",
+            foot2: foot2,
+            foot2Body: mergeFootBody(snap.footDown2Body, foot2.length),
+          };
+        }
+
+        function appendFooterBlock(bodyWrap, titleText, headerCells, bodyRows, titleId, rowId, blockWrapId) {
+          var wrap = document.createElement("div");
+          wrap.className = "export-foot-block";
+          wrap.id = blockWrapId;
+          var tw = document.createElement("div");
+          tw.className = "export-foot-table-wrap";
+          var ban = document.createElement("div");
+          ban.className = "export-subtitle-banner export-foot-banner";
+          var titleEl = document.createElement("p");
+          titleEl.className = "export-subtitle-line";
+          titleEl.id = titleId;
+          titleEl.contentEditable = "true";
+          titleEl.spellcheck = false;
+          titleEl.textContent = (titleText || "").trim() || "\u00a0";
+          ban.appendChild(titleEl);
+          wrap.appendChild(ban);
+          var tbl = document.createElement("table");
+          tbl.className = "export-foot-table";
+          var tbody = document.createElement("tbody");
+          var tr = document.createElement("tr");
+          tr.id = rowId;
+          for (var fi = 0; fi < headerCells.length; fi++) {
+            var td = document.createElement("td");
+            td.contentEditable = "true";
+            td.spellcheck = false;
+            td.className = "export-cell-editable export-foot-cell export-foot-cell--headerlike";
+            td.textContent = fixMisreadDateRange(cellToString(headerCells[fi])) || "\u00a0";
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+          var ncol = Math.max(1, headerCells.length);
+          var normalizedBody = mergeFootBody(bodyRows, ncol);
+          for (var bi = 0; bi < normalizedBody.length; bi++) {
+            var trd = document.createElement("tr");
+            trd.className = "export-foot-data-row";
+            var row = normalizedBody[bi];
+            for (var cj = 0; cj < ncol; cj++) {
+              var tdd = document.createElement("td");
+              tdd.contentEditable = "true";
+              tdd.spellcheck = false;
+              tdd.className = "export-cell-editable export-foot-body-cell";
+              tdd.textContent = fixMisreadDateRange(cellToString(row[cj])) || "\u00a0";
+              trd.appendChild(tdd);
+            }
+            tbody.appendChild(trd);
+          }
+          tbl.appendChild(tbody);
+          tbl.style.setProperty("--export-col-count", String(ncol));
+          tw.appendChild(tbl);
+          wrap.appendChild(tw);
+          bodyWrap.appendChild(wrap);
+        }
+
+        function getFootBlockTbody(which) {
+          var bid = which === 1 ? "export-foot-block-1" : "export-foot-block-2";
+          var block = document.getElementById(bid);
+          return block ? block.querySelector(".export-foot-table tbody") : null;
+        }
+
+        function addFooterTableColumn(which) {
+          var id = which === 1 ? "export-foot-row-1" : "export-foot-row-2";
+          var tr = document.getElementById(id);
+          if (!tr) return;
+          var td = document.createElement("td");
+          td.contentEditable = "true";
+          td.spellcheck = false;
+          td.className = "export-cell-editable export-foot-cell export-foot-cell--headerlike";
+          td.textContent = "\u00a0";
+          tr.appendChild(td);
+          var tbody = getFootBlockTbody(which);
+          if (tbody) {
+            var dataRows = tbody.querySelectorAll("tr.export-foot-data-row");
+            for (var di = 0; di < dataRows.length; di++) {
+              var tdd = document.createElement("td");
+              tdd.contentEditable = "true";
+              tdd.spellcheck = false;
+              tdd.className = "export-cell-editable export-foot-body-cell";
+              tdd.textContent = "\u00a0";
+              dataRows[di].appendChild(tdd);
+            }
+          }
+          syncFootExportTableColCss(which);
+          scheduleExportFit();
+        }
+
+        function removeFooterTableColumn(which) {
+          var id = which === 1 ? "export-foot-row-1" : "export-foot-row-2";
+          var tr = document.getElementById(id);
+          if (!tr || tr.cells.length <= 1) return;
+          tr.deleteCell(tr.cells.length - 1);
+          var tbody = getFootBlockTbody(which);
+          if (tbody) {
+            var dataRows = tbody.querySelectorAll("tr.export-foot-data-row");
+            for (var di = 0; di < dataRows.length; di++) {
+              var dr = dataRows[di];
+              if (dr.cells.length > 0) dr.deleteCell(dr.cells.length - 1);
+            }
+          }
+          syncFootExportTableColCss(which);
+          scheduleExportFit();
+        }
+
+        function addFooterDataRow(which) {
+          var hid = which === 1 ? "export-foot-row-1" : "export-foot-row-2";
+          var headerRow = document.getElementById(hid);
+          var tbody = getFootBlockTbody(which);
+          if (!headerRow || !tbody) return;
+          var ncol = Math.max(1, headerRow.cells.length);
+          var tr = document.createElement("tr");
+          tr.className = "export-foot-data-row";
+          for (var c = 0; c < ncol; c++) {
+            var td = document.createElement("td");
+            td.contentEditable = "true";
+            td.spellcheck = false;
+            td.className = "export-cell-editable export-foot-body-cell";
+            td.textContent = "\u00a0";
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+          scheduleExportFit();
+        }
+
+        function removeLastFooterDataRow(which) {
+          var hid = which === 1 ? "export-foot-row-1" : "export-foot-row-2";
+          var tbody = getFootBlockTbody(which);
+          if (!tbody || tbody.rows.length <= 1) return;
+          var last = tbody.rows[tbody.rows.length - 1];
+          if (last.id === hid) return;
+          tbody.removeChild(last);
+          scheduleExportFit();
+        }
+
+        function buildEditableExport(title, sub1, headers, body, referenceImageDataUrl, footBlocks) {
+          var mount = document.getElementById("export-mount");
+          if (!mount) return;
+          mount.textContent = "";
+          var root = document.createElement("div");
+          root.id = "export-root";
+          root.className = "export-root";
+          if (referenceImageDataUrl) {
+            var refWrap = document.createElement("div");
+            refWrap.className = "export-template-ref";
+            var img = document.createElement("img");
+            img.className = "export-template-ref__img";
+            img.src = referenceImageDataUrl;
+            img.alt = "Образец макета";
+            refWrap.appendChild(img);
+            root.appendChild(refWrap);
+          }
+          var h1 = document.createElement("p");
+          h1.className = "export-title";
+          h1.contentEditable = "true";
+          h1.spellcheck = false;
+          h1.textContent = (title || "").trim() || "\u00a0";
+          var bodyWrap = document.createElement("div");
+          bodyWrap.className = "export-body";
+          var s1 = (sub1 || "").trim();
+          if (s1) {
+            var ban = document.createElement("div");
+            ban.className = "export-subtitle-banner";
+            var p = document.createElement("p");
+            p.id = "export-subtitle-main";
+            p.className = "export-subtitle-line";
+            p.contentEditable = "true";
+            p.spellcheck = false;
+            p.textContent = s1;
+            ban.appendChild(p);
+            bodyWrap.appendChild(ban);
+          }
+          var tableWrap = document.createElement("div");
+          tableWrap.className = "export-table-wrap" + (s1 ? " has-banner" : "");
+          var table = document.createElement("table");
+          table.className = "export-table";
+          table.id = "export-table";
+          var colCount = Math.max.apply(
+            null,
+            [headers.length, 1].concat(
+              body.map(function (r) {
+                return r.length;
+              })
+            )
+          );
+          var thead = document.createElement("thead");
+          var trh = document.createElement("tr");
+          for (var hi = 0; hi < colCount; hi++) {
+            var th = document.createElement("th");
+            th.contentEditable = "true";
+            th.spellcheck = false;
+            th.className = "export-cell-editable";
+            var ht = fixMisreadDateRange(cellToString(headers[hi] != null ? headers[hi] : ""));
+            th.textContent = ht || "\u00a0";
+            trh.appendChild(th);
+          }
+          thead.appendChild(trh);
+          table.appendChild(thead);
+          var tb = document.createElement("tbody");
+          for (var r = 0; r < body.length; r++) {
+            var tr = document.createElement("tr");
+            for (var c = 0; c < colCount; c++) {
+              var td = document.createElement("td");
+              td.contentEditable = "true";
+              td.spellcheck = false;
+              td.className = "export-cell-editable";
+              var tx = fixMisreadDateRange(cellToString(body[r][c]));
+              td.textContent = tx || "\u00a0";
+              tr.appendChild(td);
+            }
+            tb.appendChild(tr);
+          }
+          table.appendChild(tb);
+          table.style.setProperty("--export-col-count", String(colCount));
+          tableWrap.appendChild(table);
+          bodyWrap.appendChild(tableWrap);
+          var f = cloneFooterBlocks(footBlocks != null ? footBlocks : DEFAULT_FOOTER_BLOCKS);
+          if (f.foot1Enabled) {
+            appendFooterBlock(
+              bodyWrap,
+              f.foot1Title,
+              f.foot1,
+              f.foot1Body,
+              "export-foot-title-1",
+              "export-foot-row-1",
+              "export-foot-block-1"
+            );
+          }
+          if (f.foot2Enabled) {
+            appendFooterBlock(
+              bodyWrap,
+              f.foot2Title,
+              f.foot2,
+              f.foot2Body,
+              "export-foot-title-2",
+              "export-foot-row-2",
+              "export-foot-block-2"
+            );
+          }
+          root.appendChild(h1);
+          root.appendChild(bodyWrap);
+          var fitFrame = document.createElement("div");
+          fitFrame.id = "export-fit-frame";
+          fitFrame.className = "export-fit-frame";
+          fitFrame.appendChild(root);
+          mount.appendChild(fitFrame);
+          attachPasteGrid(table);
+          applyExportThemeColors(root);
+          syncFootStorageDataset(root, f);
+          scheduleExportFit();
+          syncPreviewFooterChrome();
+        }
+
+        function syncFootStorageDataset(root, f) {
+          if (!f.foot1Enabled) {
+            root.dataset.foot1Stored = JSON.stringify({ t: f.foot1Title, c: f.foot1, b: f.foot1Body });
+          } else {
+            delete root.dataset.foot1Stored;
+          }
+          if (!f.foot2Enabled) {
+            root.dataset.foot2Stored = JSON.stringify({ t: f.foot2Title, c: f.foot2, b: f.foot2Body });
+          } else {
+            delete root.dataset.foot2Stored;
+          }
+        }
+
+        function syncPreviewFooterChrome() {
+          var b1 = !!document.querySelector("#export-foot-block-1");
+          var b2 = !!document.querySelector("#export-foot-block-2");
+          var a1 = document.getElementById("btn-foot1-add");
+          var a2 = document.getElementById("btn-foot2-add");
+          var t1 = document.getElementById("foot1-tools");
+          var t2 = document.getElementById("foot2-tools");
+          if (a1) a1.toggleAttribute("hidden", b1);
+          if (t1) t1.toggleAttribute("hidden", !b1);
+          if (a2) a2.toggleAttribute("hidden", b2);
+          if (t2) t2.toggleAttribute("hidden", !b2);
+        }
+
+        function addTableRow(table) {
+          var body = table.tBodies[0];
+          if (!body) return;
+          var ncol = Math.max(1, getColCount(table));
+          var tr = document.createElement("tr");
+          for (var c = 0; c < ncol; c++) {
+            var td = document.createElement("td");
+            td.contentEditable = "true";
+            td.spellcheck = false;
+            td.className = "export-cell-editable";
+            td.textContent = "\u00a0";
+            tr.appendChild(td);
+          }
+          body.appendChild(tr);
+        }
+
+        function removeLastTableRow(table) {
+          var body = table.tBodies[0];
+          if (!body || body.rows.length <= 1) return;
+          body.deleteRow(body.rows.length - 1);
+        }
+
+        function addTableColumn(table) {
+          var theadTr = table.querySelector("thead tr");
+          var body = table.tBodies[0];
+          if (!theadTr || !body) return;
+          var th = document.createElement("th");
+          th.contentEditable = "true";
+          th.spellcheck = false;
+          th.className = "export-cell-editable";
+          th.textContent = "\u00a0";
+          theadTr.appendChild(th);
+          for (var ri = 0; ri < body.rows.length; ri++) {
+            var tr = body.rows[ri];
+            var td = document.createElement("td");
+            td.contentEditable = "true";
+            td.spellcheck = false;
+            td.className = "export-cell-editable";
+            td.textContent = "\u00a0";
+            tr.appendChild(td);
+          }
+          syncMainExportTableColCss();
+        }
+
+        function removeLastTableColumn(table) {
+          var theadTr = table.querySelector("thead tr");
+          var body = table.tBodies[0];
+          if (!theadTr || !body) return;
+          var n = theadTr.cells.length;
+          if (n <= 1) return;
+          theadTr.deleteCell(n - 1);
+          for (var ri = 0; ri < body.rows.length; ri++) {
+            var tr = body.rows[ri];
+            if (tr.cells.length > 0) tr.deleteCell(tr.cells.length - 1);
+          }
+          syncMainExportTableColCss();
+        }
+
+        function readColorInput(id, fallback) {
+          var el = document.getElementById(id);
+          var v = el && el.value ? el.value.trim() : "";
+          return v || fallback;
+        }
+
+        var DEFAULT_GRID_THEME = {
+          title: "#D9232E",
+          sub1Bg: "#0B52A8",
+          sub1Text: "#FFFFFF",
+          theadBg: "#0B52A8",
+          theadText: "#FFFFFF",
+          rowEven: "#FFFFFF",
+          rowOdd: "#E6EDF8",
+        };
+
+        var SPORTMASTER_GRID_THEME = {
+          title: "#FF0016",
+          sub1Bg: "#1551E5",
+          sub1Text: "#FFFFFF",
+          theadBg: "#1551E5",
+          theadText: "#FFFFFF",
+          rowEven: "#FFFFFF",
+          rowOdd: "#E8EEFC",
+        };
+
+        var SKIMS_COLUMN_HEADERS = [
+          "INT",
+          "RU размер",
+          "US размер",
+          "Обхват груди (см)",
+          "Обхват талии (см)",
+          "Обхват бедер (см)",
+          "Рост (см) (примерн.)",
+          "UK размер",
+          "EU размер",
+          "IT размер",
+          "FR размер",
+        ];
+
+        var SKIMS_INT_SIZES = ["XXS", "XS", "S", "M", "L", "XL", "2X", "3X", "4X"];
+
+        var REFERENCE_IMAGE_SHOE_HEADERS = ["RU", "EU", "US", "UK", "Длина стопы (см)"];
+        var REFERENCE_IMAGE_SHOE_EMPTY_ROWS = 14;
+
+        function buildLayoutTemplateForReferenceImage() {
+          var ncol = REFERENCE_IMAGE_SHOE_HEADERS.length;
+          var body = [];
+          for (var ri = 0; ri < REFERENCE_IMAGE_SHOE_EMPTY_ROWS; ri++) {
+            var line = [];
+            for (var ci = 0; ci < ncol; ci++) line.push("");
+            body.push(line);
+          }
+          return {
+            format: "size-grid",
+            version: 1,
+            title: "Размерная таблица Nike Skims",
+            sub1: "Универсальная размерная сетка (низ и верх)",
+            theme: Object.assign({}, DEFAULT_GRID_THEME),
+            headers: REFERENCE_IMAGE_SHOE_HEADERS.slice(),
+            body: body,
+            footDown1Enabled: false,
+            footDown2Enabled: false,
+          };
+        }
+
+        function buildEmbeddedLayoutTemplate() {
+          var ncol = SKIMS_COLUMN_HEADERS.length;
+          var nrow = SKIMS_INT_SIZES.length;
+          var body = [];
+          for (var ri = 0; ri < nrow; ri++) {
+            var line = [];
+            for (var ci = 0; ci < ncol; ci++) line.push("");
+            body.push(line);
+          }
+          return {
+            format: "size-grid",
+            version: 1,
+            title: "Размерная таблица Nike Skims",
+            sub1: "Универсальная размерная сетка (низ и верх)",
+            theme: Object.assign({}, DEFAULT_GRID_THEME),
+            headers: SKIMS_COLUMN_HEADERS.slice(),
+            body: body,
+            footDown1Enabled: false,
+            footDown2Enabled: false,
+          };
+        }
+
+        function blankBodyFromTemplate(snap) {
+          var ncol = Math.max(1, snap.headers.length);
+          var nrow = Math.max(1, snap.body.length);
+          var out = [];
+          for (var ri = 0; ri < nrow; ri++) {
+            var line = [];
+            for (var ci = 0; ci < ncol; ci++) line.push("");
+            out.push(line);
+          }
+          return out;
+        }
+
+        function applyExportThemeColors(exportRoot) {
+          if (!exportRoot) return;
+          exportRoot.style.setProperty("--export-title-color", readColorInput("color-title", DEFAULT_GRID_THEME.title));
+          exportRoot.style.setProperty("--export-sub1-bg", readColorInput("color-sub1-bg", DEFAULT_GRID_THEME.sub1Bg));
+          exportRoot.style.setProperty("--export-sub1-text", readColorInput("color-sub1-text", DEFAULT_GRID_THEME.sub1Text));
+          exportRoot.style.setProperty("--export-thead-bg", readColorInput("color-thead-bg", DEFAULT_GRID_THEME.theadBg));
+          exportRoot.style.setProperty("--export-thead-text", readColorInput("color-thead-text", DEFAULT_GRID_THEME.theadText));
+          exportRoot.style.setProperty("--export-row-even", readColorInput("color-row-even", DEFAULT_GRID_THEME.rowEven));
+          exportRoot.style.setProperty("--export-row-odd", readColorInput("color-row-odd", DEFAULT_GRID_THEME.rowOdd));
+        }
+
+        function normalizeHex6(raw) {
+          var t = String(raw).trim();
+          var m = /^#?([0-9A-Fa-f]{6})$/.exec(t);
+          if (!m) return null;
+          return "#" + m[1].toUpperCase();
+        }
+
+        function normalizeHexLoose(raw) {
+          var t = String(raw).replace(/\s/g, "");
+          var full = normalizeHex6(t);
+          if (full) return full;
+          var m3 = /^#?([0-9A-Fa-f]{3})$/i.exec(t);
+          if (!m3) return null;
+          var s = m3[1];
+          return ("#" + s[0] + s[0] + s[1] + s[1] + s[2] + s[2]).toUpperCase();
+        }
+
+        var GRID_JSON_FORMAT = "size-grid";
+        var GRID_JSON_VERSION = 1;
+        var PALETTE_JSON_FORMAT = "size-grid-palette";
+        var PALETTE_JSON_VERSION = 1;
+
+        function normalizeThemeV1(raw) {
+          var o = raw && typeof raw === "object" ? raw : {};
+          function pick(k, def) {
+            var rawV = String(o[k] || "").trim();
+            return normalizeHexLoose(rawV) || normalizeHex6(rawV) || def;
+          }
+          return {
+            title: pick("title", DEFAULT_GRID_THEME.title),
+            sub1Bg: pick("sub1Bg", DEFAULT_GRID_THEME.sub1Bg),
+            sub1Text: pick("sub1Text", DEFAULT_GRID_THEME.sub1Text),
+            theadBg: pick("theadBg", DEFAULT_GRID_THEME.theadBg),
+            theadText: pick("theadText", DEFAULT_GRID_THEME.theadText),
+            rowEven: pick("rowEven", DEFAULT_GRID_THEME.rowEven),
+            rowOdd: pick("rowOdd", DEFAULT_GRID_THEME.rowOdd),
+          };
+        }
+
+        function parseGridSnapshotJson(text) {
+          var parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch (e) {
+            return null;
+          }
+          if (!parsed || typeof parsed !== "object") return null;
+          if (parsed.format !== GRID_JSON_FORMAT) return null;
+          if (parsed.version !== GRID_JSON_VERSION) return null;
+          if (!Array.isArray(parsed.headers) || parsed.headers.length === 0) return null;
+          if (!Array.isArray(parsed.body)) return null;
+          var headers = parsed.headers.map(function (h) {
+            return String(h != null ? h : "");
+          });
+          var body = parsed.body.map(function (row) {
+            if (!Array.isArray(row)) return [];
+            return row.map(function (c) {
+              return String(c != null ? c : "");
+            });
+          });
+          var ncol = headers.length;
+          for (var bi = 0; bi < body.length; bi++) {
+            var row = body[bi];
+            while (row.length < ncol) row.push("");
+            if (row.length > ncol) row.length = ncol;
+          }
+          function parseOptStrArr(v) {
+            if (!Array.isArray(v)) return undefined;
+            return v.map(function (x) {
+              return String(x != null ? x : "");
+            });
+          }
+          function parseOptStrMatrix(v) {
+            if (!Array.isArray(v)) return undefined;
+            return v.map(function (row) {
+              return Array.isArray(row)
+                ? row.map(function (x) {
+                    return String(x != null ? x : "");
+                  })
+                : [];
+            });
+          }
+          return {
+            format: GRID_JSON_FORMAT,
+            version: GRID_JSON_VERSION,
+            title: typeof parsed.title === "string" ? parsed.title : "",
+            sub1: typeof parsed.sub1 === "string" ? parsed.sub1 : "",
+            theme: normalizeThemeV1(parsed.theme),
+            headers: headers,
+            body: body,
+            footDown1Enabled: typeof parsed.footDown1Enabled === "boolean" ? parsed.footDown1Enabled : undefined,
+            footDown1Title: typeof parsed.footDown1Title === "string" ? parsed.footDown1Title : undefined,
+            footDown1: parseOptStrArr(parsed.footDown1),
+            footDown1Body: parseOptStrMatrix(parsed.footDown1Body),
+            footDown2Enabled: typeof parsed.footDown2Enabled === "boolean" ? parsed.footDown2Enabled : undefined,
+            footDown2Title: typeof parsed.footDown2Title === "string" ? parsed.footDown2Title : undefined,
+            footDown2: parseOptStrArr(parsed.footDown2),
+            footDown2Body: parseOptStrMatrix(parsed.footDown2Body),
+          };
+        }
+
+        function cellTextFromEditableCell(el) {
+          return String(el.textContent || "")
+            .replace(/\u00a0/g, " ")
+            .trim();
+        }
+
+        function readGridSnapshotFromDom() {
+          var table = document.getElementById("export-table");
+          if (!table) return null;
+          var theadTr = table.querySelector("thead tr");
+          var tb = table.tBodies[0];
+          if (!theadTr || !tb) return null;
+          var headers = [];
+          var ths = theadTr.querySelectorAll("th");
+          for (var hi = 0; hi < ths.length; hi++) headers.push(cellTextFromEditableCell(ths[hi]));
+          if (headers.length === 0) return null;
+          var body = [];
+          for (var ri = 0; ri < tb.rows.length; ri++) {
+            var tr = tb.rows[ri];
+            var line = [];
+            for (var ci = 0; ci < tr.cells.length; ci++) {
+              line.push(cellTextFromEditableCell(tr.cells[ci]));
+            }
+            body.push(line);
+          }
+          var exportRoot = document.getElementById("export-root");
+          var titleEl = exportRoot && exportRoot.querySelector(".export-title");
+          var subLine = exportRoot && exportRoot.querySelector("#export-subtitle-main");
+          var title = titleEl ? cellTextFromEditableCell(titleEl) : "";
+          var sub1 = subLine ? cellTextFromEditableCell(subLine) : "";
+          var block1 = exportRoot ? exportRoot.querySelector("#export-foot-block-1") : null;
+          var block2 = exportRoot ? exportRoot.querySelector("#export-foot-block-2") : null;
+          var footDown1Enabled = !!block1;
+          var footDown2Enabled = !!block2;
+          var ft1 = exportRoot ? exportRoot.querySelector("#export-foot-title-1") : null;
+          var ft2 = exportRoot ? exportRoot.querySelector("#export-foot-title-2") : null;
+          var fr1 = exportRoot ? exportRoot.querySelector("#export-foot-row-1") : null;
+          var fr2 = exportRoot ? exportRoot.querySelector("#export-foot-row-2") : null;
+          var footDown1Title;
+          var footDown2Title;
+          var footDown1;
+          var footDown2;
+          var footDown1Body;
+          var footDown2Body;
+          if (footDown1Enabled && fr1 && fr1.cells) {
+            footDown1Title = ft1 ? cellTextFromEditableCell(ft1) : undefined;
+            footDown1 = Array.prototype.map.call(fr1.cells, function (td) {
+              return cellTextFromEditableCell(td);
+            });
+            var tb1 = block1 ? block1.querySelector("tbody") : null;
+            if (tb1) {
+              var dr1 = Array.prototype.filter.call(tb1.rows, function (r) {
+                return r.id !== "export-foot-row-1";
+              });
+              footDown1Body = dr1.map(function (tr) {
+                return Array.prototype.map.call(tr.cells, function (td) {
+                  return cellTextFromEditableCell(td);
+                });
+              });
+            }
+          } else if (exportRoot && exportRoot.dataset.foot1Stored) {
+            try {
+              var o1 = JSON.parse(exportRoot.dataset.foot1Stored);
+              footDown1Title = typeof o1.t === "string" ? o1.t : undefined;
+              footDown1 = Array.isArray(o1.c)
+                ? o1.c.map(function (x) {
+                    return String(x != null ? x : "");
+                  })
+                : undefined;
+              footDown1Body = Array.isArray(o1.b)
+                ? o1.b.map(function (row) {
+                    return Array.isArray(row)
+                      ? row.map(function (x) {
+                          return String(x != null ? x : "");
+                        })
+                      : [];
+                  })
+                : undefined;
+            } catch (e1) {
+              footDown1 = undefined;
+            }
+          }
+          if (footDown2Enabled && fr2 && fr2.cells) {
+            footDown2Title = ft2 ? cellTextFromEditableCell(ft2) : undefined;
+            footDown2 = Array.prototype.map.call(fr2.cells, function (td) {
+              return cellTextFromEditableCell(td);
+            });
+            var tb2 = block2 ? block2.querySelector("tbody") : null;
+            if (tb2) {
+              var dr2 = Array.prototype.filter.call(tb2.rows, function (r) {
+                return r.id !== "export-foot-row-2";
+              });
+              footDown2Body = dr2.map(function (tr) {
+                return Array.prototype.map.call(tr.cells, function (td) {
+                  return cellTextFromEditableCell(td);
+                });
+              });
+            }
+          } else if (exportRoot && exportRoot.dataset.foot2Stored) {
+            try {
+              var o2 = JSON.parse(exportRoot.dataset.foot2Stored);
+              footDown2Title = typeof o2.t === "string" ? o2.t : undefined;
+              footDown2 = Array.isArray(o2.c)
+                ? o2.c.map(function (x) {
+                    return String(x != null ? x : "");
+                  })
+                : undefined;
+              footDown2Body = Array.isArray(o2.b)
+                ? o2.b.map(function (row) {
+                    return Array.isArray(row)
+                      ? row.map(function (x) {
+                          return String(x != null ? x : "");
+                        })
+                      : [];
+                  })
+                : undefined;
+            } catch (e2) {
+              footDown2 = undefined;
+            }
+          }
+          return {
+            format: GRID_JSON_FORMAT,
+            version: GRID_JSON_VERSION,
+            title: title || "Размерная таблица",
+            sub1: sub1,
+            theme: {
+              title: readColorInput("color-title", DEFAULT_GRID_THEME.title),
+              sub1Bg: readColorInput("color-sub1-bg", DEFAULT_GRID_THEME.sub1Bg),
+              sub1Text: readColorInput("color-sub1-text", DEFAULT_GRID_THEME.sub1Text),
+              theadBg: readColorInput("color-thead-bg", DEFAULT_GRID_THEME.theadBg),
+              theadText: readColorInput("color-thead-text", DEFAULT_GRID_THEME.theadText),
+              rowEven: readColorInput("color-row-even", DEFAULT_GRID_THEME.rowEven),
+              rowOdd: readColorInput("color-row-odd", DEFAULT_GRID_THEME.rowOdd),
+            },
+            headers: headers,
+            body: body,
+            footDown1Enabled: footDown1Enabled,
+            footDown2Enabled: footDown2Enabled,
+            footDown1Title: footDown1Title,
+            footDown1: footDown1,
+            footDown1Body: footDown1Body,
+            footDown2Title: footDown2Title,
+            footDown2: footDown2,
+            footDown2Body: footDown2Body,
+          };
+        }
+
+        function setThemeInputs(theme) {
+          var pairs = [
+            ["color-title", "color-title-hex", "title"],
+            ["color-sub1-bg", "color-sub1-bg-hex", "sub1Bg"],
+            ["color-sub1-text", "color-sub1-text-hex", "sub1Text"],
+            ["color-thead-bg", "color-thead-bg-hex", "theadBg"],
+            ["color-thead-text", "color-thead-text-hex", "theadText"],
+            ["color-row-even", "color-row-even-hex", "rowEven"],
+            ["color-row-odd", "color-row-odd-hex", "rowOdd"],
+          ];
+          for (var i = 0; i < pairs.length; i++) {
+            var colorId = pairs[i][0];
+            var hexId = pairs[i][1];
+            var key = pairs[i][2];
+            var def = DEFAULT_GRID_THEME[key];
+            var raw = String(theme[key] != null ? theme[key] : "").trim();
+            var n = normalizeHexLoose(raw) || normalizeHex6(raw) || def;
+            var colorEl = document.getElementById(colorId);
+            var hexEl = document.getElementById(hexId);
+            if (!colorEl || !hexEl) continue;
+            var v = n.toLowerCase();
+            colorEl.value = v.indexOf("#") === 0 ? v : "#" + v;
+            hexEl.value = n.toUpperCase();
+          }
+        }
+
+        function readThemeFromForm() {
+          return {
+            title: readColorInput("color-title", DEFAULT_GRID_THEME.title),
+            sub1Bg: readColorInput("color-sub1-bg", DEFAULT_GRID_THEME.sub1Bg),
+            sub1Text: readColorInput("color-sub1-text", DEFAULT_GRID_THEME.sub1Text),
+            theadBg: readColorInput("color-thead-bg", DEFAULT_GRID_THEME.theadBg),
+            theadText: readColorInput("color-thead-text", DEFAULT_GRID_THEME.theadText),
+            rowEven: readColorInput("color-row-even", DEFAULT_GRID_THEME.rowEven),
+            rowOdd: readColorInput("color-row-odd", DEFAULT_GRID_THEME.rowOdd),
+          };
+        }
+
+        function parsePaletteJson(text) {
+          var parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch (e) {
+            return null;
+          }
+          if (!parsed || typeof parsed !== "object") return null;
+          if (
+            parsed.format === PALETTE_JSON_FORMAT &&
+            parsed.version === PALETTE_JSON_VERSION &&
+            parsed.theme &&
+            typeof parsed.theme === "object"
+          ) {
+            return normalizeThemeV1(parsed.theme);
+          }
+          if (
+            parsed.format === GRID_JSON_FORMAT &&
+            parsed.version === GRID_JSON_VERSION &&
+            parsed.theme &&
+            typeof parsed.theme === "object"
+          ) {
+            return normalizeThemeV1(parsed.theme);
+          }
+          if (parsed.theme && typeof parsed.theme === "object") return normalizeThemeV1(parsed.theme);
+          if (typeof parsed.title === "string" && typeof parsed.sub1Bg === "string") return normalizeThemeV1(parsed);
+          return null;
+        }
+
+        function wireColorAndHex(colorId, hexId, onThemeChange) {
+          var colorEl = document.getElementById(colorId);
+          var hexEl = document.getElementById(hexId);
+          if (!colorEl || !hexEl) return;
+          function syncHexFromPicker() {
+            var n = normalizeHex6(colorEl.value);
+            hexEl.value = n || String(colorEl.value).toUpperCase();
+          }
+          colorEl.addEventListener("input", function () {
+            syncHexFromPicker();
+            onThemeChange();
+          });
+          hexEl.addEventListener("input", function () {
+            var n = normalizeHexLoose(hexEl.value);
+            if (n) {
+              colorEl.value = n.toLowerCase();
+              hexEl.value = n;
+              onThemeChange();
+            }
+          });
+          hexEl.addEventListener("paste", function () {
+            requestAnimationFrame(function () {
+              var n = normalizeHexLoose(hexEl.value);
+              if (n) {
+                colorEl.value = n.toLowerCase();
+                hexEl.value = n;
+                onThemeChange();
+              }
+            });
+          });
+          hexEl.addEventListener("blur", function () {
+            var n = normalizeHexLoose(hexEl.value);
+            if (n) {
+              colorEl.value = n.toLowerCase();
+              hexEl.value = n;
+            } else {
+              syncHexFromPicker();
+            }
+            onThemeChange();
+          });
+          syncHexFromPicker();
+        }
+
+        var titleInput = document.getElementById("title-input");
+        var sub1Input = document.getElementById("sub1-input");
+        var blueRowInput = document.getElementById("blue-row-input");
+        var fileInput = document.getElementById("file-input");
+        var btnBuild = document.getElementById("btn-build");
+        var btnJpg = document.getElementById("btn-jpg");
+        var btnJsonSave = document.getElementById("btn-json-save");
+        var templateImageInput = document.getElementById("template-image-input");
+        var templateHint = document.getElementById("template-hint");
+        var btnLayoutBlank = document.getElementById("btn-layout-blank");
+        var btnAddRow = document.getElementById("btn-add-row");
+        var btnDelRow = document.getElementById("btn-del-row");
+        var statusMsg = document.getElementById("status-msg");
+        var previewSection = document.getElementById("preview-section");
+        var sheetRows = [];
+        var layoutTemplate = buildEmbeddedLayoutTemplate();
+        var layoutReferenceImage = null;
+        var gridBuiltFromExcel = false;
+
+        function themeApply() {
+          applyExportThemeColors(document.getElementById("export-root"));
+          scheduleExportFit();
+        }
+        wireColorAndHex("color-title", "color-title-hex", themeApply);
+        wireColorAndHex("color-sub1-bg", "color-sub1-bg-hex", themeApply);
+        wireColorAndHex("color-sub1-text", "color-sub1-text-hex", themeApply);
+        wireColorAndHex("color-thead-bg", "color-thead-bg-hex", themeApply);
+        wireColorAndHex("color-thead-text", "color-thead-text-hex", themeApply);
+        wireColorAndHex("color-row-even", "color-row-even-hex", themeApply);
+        wireColorAndHex("color-row-odd", "color-row-odd-hex", themeApply);
+
+        var btnThemeSportmaster = document.getElementById("btn-theme-sportmaster");
+        if (btnThemeSportmaster) {
+          btnThemeSportmaster.addEventListener("click", function () {
+            setThemeInputs(SPORTMASTER_GRID_THEME);
+            themeApply();
+            setStatus("Палитра «Спортмастер»: шапка #1551E5, заголовок #FF0016, зебра строк #E8EEFC.");
+          });
+        }
+
+        var btnPaletteDownload = document.getElementById("btn-palette-download");
+        var btnPaletteUpload = document.getElementById("btn-palette-upload");
+        var paletteJsonInput = document.getElementById("palette-json-input");
+        if (btnPaletteDownload && btnPaletteUpload && paletteJsonInput) {
+          btnPaletteDownload.addEventListener("click", function () {
+            var theme = readThemeFromForm();
+            var nameRaw = (titleInput.value || "").trim() || "palette";
+            var safeName = nameRaw.replace(/[/\\?%*:|"<>]/g, "-").slice(0, 60) || "palette";
+            var payload = {
+              format: PALETTE_JSON_FORMAT,
+              version: PALETTE_JSON_VERSION,
+              name: nameRaw,
+              theme: theme,
+            };
+            var json = JSON.stringify(payload, null, 2) + "\n";
+            var blob = new Blob([json], { type: "application/json;charset=utf-8" });
+            var url = URL.createObjectURL(blob);
+            var link = document.createElement("a");
+            link.href = url;
+            link.download = safeName + "-palette.json";
+            link.click();
+            URL.revokeObjectURL(url);
+            setStatus("Скачан файл палитры (.json) — все цвета темы (включая зебру строк).");
+          });
+          btnPaletteUpload.addEventListener("click", function () {
+            paletteJsonInput.click();
+          });
+          paletteJsonInput.addEventListener("change", function () {
+            var file = paletteJsonInput.files && paletteJsonInput.files[0];
+            paletteJsonInput.value = "";
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function () {
+              var text = typeof reader.result === "string" ? reader.result : "";
+              var theme = parsePaletteJson(text);
+              if (!theme) {
+                setStatus(
+                  "Не удалось прочитать палитру. Нужен .json из «Скачать палитру» или объект theme из файла «Сохранить сетку (.json)».",
+                  true,
+                );
+                return;
+              }
+              setThemeInputs(theme);
+              themeApply();
+              setStatus("Палитра загружена — цвета в форме и в превью обновлены.");
+            };
+            reader.onerror = function () {
+              setStatus("Ошибка чтения файла палитры.", true);
+            };
+            reader.readAsText(file, "UTF-8");
+          });
+        }
+
+        function setStatus(text, isError) {
+          statusMsg.textContent = text;
+          statusMsg.className = "msg " + (isError ? "msg-error" : "msg-hint");
+        }
+
+        function syncExportDownloadButtons(hasGrid) {
+          btnJpg.disabled = !hasGrid;
+          btnJsonSave.disabled = !hasGrid;
+        }
+
+        function applyLayoutTemplateBlank(snap) {
+          gridBuiltFromExcel = false;
+          titleInput.value = snap.title;
+          sub1Input.value = snap.sub1;
+          setThemeInputs(snap.theme);
+          var title = (titleInput.value || "").trim() || "Размерная таблица";
+          var sub1 = sub1Input.value || "";
+          var body = blankBodyFromTemplate(snap);
+          buildEditableExport(title, sub1, snap.headers.slice(), body, layoutReferenceImage, resolveFooterBlocks(snap));
+          previewSection.hidden = false;
+          syncExportDownloadButtons(true);
+          setStatus("Открыта пустая сетка по образцу. Заполните ячейки и скачайте JPG.");
+        }
+
+        var JPEG_WIDTH = 1500;
+        var JPEG_HEIGHT = 2000;
+        var JPEG_EXPORT_TOP = 20;
+        var JPEG_EXPORT_BOTTOM = 36;
+
+        function rasterToFixedJpeg(src, quality) {
+          var out = document.createElement("canvas");
+          out.width = JPEG_WIDTH;
+          out.height = JPEG_HEIGHT;
+          var ctx = out.getContext("2d");
+          if (!ctx) return src.toDataURL("image/jpeg", quality);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, JPEG_WIDTH, JPEG_HEIGHT);
+          var sw = src.width;
+          var sh = src.height;
+          if (sw > 0 && sh > 0) {
+            var availW = JPEG_WIDTH;
+            var availH = JPEG_HEIGHT - JPEG_EXPORT_TOP - JPEG_EXPORT_BOTTOM;
+            var sc = Math.min(availW / sw, availH / sh);
+            var dw = Math.round(sw * sc);
+            var dh = Math.round(sh * sc);
+            var x = Math.round((JPEG_WIDTH - dw) / 2);
+            var y = JPEG_EXPORT_TOP;
+            if (y + dh > JPEG_HEIGHT - JPEG_EXPORT_BOTTOM) {
+              y = Math.max(0, JPEG_HEIGHT - JPEG_EXPORT_BOTTOM - dh);
+            }
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(src, x, y, dw, dh);
+          }
+          return out.toDataURL("image/jpeg", quality);
+        }
+
+        function backupStyleProps(el, keys) {
+          if (!el) return null;
+          var o = {};
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            o[k] = el.style.getPropertyValue(k);
+          }
+          return { el: el, o: o };
+        }
+
+        function restoreStyleProps(b) {
+          if (!b) return;
+          var el = b.el;
+          var o = b.o;
+          for (var k in o) {
+            if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
+            if (o[k]) el.style.setProperty(k, o[k]);
+            else el.style.removeProperty(k);
+          }
+        }
+
+        fileInput.addEventListener("change", function () {
+          var file = fileInput.files && fileInput.files[0];
+          if (!file) {
+            btnBuild.disabled = true;
+            syncExportDownloadButtons(false);
+            sheetRows = [];
+            previewSection.hidden = true;
+            setStatus("Загрузите таблицу Excel.");
+            return;
+          }
+          var reader = new FileReader();
+          reader.onload = function (e) {
+            try {
+              var buf = e.target.result;
+              sheetRows = readFirstSheetRows(buf);
+              if (sheetRows.length === 0) {
+                setStatus("В файле нет данных на первом листе.", true);
+                btnBuild.disabled = true;
+                syncExportDownloadButtons(false);
+                previewSection.hidden = true;
+                return;
+              }
+              btnBuild.disabled = false;
+              syncExportDownloadButtons(false);
+              setStatus("Загружено строк: " + sheetRows.length + ". Нажмите «Построить в редакторе».");
+            } catch (err) {
+              setStatus("Не удалось прочитать файл. Проверьте формат.", true);
+              btnBuild.disabled = true;
+              syncExportDownloadButtons(false);
+              previewSection.hidden = true;
+              sheetRows = [];
+            }
+          };
+          reader.readAsArrayBuffer(file);
+        });
+
+        btnBuild.addEventListener("click", function () {
+          if (sheetRows.length === 0) return;
+          var title = (titleInput.value || "").trim() || "Размерная таблица";
+          var sub1 = sub1Input.value || "";
+          var rowNum = Math.trunc(Number(blueRowInput.value));
+          if (!isFinite(rowNum) || rowNum < 1 || rowNum > sheetRows.length) {
+            setStatus("Укажите номер строки от 1 до " + sheetRows.length + " (как в Excel).", true);
+            return;
+          }
+          var headerRow = sheetRows[rowNum - 1] || [];
+          if (headerRow.every(function (c) { return c === ""; })) {
+            setStatus("Выбранная строка пустая. Укажите строку с INT, RU размер и т.д.", true);
+            return;
+          }
+          var bodyRows = sheetRows.slice(rowNum);
+          if (bodyRows.length === 0) {
+            setStatus("Под этой строкой в файле нет данных.", true);
+            return;
+          }
+          var headers = headerRow.map(function (c) {
+            return c || " ";
+          });
+          var body = bodyRows.map(function (r) {
+            return r.slice();
+          });
+          gridBuiltFromExcel = true;
+          buildEditableExport(title, sub1, headers, body, null, resolveFooterBlocks(null));
+          previewSection.hidden = false;
+          syncExportDownloadButtons(true);
+          setStatus("Таблица в редакторе. Правьте ячейки и скачайте JPG. При необходимости — «Сохранить сетку (.json)».");
+        });
+
+        templateImageInput.addEventListener("change", function () {
+          var file = templateImageInput.files && templateImageInput.files[0];
+          templateImageInput.value = "";
+          if (!file) return;
+          if (!file.type || file.type.indexOf("image/") !== 0) {
+            setStatus("Нужен файл изображения: .jpg, .png или .webp.", true);
+            return;
+          }
+          var reader = new FileReader();
+          reader.onload = function () {
+            var dataUrl = typeof reader.result === "string" ? reader.result : "";
+            if (!dataUrl) {
+              setStatus("Не удалось прочитать изображение.", true);
+              return;
+            }
+            layoutReferenceImage = dataUrl;
+            layoutTemplate = buildLayoutTemplateForReferenceImage();
+            var tt = (titleInput.value || "").trim();
+            var ss = (sub1Input.value || "").trim();
+            if (tt) layoutTemplate = Object.assign({}, layoutTemplate, { title: tt });
+            if (ss) layoutTemplate = Object.assign({}, layoutTemplate, { sub1: ss });
+
+            var short = file.name.length > 48 ? file.name.slice(0, 45) + "…" : file.name;
+            templateHint.textContent =
+              "Загружен образец «" + short + "». Колонки макета: RU, EU, US, UK, длина стопы (как на типовом эталоне).";
+
+            if (!gridBuiltFromExcel) {
+              applyLayoutTemplateBlank(layoutTemplate);
+              setStatus(
+                "Образец применён: картинка над таблицей, колонки подстроены. Заполните ячейки и скачайте JPG. Кнопка «Макет сетки» сбросит пустую сетку.",
+              );
+            } else {
+              setStatus(
+                "Образец сохранён (картинка появится при следующем «Макет сетки»). Сетка из Excel не менялась. Нажмите «Макет сетки», чтобы пустая сетка с этим фото и колонками RU/EU/US/UK/длина стопы.",
+              );
+            }
+          };
+          reader.onerror = function () {
+            setStatus("Ошибка чтения файла изображения.", true);
+          };
+          reader.readAsDataURL(file);
+        });
+
+        btnJsonSave.addEventListener("click", function () {
+          var snap = readGridSnapshotFromDom();
+          if (!snap) {
+            setStatus("Сначала откройте таблицу в редакторе (Excel, макет или уже сохранённый проект).", true);
+            return;
+          }
+          var json = JSON.stringify(snap, null, 2) + "\n";
+          var safeName = snap.title.replace(/[/\\?%*:|"<>]/g, "-").slice(0, 80) || "size-grid";
+          var blob = new Blob([json], { type: "application/json;charset=utf-8" });
+          var url = URL.createObjectURL(blob);
+          var link = document.createElement("a");
+          link.href = url;
+          link.download = safeName + ".json";
+          link.click();
+          URL.revokeObjectURL(url);
+          setStatus("Сохранён файл .json (резервная копия структуры). Для правок в картинке используйте JPG.");
+        });
+
+        btnLayoutBlank.addEventListener("click", function () {
+          applyLayoutTemplateBlank(layoutTemplate);
+        });
+
+        var exportMountEl = document.getElementById("export-mount");
+        var fitResizeTimer;
+        if (exportMountEl && typeof ResizeObserver !== "undefined") {
+          new ResizeObserver(function () {
+            clearTimeout(fitResizeTimer);
+            fitResizeTimer = setTimeout(scheduleExportFit, 80);
+          }).observe(exportMountEl);
+        }
+
+        btnAddRow.addEventListener("click", function () {
+          var table = document.getElementById("export-table");
+          if (table) {
+            addTableRow(table);
+            scheduleExportFit();
+          }
+        });
+
+        btnDelRow.addEventListener("click", function () {
+          var table = document.getElementById("export-table");
+          if (table) {
+            removeLastTableRow(table);
+            scheduleExportFit();
+          }
+        });
+
+        var btnAddCol = document.getElementById("btn-add-col");
+        var btnDelCol = document.getElementById("btn-del-col");
+        if (btnAddCol)
+          btnAddCol.addEventListener("click", function () {
+            var table = document.getElementById("export-table");
+            if (table) {
+              addTableColumn(table);
+              scheduleExportFit();
+            }
+          });
+        if (btnDelCol)
+          btnDelCol.addEventListener("click", function () {
+            var table = document.getElementById("export-table");
+            if (table) {
+              removeLastTableColumn(table);
+              scheduleExportFit();
+            }
+          });
+
+        function rebuildExportFromSnapshot(snap) {
+          buildEditableExport(
+            snap.title,
+            snap.sub1,
+            snap.headers.slice(),
+            snap.body,
+            layoutReferenceImage,
+            resolveFooterBlocks(snap)
+          );
+        }
+
+        var btnFoot1Show = document.getElementById("btn-foot1-add");
+        var btnFoot2Show = document.getElementById("btn-foot2-add");
+        var btnFoot1Remove = document.getElementById("btn-foot1-remove");
+        var btnFoot2Remove = document.getElementById("btn-foot2-remove");
+        var btnFoot1AddCol = document.getElementById("btn-foot1-add-col");
+        var btnFoot1DelCol = document.getElementById("btn-foot1-del-col");
+        var btnFoot2AddCol = document.getElementById("btn-foot2-add-col");
+        var btnFoot2DelCol = document.getElementById("btn-foot2-del-col");
+        if (btnFoot1Show)
+          btnFoot1Show.addEventListener("click", function () {
+            var snap = readGridSnapshotFromDom();
+            if (!snap) return;
+            snap.footDown1Enabled = true;
+            if (!snap.footDown1 || !snap.footDown1.length) snap.footDown1 = ["", "", ""];
+            rebuildExportFromSnapshot(snap);
+          });
+        if (btnFoot2Show)
+          btnFoot2Show.addEventListener("click", function () {
+            var snap = readGridSnapshotFromDom();
+            if (!snap) return;
+            snap.footDown2Enabled = true;
+            if (!snap.footDown2 || !snap.footDown2.length) snap.footDown2 = ["", "", ""];
+            rebuildExportFromSnapshot(snap);
+          });
+        if (btnFoot1Remove)
+          btnFoot1Remove.addEventListener("click", function () {
+            var snap = readGridSnapshotFromDom();
+            if (!snap) return;
+            snap.footDown1Enabled = false;
+            rebuildExportFromSnapshot(snap);
+          });
+        if (btnFoot2Remove)
+          btnFoot2Remove.addEventListener("click", function () {
+            var snap = readGridSnapshotFromDom();
+            if (!snap) return;
+            snap.footDown2Enabled = false;
+            rebuildExportFromSnapshot(snap);
+          });
+        var btnFoot1AddRow = document.getElementById("btn-foot1-add-row");
+        var btnFoot1DelRow = document.getElementById("btn-foot1-del-row");
+        var btnFoot2AddRow = document.getElementById("btn-foot2-add-row");
+        var btnFoot2DelRow = document.getElementById("btn-foot2-del-row");
+        if (btnFoot1AddRow) btnFoot1AddRow.addEventListener("click", function () { addFooterDataRow(1); });
+        if (btnFoot1DelRow) btnFoot1DelRow.addEventListener("click", function () { removeLastFooterDataRow(1); });
+        if (btnFoot2AddRow) btnFoot2AddRow.addEventListener("click", function () { addFooterDataRow(2); });
+        if (btnFoot2DelRow) btnFoot2DelRow.addEventListener("click", function () { removeLastFooterDataRow(2); });
+        if (btnFoot1AddCol) btnFoot1AddCol.addEventListener("click", function () { addFooterTableColumn(1); });
+        if (btnFoot1DelCol) btnFoot1DelCol.addEventListener("click", function () { removeFooterTableColumn(1); });
+        if (btnFoot2AddCol) btnFoot2AddCol.addEventListener("click", function () { addFooterTableColumn(2); });
+        if (btnFoot2DelCol) btnFoot2DelCol.addEventListener("click", function () { removeFooterTableColumn(2); });
+
+        btnJpg.addEventListener("click", function () {
+          var exportRoot = document.getElementById("export-root");
+          if (!exportRoot) {
+            setStatus("Сначала постройте таблицу.", true);
+            return;
+          }
+          var titleEl = exportRoot.querySelector(".export-title");
+          var title =
+            (titleEl && titleEl.textContent ? titleEl.textContent : "")
+              .replace(/\u00a0/g, " ")
+              .trim() || "Размерная таблица";
+          btnJpg.disabled = true;
+          btnJsonSave.disabled = true;
+          btnBuild.disabled = true;
+          setStatus("Создаём изображение…");
+          var fitFrame = document.getElementById("export-fit-frame");
+          var mount = document.getElementById("export-mount");
+          var preview = document.getElementById("preview-section");
+          var fitBk = backupStyleProps(fitFrame, ["overflow", "min-height", "width", "max-width"]);
+          var rootBk = backupStyleProps(exportRoot, ["zoom", "width", "min-width", "max-width"]);
+          var mountBk = backupStyleProps(mount, ["overflow", "min-width"]);
+          var previewBk = backupStyleProps(preview, ["overflow"]);
+
+          function cleanupCaptureStyles() {
+            restoreStyleProps(rootBk);
+            restoreStyleProps(fitBk);
+            restoreStyleProps(mountBk);
+            restoreStyleProps(previewBk);
+            scheduleExportFit();
+          }
+
+          var fontsReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+          fontsReady
+            .then(function () {
+              if (fitFrame) {
+                fitFrame.style.setProperty("overflow", "visible");
+                fitFrame.style.removeProperty("min-height");
+              }
+              exportRoot.style.setProperty("zoom", "1");
+              return new Promise(function (resolve) {
+                requestAnimationFrame(function () {
+                  requestAnimationFrame(resolve);
+                });
+              });
+            })
+            .then(function () {
+              var w = Math.max(1, Math.ceil(exportRoot.scrollWidth));
+              var h = Math.max(1, Math.ceil(exportRoot.scrollHeight));
+              exportRoot.style.setProperty("width", w + "px");
+              exportRoot.style.setProperty("min-width", w + "px");
+              exportRoot.style.setProperty("max-width", "none");
+              if (fitFrame) {
+                fitFrame.style.setProperty("width", w + "px");
+                fitFrame.style.setProperty("max-width", "none");
+              }
+              if (mount) {
+                mount.style.setProperty("overflow", "visible");
+                mount.style.setProperty("min-width", w + "px");
+              }
+              if (preview) preview.style.setProperty("overflow", "visible");
+              return new Promise(function (resolve) {
+                requestAnimationFrame(function () {
+                  requestAnimationFrame(resolve);
+                });
+              });
+            })
+            .then(function () {
+              var w = Math.max(1, Math.ceil(exportRoot.scrollWidth));
+              var h = Math.max(1, Math.ceil(exportRoot.scrollHeight));
+              exportRoot.style.setProperty("width", w + "px");
+              exportRoot.style.setProperty("min-width", w + "px");
+              if (fitFrame) fitFrame.style.setProperty("width", w + "px");
+              if (mount) mount.style.setProperty("min-width", w + "px");
+              return html2canvas(exportRoot, {
+                scale: 3,
+                backgroundColor: "#ffffff",
+                useCORS: true,
+                logging: false,
+                width: w,
+                height: h,
+                scrollX: 0,
+                scrollY: 0,
+                windowWidth: w,
+                windowHeight: h,
+              });
+            })
+            .then(function (canvas) {
+              var link = document.createElement("a");
+              var safeName = title.replace(/[/\\?%*:|"<>]/g, "-").slice(0, 80);
+              link.download = (safeName || "size-chart") + ".jpg";
+              link.href = rasterToFixedJpeg(canvas, 0.92);
+              link.click();
+              setStatus("Скачан JPG 1500×2000 px.");
+            })
+            .catch(function () {
+              setStatus("Ошибка при создании изображения. Попробуйте Chrome или Edge.", true);
+            })
+            .finally(function () {
+              cleanupCaptureStyles();
+              btnBuild.disabled = false;
+              syncExportDownloadButtons(!!document.getElementById("export-table"));
+            });
+        });
+      })();
+    </script>
+  </body>
+</html>

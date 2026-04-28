@@ -1,0 +1,244 @@
+/**
+ * Стили для инструментов в iframe: одна визуальная линия с ассистентом
+ * (светлый фон, сланцевые границы, акцент янтарь/жёлтый 4P).
+ * Подключается после встроенных стилей в size-grid / prices-stock.
+ */
+
+/* --- Обменник (prices-stock.html): светлая тема вместо тёмно-синей --- */
+body.embed-assistant-prices {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --border: rgba(15, 23, 42, 0.12);
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #b45309;
+  --danger: #b91c1c;
+  --ok: #15803d;
+  --warn: #a16207;
+  background: linear-gradient(165deg, #f8fafc 0%, #e8eef5 100%) !important;
+  color: var(--text) !important;
+  padding: 1.25rem !important;
+}
+
+body.embed-assistant-prices .wrap {
+  max-width: 52rem;
+}
+
+body.embed-assistant-prices .card {
+  background: var(--card) !important;
+  border-color: var(--border) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+body.embed-assistant-prices .card-title {
+  color: #0a0a0a !important;
+}
+
+body.embed-assistant-prices .hero {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 215, 64, 0.2) 0%,
+    #ffffff 55%,
+    #f8fafc 100%
+  ) !important;
+  border-color: var(--border) !important;
+  text-align: center;
+  padding: 1.2rem;
+  border-radius: 12px;
+  margin-bottom: 1.25rem;
+}
+
+body.embed-assistant-prices .hero h2 {
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices .hero p {
+  color: var(--muted) !important;
+}
+
+body.embed-assistant-prices .step {
+  background: #f8fafc !important;
+  border-color: var(--border) !important;
+}
+
+body.embed-assistant-prices .sn {
+  background: #ffd740 !important;
+  color: #0a0a0a !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+body.embed-assistant-prices .st {
+  color: var(--muted) !important;
+}
+
+body.embed-assistant-prices .st strong {
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices input[type="url"],
+body.embed-assistant-prices input[type="file"],
+body.embed-assistant-prices input[type="text"],
+body.embed-assistant-prices input[type="number"] {
+  background: #fff !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices input::placeholder {
+  color: #94a3b8 !important;
+}
+
+body.embed-assistant-prices select {
+  background: #fff !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices select option {
+  background: #fff !important;
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices .btn-ghost {
+  background: rgba(255, 215, 64, 0.25) !important;
+  color: #0a0a0a !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+}
+
+body.embed-assistant-prices .btn-del {
+  color: var(--muted) !important;
+  border-color: var(--border) !important;
+}
+
+body.embed-assistant-prices .btn-run {
+  background: linear-gradient(180deg, #ffd740, #f5cd38) !important;
+  color: #0a0a0a !important;
+  width: 100%;
+  padding: 0.75rem;
+  font-size: 1rem;
+  font-weight: 700;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+body.embed-assistant-prices .btn-run-proj {
+  background: linear-gradient(180deg, #ffd740, #e9c435) !important;
+  color: #0a0a0a !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+}
+
+body.embed-assistant-prices .btn-save-proj {
+  background: rgba(21, 128, 61, 0.1) !important;
+  color: #166534 !important;
+  border: 1px solid rgba(21, 128, 61, 0.28) !important;
+}
+
+body.embed-assistant-prices .btn-dl {
+  background: #22c55e !important;
+  color: #0a0a0a !important;
+  font-weight: 700;
+}
+
+body.embed-assistant-prices .drop-zone {
+  border-color: var(--border) !important;
+  color: var(--muted) !important;
+  background: #fafafa !important;
+}
+
+body.embed-assistant-prices .drop-zone.over {
+  border-color: #d97706 !important;
+  background: rgba(255, 215, 64, 0.12) !important;
+}
+
+body.embed-assistant-prices .drop-zone strong {
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices .tpl-card {
+  background: #f8fafc !important;
+  border-color: var(--border) !important;
+}
+
+body.embed-assistant-prices .log-box {
+  background: #0f172a !important;
+  color: #e2e8f0 !important;
+  border-color: rgba(15, 23, 42, 0.2) !important;
+}
+
+body.embed-assistant-prices .help-btn {
+  background: #ffd740 !important;
+  color: #0a0a0a !important;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12) !important;
+}
+
+body.embed-assistant-prices .help-btn:hover {
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.15) !important;
+}
+
+body.embed-assistant-prices .modal-box {
+  background: #fff !important;
+  border-color: var(--border) !important;
+}
+
+body.embed-assistant-prices .modal-title {
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices .help-section p,
+body.embed-assistant-prices .help-section li {
+  color: var(--muted) !important;
+}
+
+body.embed-assistant-prices .help-section h3 {
+  color: #b45309 !important;
+}
+
+body.embed-assistant-prices .help-faq {
+  background: #f1f5f9 !important;
+}
+
+body.embed-assistant-prices .help-faq dt {
+  color: var(--text) !important;
+}
+
+body.embed-assistant-prices .help-faq dd {
+  color: var(--muted) !important;
+}
+
+body.embed-assistant-prices .badge-v2 {
+  background: rgba(255, 215, 64, 0.45) !important;
+  color: #0a0a0a !important;
+}
+
+body.embed-assistant-prices .proj-item {
+  background: #f8fafc !important;
+  border-color: var(--border) !important;
+}
+
+body.embed-assistant-prices .proj-item:hover {
+  border-color: rgba(180, 83, 9, 0.35) !important;
+  background: rgba(255, 215, 64, 0.1) !important;
+}
+
+body.embed-assistant-prices .proj-item.active {
+  border-color: #d97706 !important;
+  background: rgba(255, 215, 64, 0.18) !important;
+}
+
+body.embed-assistant-prices .hint {
+  color: var(--muted) !important;
+}
+
+body.embed-assistant-prices .hint.ok {
+  color: var(--ok) !important;
+}
+
+body.embed-assistant-prices .hint.warn {
+  color: var(--warn) !important;
+}
+
+/* --- Генератор размерных сеток: фон и панель ближе к ассистенту --- */
+body.embed-assistant-size {
+  background: linear-gradient(165deg, #f8fafc 0%, #e8eef5 100%) !important;
+  color: #0f172a;
+}
