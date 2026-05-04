@@ -60,9 +60,9 @@ export const appEmbedFrame =
 export const appIframeTall =
   "h-[calc(100dvh-14rem)] w-full min-h-[680px] border-0 sm:min-h-[720px]";
 
-/** Узкая колонка формы (контент-ассистент) */
+/** Ширина колонки формы сравнения — совпадает с контейнером страницы, без «узкой простыни» */
 export const compareFormNarrow =
-  "mx-auto w-full max-w-3xl space-y-8";
+  "mx-auto w-full max-w-6xl space-y-8";
 
 /** Форма / блок отчёта: та же плитка, что homeCard, без `overflow-hidden` (удобнее для длинного контента) */
 export const appSectionCard =
