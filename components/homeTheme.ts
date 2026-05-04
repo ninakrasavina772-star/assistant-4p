@@ -60,6 +60,10 @@ export const appEmbedFrame =
 export const appIframeTall =
   "h-[calc(100dvh-14rem)] w-full min-h-[680px] border-0 sm:min-h-[720px]";
 
+/** Узкая колонка формы (контент-ассистент) */
+export const compareFormNarrow =
+  "mx-auto w-full max-w-3xl space-y-8";
+
 /** Форма / блок отчёта: та же плитка, что homeCard, без `overflow-hidden` (удобнее для длинного контента) */
 export const appSectionCard =
   "mb-8 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm ring-1 ring-slate-200/40 sm:p-6 last:mb-0";

@@ -6,7 +6,12 @@ export type FpProduct = {
   name: string;
   link: string;
   eans?: string[] | null;
-  brand?: { name?: string } | null;
+  /**
+   * В выгрузке /product/list обычно { name }. Реже API отдаёт бренд строкой в `brand`
+   * или в корневом `brand_name` — см. productBrandName в brand-filter.
+   */
+  brand?: { name?: string } | string | null;
+  brand_name?: string | null;
   i18n?: Record<
     string,
     { name?: string; description?: string } | undefined
@@ -32,6 +37,9 @@ export type FpProduct = {
   original_name?: string;
   name_original?: string;
   supplier_name?: string;
+  /** Иногда бренд дублируется в manufacturer / vendor (строка или объект как brand) */
+  manufacturer?: string | { name?: string; title?: string; label?: string } | null;
+  vendor?: string | { name?: string; title?: string; label?: string } | null;
 };
 
 export type NameLocale = "en" | "ru";
@@ -84,7 +92,12 @@ export type NameMatchRow = {
 
 /** «Только на B» + совпадение в полном каталоге A: EAN, артикул, имя+фото / семья URL */
 export type OnlyBCrossWithARow = {
-  kind: "ean_diff_id" | "name_photo" | "article" | "unlikely";
+  kind:
+    | "ean_diff_id"
+    | "name_photo"
+    | "brand_visual"
+    | "article"
+    | "unlikely";
   productOnA: CompareProduct;
   productFromOnlyB: CompareProduct;
   ean?: string;
@@ -96,7 +109,12 @@ export type OnlyBCrossWithARow = {
 
 /** «Только на A» + совпадение в полном каталоге B (симметрично OnlyBCrossWithARow) */
 export type OnlyACrossWithBRow = {
-  kind: "ean_diff_id" | "name_photo" | "article" | "unlikely";
+  kind:
+    | "ean_diff_id"
+    | "name_photo"
+    | "brand_visual"
+    | "article"
+    | "unlikely";
   productOnB: CompareProduct;
   productFromOnlyA: CompareProduct;
   ean?: string;
@@ -114,7 +132,7 @@ export type DuplicateEanEnrichedRow = {
 
 /** Дубли внутри списка «только на B»: сначала EAN, потом жадно имя+фото */
 export type OnlyBInternalDupRow = {
-  kind: "ean" | "name_photo" | "unlikely";
+  kind: "ean" | "name_photo" | "brand_visual" | "unlikely";
   first: CompareProduct;
   second: CompareProduct;
   ean?: string;
@@ -172,9 +190,11 @@ export type SingleSiteDupsResult = {
   excludeIdsA?: CompareExcludeIdsAInfo;
   /** Один EAN — несколько разных id */
   eanGroups: IntraEanGroupRow[];
-  /** Пары «название + фото» (не попавшие в EAN-группы) */
+  /** ~90%: частичное название + эквивалентный URL фото (не в EAN-группах) */
   namePhotoPairs: IntraNamePhotoPairRow[];
-  /** Фото + выбранные характеристики (мало) */
+  /** ~60%: точный бренд + частичное название + визуально похожее фото */
+  brandVisualPairs: IntraNamePhotoPairRow[];
+  /** Маловероятные: бренд + слабее название + похожее фото */
   unlikelyPairs: IntraUnlikelyPairRow[];
   /** Нужен, чтобы отличить «0 совпадений» от «поиск не запускали» */
   unlikelySearch?: UnlikelySearchInfo;
@@ -239,10 +259,25 @@ export type CompareResult = {
     countB: number;
     /** Сколько позиций B «есть в A» по одному id */
     idPlacedCount: number;
-    /** |unplacedBByIdRaw| */
+    /** |unplacedBByIdRaw| — нет того же **id** товара на A */
     unplacedBByIdCount: number;
     /** id из A, которого нет в B (симметрия unplacedBById) */
     unplacedAByIdCount: number;
+    /**
+     * Товары с B: ни один ключ (article/code/vendor_code + суффикс a… из ссылки) не найден на A —
+     * критерий «новинка» для отчётов ниже и кросс-дублей B→A.
+     */
+    noveltiesBByArticleCount: number;
+    /**
+     * Симметрично: товары A без пересечения артикулов с каталогом B — кросс A→B.
+     */
+    noveltiesAByArticleCount: number;
+    /**
+     * Сколько позиций B без полей артикула/code/vendor в JSON (они всё же попали в новинки
+     * как «нельзя проверить по артикулу»).
+     */
+    noveltiesIncludedBmissingArticleFields?: number;
+    noveltiesIncludedAmissingArticleFields?: number;
     eanMatchCount: number;
     articleMatchCount: number;
     nameCandidateCount: number;
@@ -252,10 +287,10 @@ export type CompareResult = {
    */
   idMatches: IdMatchRow[];
   /**
-   * B без пары в A **по id** (основа списка «неразмещённые» и кросс-дублей).
+   * B без пары в A **по id** (справочно; кросс-дубли считаются от «новинок по артикулу», см. noveltiesByArticleRaw).
    */
   unplacedBByIdRaw: FpProduct[];
-  /** A без пары в B по id (основа «неразмещённых A» и кросса A↔B) */
+  /** A без пары в B по id */
   unplacedAByIdRaw: FpProduct[];
   /**
    * Дубли **только в рамках каталога A** (рубрика A), независимо от «неразмещённых».
@@ -263,12 +298,14 @@ export type CompareResult = {
   intraSiteADups: {
     eanGroups: IntraEanGroupRow[];
     namePhotoPairs: IntraNamePhotoPairRow[];
+    brandVisualPairs: IntraNamePhotoPairRow[];
     unlikelyPairs: IntraUnlikelyPairRow[];
   };
   /** Дубли внутри рубрики B (аналог intraSiteADups) */
   intraSiteBDups: {
     eanGroups: IntraEanGroupRow[];
     namePhotoPairs: IntraNamePhotoPairRow[];
+    brandVisualPairs: IntraNamePhotoPairRow[];
     unlikelyPairs: IntraUnlikelyPairRow[];
   };
   /** EAN, которым сопоставлено более одного товара (на рубрике) — требуется ручной разбор */
@@ -293,13 +330,25 @@ export type CompareResult = {
    * Полные объекты API для товаров «только на A» (симметрично rawOnlyB, для выгрузки).
    */
   rawOnlyA?: FpProduct[];
-  /** «Только на B» сопоставлены с полным каталогом A (EAN при разных id / имя+фото) */
+  /**
+   * Новинки с B: ни один артикул/code/vendor_code не найден в каталоге A.
+   * По этому списку считаются «кросс-дубли» на A и внутренние дубли списка.
+   */
+  noveltiesByArticleRaw?: FpProduct[];
+  /**
+   * Новинки с A: симметрично (артикулы отсутствуют среди позиций B).
+   */
+  noveltiesAByArticleRaw?: FpProduct[];
+  /**
+   * Каждая позиция с B из novelties — сопоставление с полным каталогом A
+   * (общий EAN при разных id, название+фото и т.д.).
+   */
   onlyBCrossWithA?: OnlyBCrossWithARow[];
-  /** «Только на A» сопоставлены с полным каталогом B */
+  /** То же симметрично: позиции novelties на A против полного каталога B */
   onlyACrossWithB?: OnlyACrossWithBRow[];
-  /** Дубли внутри списка «только на B» */
+  /** Дубли между двумя новинками B (внутри noveltiesByArticleRaw) */
   onlyBInternalDups?: OnlyBInternalDupRow[];
-  /** Дубли внутри unplacedAByIdRaw (симметрия onlyBInternalDups) */
+  /** Дубли внутри novelties на A */
   onlyAInternalDups?: OnlyBInternalDupRow[];
   /** Как при «одна рубрика»: без галочек «маловероятные» в intraSite* не считаются */
   unlikelySearch?: UnlikelySearchInfo;

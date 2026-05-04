@@ -1,3 +1,8 @@
+import { filterFpProductsByBrands, type BrandMatchMode } from "./brand-filter";
+import {
+  filterFpProductsByModels,
+  type ModelMatchMode
+} from "./model-filter";
 import type { FpProduct } from "./types";
 
 const DEFAULT_BASE = "https://api.4partners.io/v1";
@@ -50,19 +55,140 @@ export async function fetchProductListPage(
 /** Один и тот же page size, что в ответе API (обычно до 500 за запрос). */
 const PAGE_SIZE_HINT = 500;
 
+/**
+ * Пайплайн на каждой странице выгрузки: меньше держим в памяти и быстрее match,
+ * чем «скачать всю рубрику → потом отфильтровать».
+ * Число запросов к API то же; пик RAM и работа runCompare снижаются.
+ */
+export type RubricFetchPipeline = {
+  excludeIds?: Set<number>;
+  /** Для счётчика «id из списка не встретился в рубрике» */
+  excludeIdsRaw?: number[];
+  brands?: string[];
+  brandMatch?: BrandMatchMode;
+  models?: string[];
+  modelMatch?: ModelMatchMode;
+};
+
+export type FetchAllProductsResult = {
+  products: FpProduct[];
+  brandExcludedMissing: number;
+  brandExcludedNotInList: number;
+  modelExcludedNotInList: number;
+  excludeMeta?: {
+    removedFromA: number;
+    listIdsNotFoundInRubric: number;
+  };
+};
+
 export async function fetchAllProductsInRubric(
   token: string,
   siteVariation: string,
-  rubricId: number
-): Promise<FpProduct[]> {
+  rubricId: number,
+  pipeline?: RubricFetchPipeline
+): Promise<FetchAllProductsResult> {
+  const excludeSet = pipeline?.excludeIds;
+  const excludeRaw = pipeline?.excludeIdsRaw;
+  const brands = pipeline?.brands?.length ? pipeline.brands : null;
+  const brandMatch: BrandMatchMode = pipeline?.brandMatch === "contains" ? "contains" : "exact";
+  const models = pipeline?.models?.length ? pipeline.models : null;
+  const modelMatch: ModelMatchMode = pipeline?.modelMatch === "exact" ? "exact" : "contains";
+
   const all: FpProduct[] = [];
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  let modelExcludedNotInList = 0;
+  let removedFromA = 0;
+  const idsSeenInRubric = new Set<number>();
+
   for (let page = 1; ; page++) {
     const chunk = await fetchProductListPage(token, siteVariation, rubricId, page);
     if (!chunk.length) break;
-    all.push(...chunk);
+    for (const p of chunk) {
+      idsSeenInRubric.add(p.id);
+    }
+    let working = chunk;
+    if (excludeSet && excludeSet.size > 0) {
+      for (const p of chunk) {
+        if (excludeSet.has(p.id)) removedFromA += 1;
+      }
+      working = working.filter((p) => !excludeSet.has(p.id));
+    }
+    if (brands) {
+      const r = filterFpProductsByBrands(working, brands, brandMatch);
+      brandExcludedMissing += r.excludedMissingBrand;
+      brandExcludedNotInList += r.excludedNotInList;
+      working = r.products;
+    }
+    if (models) {
+      const r = filterFpProductsByModels(working, models, modelMatch);
+      modelExcludedNotInList += r.excludedNotInList;
+      working = r.products;
+    }
+    all.push(...working);
     if (chunk.length < PAGE_SIZE_HINT) break;
   }
-  return all;
+
+  let excludeMeta: FetchAllProductsResult["excludeMeta"];
+  if (excludeSet && excludeRaw && excludeRaw.length > 0) {
+    let listIdsNotFoundInRubric = 0;
+    for (const id of excludeSet) {
+      if (!idsSeenInRubric.has(id)) listIdsNotFoundInRubric += 1;
+    }
+    excludeMeta = { removedFromA, listIdsNotFoundInRubric };
+  }
+
+  return {
+    products: all,
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList,
+    excludeMeta
+  };
+}
+
+/** Несколько рубрик на одной витрине B: параллельная выгрузка, склейка по id без дублей (первое вхождение). */
+export async function fetchMergedRubricsProducts(
+  token: string,
+  siteVariation: string,
+  rubricIds: number[],
+  pipeline?: RubricFetchPipeline
+): Promise<FetchAllProductsResult> {
+  const uniqIds = [...new Set(rubricIds.filter((id) => id > 0))];
+  if (uniqIds.length === 0) {
+    return {
+      products: [],
+      brandExcludedMissing: 0,
+      brandExcludedNotInList: 0,
+      modelExcludedNotInList: 0
+    };
+  }
+  if (uniqIds.length === 1) {
+    return fetchAllProductsInRubric(token, siteVariation, uniqIds[0]!, pipeline);
+  }
+  const batches = await Promise.all(
+    uniqIds.map((rubricId) =>
+      fetchAllProductsInRubric(token, siteVariation, rubricId, pipeline)
+    )
+  );
+  const byId = new Map<number, FpProduct>();
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  let modelExcludedNotInList = 0;
+  for (const batch of batches) {
+    brandExcludedMissing += batch.brandExcludedMissing;
+    brandExcludedNotInList += batch.brandExcludedNotInList;
+    modelExcludedNotInList += batch.modelExcludedNotInList;
+    for (const p of batch.products) {
+      if (!byId.has(p.id)) byId.set(p.id, p);
+    }
+  }
+  return {
+    products: [...byId.values()],
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList
+  };
 }
 
 /** Категория из /rubric/main и /rubric/child (Partner Site API V1) */

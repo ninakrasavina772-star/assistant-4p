@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "sharp": "^0.33.5",
     "next": "15.1.11",
     "next-auth": "^4.24.10",
     "react": "^19.0.0",

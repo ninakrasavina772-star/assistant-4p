@@ -1,5 +1,159 @@
 import { collectEans, firstImageUrl, toCompareProduct } from "./product";
-import type { FpProduct, NameLocale } from "./types";
+import type { FpProduct, NameLocale, OnlyBCrossWithARow } from "./types";
+
+/** Один текст в ячейке .xlsx не длиннее этого (иначе SheetJS бросает ошибку). */
+const XLSX_MAX_CELL_CHARS = 32767;
+
+function clipExcelCell(s: string): string {
+  if (s.length <= XLSX_MAX_CELL_CHARS) return s;
+  const tail = "…[обрезано: лимит Excel 32767 симв.]";
+  const n = XLSX_MAX_CELL_CHARS - tail.length;
+  return (n > 0 ? s.slice(0, n) : "") + tail;
+}
+
+function clipExcelRow(row: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k] = clipExcelCell(v);
+  }
+  return out;
+}
+
+function crossKindRu(kind: string): string {
+  switch (kind) {
+    case "ean_diff_id":
+      return "EAN (разный id)";
+    case "article":
+      return "артикул";
+    case "name_photo":
+      return "название + фото";
+    case "brand_visual":
+      return "бренд + фото (~60%)";
+    case "unlikely":
+      return "мало: фото + характеристики";
+    default:
+      return kind;
+  }
+}
+
+function articleHintsFromCrossRow(r: OnlyBCrossWithARow): string[] {
+  const xs: string[] = [];
+  if (r.article) xs.push(String(r.article));
+  if (r.productOnA.articleKey) xs.push(String(r.productOnA.articleKey));
+  return [...new Set(xs.filter(Boolean))];
+}
+
+/**
+ * По строкам кросс-дублей: id товара B → виды совпадения и артикулы найденной карточки на A.
+ */
+export function aggregateCrossDupHintsByB(
+  rows: OnlyBCrossWithARow[]
+): Map<number, { kindsRu: Set<string>; articlesOnA: Set<string> }> {
+  const m = new Map<number, { kindsRu: Set<string>; articlesOnA: Set<string> }>();
+  for (const r of rows) {
+    const idB = r.productFromOnlyB.id;
+    if (!m.has(idB)) m.set(idB, { kindsRu: new Set(), articlesOnA: new Set() });
+    const e = m.get(idB)!;
+    e.kindsRu.add(crossKindRu(r.kind));
+    for (const a of articleHintsFromCrossRow(r)) {
+      e.articlesOnA.add(a);
+    }
+  }
+  return m;
+}
+
+export async function downloadNoveltiesByArticleExcel(
+  noveltiesFromB: FpProduct[],
+  nameLocale: NameLocale,
+  fileBase: string
+): Promise<void> {
+  return downloadFpListAsExcel(noveltiesFromB, nameLocale, fileBase, {
+    sheetName: "новинки_B_артикул",
+    fileSuffix: "новинки_B_по_артикулу"
+  });
+}
+
+function sanitizeLabel(s: string): string {
+  return s.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 40);
+}
+
+/**
+ * Новинки с B одним листом: колонки дубль на A, типы совпадения, артикулы на A.
+ */
+export async function downloadNoveltiesByArticleWithDupColumnsExcel(
+  noveltiesFromB: FpProduct[],
+  crossRows: OnlyBCrossWithARow[],
+  nameLocale: NameLocale,
+  fileBase: string,
+  siteALabel: string
+): Promise<void> {
+  if (typeof window === "undefined" || !noveltiesFromB.length) return;
+  const XLSX = await import("xlsx");
+  const hints = aggregateCrossDupHintsByB(crossRows);
+  const aShort = sanitizeLabel(siteALabel);
+  const rows = noveltiesFromB.map((p) => {
+    const base = flattenProductForExport(p, nameLocale);
+    const agg = hints.get(p.id);
+    const hasDup = agg && (agg.kindsRu.size > 0 || agg.articlesOnA.size > 0);
+    return clipExcelRow({
+      "Дубль на A (найден вторым контуром)": hasDup ? "да" : "нет",
+      "Как нашли совпадение на A": hasDup ? [...agg!.kindsRu].join(", ") : "",
+      "Артикулы на сайте A (кандидаты, через запятую)":
+        agg && agg.articlesOnA.size > 0 ? [...agg.articlesOnA].join(", ") : "",
+      ...base
+    });
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+  XLSX.utils.book_append_sheet(wb, ws, "новинки+дубль");
+  XLSX.writeFile(
+    wb,
+    `${safe}_новинки_B_плюс_дубль_на_${aShort}_${new Date().toISOString().slice(0, 10)}.xlsx`
+  );
+}
+
+/** По одной строке на каждую пару «новинка B ↔ карточка A». */
+export async function downloadCrossDuplicatePairsExcel(
+  rows: OnlyBCrossWithARow[],
+  nameLocale: NameLocale,
+  fileBase: string,
+  siteALabel: string,
+  siteBLabel: string
+): Promise<void> {
+  if (typeof window === "undefined" || !rows.length) return;
+  const XLSX = await import("xlsx");
+  const out: Record<string, string>[] = rows.map((r) => {
+    const a = r.productOnA;
+    const b = r.productFromOnlyB;
+    const pick = (c: typeof a) =>
+      (nameLocale === "ru" ? c.nameRu : c.nameEn) || c.nameRu || c.nameEn;
+    return {
+      "Тип совпадения": crossKindRu(r.kind),
+      "Общий EAN (если есть)": r.ean ?? "",
+      "Ключ артикула при совпадении": r.article ?? "",
+      Совпадение: r.matchReasons?.join(" + ") ?? "",
+      [`ID (${siteALabel})`]: String(a.id),
+      [`Артикул (${siteALabel})`]: a.articleKey ?? "",
+      [`Название (${siteALabel})`]: pick(a),
+      [`Ссылка (${siteALabel})`]: a.link,
+      [`EAN (${siteALabel})`]: a.eans.join(", "),
+      [`ID (${siteBLabel}) — новинка`]: String(b.id),
+      [`Артикул (${siteBLabel})`]: b.articleKey ?? "",
+      [`Название (${siteBLabel})`]: pick(b),
+      [`Ссылка (${siteBLabel})`]: b.link,
+      [`EAN (${siteBLabel})`]: b.eans.join(", ")
+    };
+  }).map(clipExcelRow);
+  const ws = XLSX.utils.json_to_sheet(out);
+  const wb = XLSX.utils.book_new();
+  const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+  XLSX.utils.book_append_sheet(wb, ws, "дубли_пары");
+  XLSX.writeFile(
+    wb,
+    `${safe}_дубли_новинок_B_${new Date().toISOString().slice(0, 10)}.xlsx`
+  );
+}
 
 const SKIP_KEYS = new Set([
   "id",
@@ -79,7 +233,9 @@ export async function downloadFpListAsExcel(
 ): Promise<void> {
   if (typeof window === "undefined" || !items.length) return;
   const XLSX = await import("xlsx");
-  const rows = items.map((p) => flattenProductForExport(p, nameLocale));
+  const rows = items.map((p) =>
+    clipExcelRow(flattenProductForExport(p, nameLocale))
+  );
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
@@ -130,7 +286,9 @@ export async function downloadNerazmeshennyeSiteAExcel(
 ): Promise<void> {
   if (typeof window === "undefined" || !items.length) return;
   const XLSX = await import("xlsx");
-  const rows = items.map((p) => flattenEntireProduct(p, nameLocale));
+  const rows = items.map((p) =>
+    clipExcelRow(flattenEntireProduct(p, nameLocale))
+  );
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);

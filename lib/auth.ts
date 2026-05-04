@@ -5,9 +5,24 @@ import { getAuthSecret } from "./auth-secret";
 
 function allowlist(): string[] {
   return (process.env.ALLOWED_EMAILS || "")
+    .replace(/^\uFEFF/, "")
     .split(/[,;\n]/)
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function oauthEmail(
+  user: { email?: string | null },
+  profile: unknown
+): string | undefined {
+  const fromProfile =
+    profile &&
+    typeof profile === "object" &&
+    "email" in profile &&
+    typeof (profile as { email?: unknown }).email === "string"
+      ? (profile as { email: string }).email
+      : undefined;
+  return (user.email || fromProfile || undefined)?.toLowerCase();
 }
 
 /** Без Google в .env вход отключён; провайдер-заглушка не даёт NextAuth упасть при старте. */
@@ -40,7 +55,7 @@ export const authOptions: NextAuthOptions = {
   pages: { signIn: "/login" },
   secret: getAuthSecret(),
   callbacks: {
-    async signIn({ user }) {
+    async signIn({ user, profile }) {
       if (process.env.DEBUG_ALLOW_ANY_GOOGLE === "1" && process.env.NODE_ENV === "development") {
         return true;
       }
@@ -49,7 +64,7 @@ export const authOptions: NextAuthOptions = {
         // Без allowlist — вход закрыт (см. .env.local пример: ALLOWED_EMAILS или DEBUG для dev)
         return false;
       }
-      const email = user.email?.toLowerCase();
+      const email = oauthEmail(user, profile);
       if (!email) return false;
       return emails.includes(email);
     },
@@ -59,9 +74,9 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
-    async jwt({ token, user, account }) {
+    async jwt({ token, user, account, profile }) {
       if (account && user) {
-        token.email = user.email;
+        token.email = oauthEmail(user, profile) ?? user.email;
       }
       return token;
     }

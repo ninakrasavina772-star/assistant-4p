@@ -1,23 +1,15 @@
 import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
+import { type BrandMatchMode, mergeBrandLists } from "@/lib/brand-filter";
+import { mergeModelLists, type ModelMatchMode } from "@/lib/model-filter";
 import {
-  type BrandMatchMode,
-  filterFpProductsByBrands,
-  mergeBrandLists
-} from "@/lib/brand-filter";
-import {
-  filterFpProductsByModels,
-  mergeModelLists,
-  type ModelMatchMode
-} from "@/lib/model-filter";
-import { fetchAllProductsInRubric } from "@/lib/fourpartners";
+  fetchAllProductsInRubric,
+  fetchMergedRubricsProducts
+} from "@/lib/fourpartners";
 import { findIntraSiteDuplicates } from "@/lib/intraSiteDups";
 import { runCompare } from "@/lib/match";
-import {
-  filterSiteAByExcludedProductIds,
-  parseExcludeIdsFromRequest
-} from "@/lib/excludeProductIds";
+import { parseExcludeIdsFromRequest } from "@/lib/excludeProductIds";
 import type {
   AttrMatchOptions,
   CompareBrandFilterInfo,
@@ -25,6 +17,13 @@ import type {
   CompareModelFilterInfo,
   NameLocale
 } from "@/lib/types";
+
+/**
+ * Долгая выгрузка рубрики. Реальный лимит смотрите в плане Vercel:
+ * Hobby — до 60 с (или до 300 с с Fluid compute); Pro — до 300–800 с.
+ * @see https://vercel.com/docs/functions/configuring-functions/duration
+ */
+export const maxDuration = 300;
 
 function parseAttrMatch(body: {
   attrMatch?: { volume?: boolean; shade?: boolean; color?: boolean };
@@ -56,6 +55,8 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     rubricA?: number;
     rubricB?: number;
+    /** Несколько рубрик сайта B — выгрузки объединяются по уникальному id товара */
+    rubricsB?: unknown;
     nameLocale?: string;
     siteVariation?: string;
     /** Ключи из интерфейса (приоритет над .env, если непустые) */
@@ -139,6 +140,32 @@ export async function POST(req: NextRequest) {
 
   const attrOpts = parseAttrMatch(body);
 
+  function parseRubricBIds(payload: {
+    rubricB?: number;
+    rubricsB?: unknown;
+  }): number[] {
+    if (Array.isArray(payload.rubricsB)) {
+      const seen = new Set<number>();
+      const out: number[] = [];
+      for (const x of payload.rubricsB) {
+        const n =
+          typeof x === "number"
+            ? x
+            : typeof x === "string"
+              ? Number(String(x).trim())
+              : NaN;
+        if (!Number.isFinite(n) || n < 1) continue;
+        const id = Math.floor(n);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
+      if (out.length > 0) return out;
+    }
+    const single = Number(payload.rubricB);
+    return single > 0 ? [single] : [];
+  }
+
   if (mode === "singleDups") {
     const rubricA = Number(body.rubricA);
     if (!rubricA) {
@@ -157,20 +184,23 @@ export async function POST(req: NextRequest) {
       );
     }
     try {
-      let products = await fetchAllProductsInRubric(
-        tokenA,
-        siteVar,
-        rubricA
-      );
+      const fetchA = await fetchAllProductsInRubric(tokenA, siteVar, rubricA, {
+        excludeIds:
+          excludeIdsA.length > 0 ? new Set(excludeIdsA) : undefined,
+        excludeIdsRaw: excludeIdsA.length > 0 ? excludeIdsA : undefined,
+        brands: brands.length > 0 ? brands : undefined,
+        brandMatch,
+        models: models.length > 0 ? models : undefined,
+        modelMatch
+      });
+      let products = fetchA.products;
       let excludeIdsAInfo: CompareExcludeIdsAInfo | undefined;
-      if (excludeIdsA.length > 0) {
-        const ex = filterSiteAByExcludedProductIds(products, excludeIdsA);
-        products = ex.products;
+      if (fetchA.excludeMeta) {
         excludeIdsAInfo = {
           enabled: true,
           listSize: excludeIdsA.length,
-          removedFromA: ex.removedFromA,
-          listIdsNotFoundInRubric: ex.listIdsNotFoundInRubric
+          removedFromA: fetchA.excludeMeta.removedFromA,
+          listIdsNotFoundInRubric: fetchA.excludeMeta.listIdsNotFoundInRubric
         };
         if (products.length === 0) {
           return NextResponse.json(
@@ -184,15 +214,13 @@ export async function POST(req: NextRequest) {
       }
       let brandFilter: CompareBrandFilterInfo | undefined;
       if (brands.length > 0) {
-        const f = filterFpProductsByBrands(products, brands, brandMatch);
-        products = f.products;
         brandFilter = {
           enabled: true,
           matchMode: brandMatch,
           brandsSample: brands.slice(0, 50),
           totalBrands: brands.length,
-          excludedMissingBrandA: f.excludedMissingBrand,
-          excludedNotInListA: f.excludedNotInList,
+          excludedMissingBrandA: fetchA.brandExcludedMissing,
+          excludedNotInListA: fetchA.brandExcludedNotInList,
           excludedMissingBrandB: 0,
           excludedNotInListB: 0
         };
@@ -200,7 +228,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json(
             {
               error:
-                "После фильтра по бренду не осталось товаров. Проверьте написание или включите «вхождение в название бренда» (частичное совпадение)."
+                "После фильтра по бренду не осталось товаров. Фильтр смотрит только поле бренда в API (brand.name), не название товара. Проверьте рубрику, написание бренда в выгрузке или включите «вхождение в название бренда»."
             },
             { status: 400 }
           );
@@ -208,14 +236,12 @@ export async function POST(req: NextRequest) {
       }
       let modelFilter: CompareModelFilterInfo | undefined;
       if (models.length > 0) {
-        const fm = filterFpProductsByModels(products, models, modelMatch);
-        products = fm.products;
         modelFilter = {
           enabled: true,
           matchMode: modelMatch,
           modelsSample: models.slice(0, 50),
           totalModels: models.length,
-          excludedNotInListA: fm.excludedNotInList,
+          excludedNotInListA: fetchA.modelExcludedNotInList,
           excludedNotInListB: 0
         };
         if (products.length === 0) {
@@ -228,7 +254,7 @@ export async function POST(req: NextRequest) {
           );
         }
       }
-      const dups = findIntraSiteDuplicates(products, nameLocale, attrOpts);
+      const dups = await findIntraSiteDuplicates(products, nameLocale, attrOpts);
       const usAttempted = true;
       return NextResponse.json({
         resultKind: "singleSiteDups" as const,
@@ -241,6 +267,7 @@ export async function POST(req: NextRequest) {
         excludeIdsA: excludeIdsAInfo,
         eanGroups: dups.eanGroups,
         namePhotoPairs: dups.namePhotoPairs,
+        brandVisualPairs: dups.brandVisualPairs,
         unlikelyPairs: dups.unlikelyPairs,
         unlikelySearch: {
           attempted: usAttempted,
@@ -256,7 +283,7 @@ export async function POST(req: NextRequest) {
   }
 
   const rubricA = Number(body.rubricA);
-  const rubricB = Number(body.rubricB);
+  const rubricBIds = parseRubricBIds(body);
 
   if (!tokenA || !tokenB) {
     return NextResponse.json(
@@ -267,29 +294,43 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  if (!rubricA || !rubricB) {
+  if (!rubricA || rubricBIds.length === 0) {
     return NextResponse.json(
-      { error: "Укажите числовые id рубрик rubricA и rubricB" },
+      {
+        error:
+          "Укажите id рубрики A и хотя бы одну рубрику B (поле rubricB или массив rubricsB)"
+      },
       { status: 400 }
     );
   }
 
   try {
-    const [productsA, productsB] = await Promise.all([
-      fetchAllProductsInRubric(tokenA, siteVar, rubricA),
-      fetchAllProductsInRubric(tokenB, siteVar, rubricB)
+    const [resA, resB] = await Promise.all([
+      fetchAllProductsInRubric(tokenA, siteVar, rubricA, {
+        excludeIds:
+          excludeIdsA.length > 0 ? new Set(excludeIdsA) : undefined,
+        excludeIdsRaw: excludeIdsA.length > 0 ? excludeIdsA : undefined,
+        brands: brands.length > 0 ? brands : undefined,
+        brandMatch,
+        models: models.length > 0 ? models : undefined,
+        modelMatch
+      }),
+      fetchMergedRubricsProducts(tokenB, siteVar, rubricBIds, {
+        brands: brands.length > 0 ? brands : undefined,
+        brandMatch,
+        models: models.length > 0 ? models : undefined,
+        modelMatch
+      })
     ]);
-    let a = productsA;
-    let b = productsB;
+    let a = resA.products;
+    let b = resB.products;
     let excludeIdsAInfo: CompareExcludeIdsAInfo | undefined;
-    if (excludeIdsA.length > 0) {
-      const ex = filterSiteAByExcludedProductIds(a, excludeIdsA);
-      a = ex.products;
+    if (resA.excludeMeta) {
       excludeIdsAInfo = {
         enabled: true,
         listSize: excludeIdsA.length,
-        removedFromA: ex.removedFromA,
-        listIdsNotFoundInRubric: ex.listIdsNotFoundInRubric
+        removedFromA: resA.excludeMeta.removedFromA,
+        listIdsNotFoundInRubric: resA.excludeMeta.listIdsNotFoundInRubric
       };
       if (a.length === 0) {
         return NextResponse.json(
@@ -303,15 +344,16 @@ export async function POST(req: NextRequest) {
     }
     let brandFilter: CompareBrandFilterInfo | undefined;
     if (brands.length > 0) {
-      const fa = filterFpProductsByBrands(a, brands, brandMatch);
-      const fb = filterFpProductsByBrands(productsB, brands, brandMatch);
-      a = fa.products;
-      b = fb.products;
       if (a.length === 0 || b.length === 0) {
+        const where =
+          a.length === 0 && b.length === 0
+            ? "в каталогах A и B"
+            : a.length === 0
+              ? "в каталоге A (рубрика / ключ сайта A)"
+              : "в каталоге B (рубрика / ключ сайта B)";
         return NextResponse.json(
           {
-            error:
-              "После фильтра по бренду в одном из каталогов не осталось товаров. Проверьте написание бренда или включите «вхождение в название бренда»."
+            error: `После фильтра по бренду не осталось товаров ${where}. Фильтр сравнивает только поле brand.name из API, не текст названия товара. Проверьте id рубрик на обоих сайтах и как бренд записан в выгрузке; при необходимости временно отключите фильтр по бренду.`
           },
           { status: 400 }
         );
@@ -321,25 +363,21 @@ export async function POST(req: NextRequest) {
         matchMode: brandMatch,
         brandsSample: brands.slice(0, 50),
         totalBrands: brands.length,
-        excludedMissingBrandA: fa.excludedMissingBrand,
-        excludedMissingBrandB: fb.excludedMissingBrand,
-        excludedNotInListA: fa.excludedNotInList,
-        excludedNotInListB: fb.excludedNotInList
+        excludedMissingBrandA: resA.brandExcludedMissing,
+        excludedMissingBrandB: resB.brandExcludedMissing,
+        excludedNotInListA: resA.brandExcludedNotInList,
+        excludedNotInListB: resB.brandExcludedNotInList
       };
     }
     let modelFilter: CompareModelFilterInfo | undefined;
     if (models.length > 0) {
-      const fma = filterFpProductsByModels(a, models, modelMatch);
-      const fmb = filterFpProductsByModels(b, models, modelMatch);
-      a = fma.products;
-      b = fmb.products;
       modelFilter = {
         enabled: true,
         matchMode: modelMatch,
         modelsSample: models.slice(0, 50),
         totalModels: models.length,
-        excludedNotInListA: fma.excludedNotInList,
-        excludedNotInListB: fmb.excludedNotInList
+        excludedNotInListA: resA.modelExcludedNotInList,
+        excludedNotInListB: resB.modelExcludedNotInList
       };
       if (a.length === 0 || b.length === 0) {
         return NextResponse.json(
@@ -351,7 +389,7 @@ export async function POST(req: NextRequest) {
         );
       }
     }
-    const result = runCompare(a, b, nameLocale, siteALabel, siteBLabel, attrOpts);
+    const result = await runCompare(a, b, nameLocale, siteALabel, siteBLabel, attrOpts);
     if (brandFilter) {
       result.brandFilter = brandFilter;
     }

@@ -43,10 +43,31 @@ export function mergeBrandLists(...lists: string[][]): string[] {
   return parseBrandListFromText(text);
 }
 
+/** Строка бренда из произвольного фрагмента JSON (name / title / label). */
+function pickBrandString(x: unknown): string {
+  if (x == null) return "";
+  if (typeof x === "string") return x.trim();
+  if (typeof x === "object") {
+    const o = x as Record<string, unknown>;
+    for (const k of ["name", "title", "label"]) {
+      const v = o[k];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+  }
+  return "";
+}
+
+/**
+ * Единая точка: бренд из /product/list (разные формы у 4Partners и витрин).
+ */
 export function productBrandName(p: FpProduct): string {
-  const n = p.brand?.name;
-  if (n == null || typeof n !== "string") return "";
-  return n.trim();
+  return (
+    pickBrandString(p.brand_name) ||
+    pickBrandString(p.brand) ||
+    pickBrandString(p.manufacturer) ||
+    pickBrandString(p.vendor) ||
+    ""
+  );
 }
 
 export type BrandMatchMode = "exact" | "contains";

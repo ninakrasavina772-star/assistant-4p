@@ -31,4 +31,5 @@ export default function middleware(req: NextRequest, event: NextFetchEvent) {
   return auth(req as Parameters<typeof auth>[0], event);
 }
 
-export const config = { matcher: ["/compare"] };
+/** /compare и /compare/... — иначе часть запросов обходила бы middleware */
+export const config = { matcher: ["/compare/:path*"] };

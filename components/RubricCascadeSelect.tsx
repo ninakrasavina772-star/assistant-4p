@@ -35,8 +35,8 @@ async function postRubrics(
 type PathItem = { id: number; name: string; isLeaf: boolean };
 
 /**
- * Одно поле: кнопка + панель с колонками вправо (подменю при наведении / клике).
- * Выбранный id — лист или узел без детей.
+ * Кнопка + колонки вправо: наведение раскрывает дочерние рубрики, клик по строке
+ * фиксирует id этой рубрики (любой уровень, не только лист) и закрывает панель.
  */
 export function RubricCascadeSelect({
   label,
@@ -96,26 +96,18 @@ export function RubricCascadeSelect({
     };
   }, [open, canLoad, fetchList]);
 
-  const expandFrom = useCallback(
-    async (colIndex: number, r: FpRubric) => {
+  /** Клик: зафиксировать эту рубрику и закрыть (в т.ч. промежуточный уровень). */
+  const commitSelection = useCallback(
+    (colIndex: number, r: FpRubric) => {
       if (!canLoad) return;
       onChange(String(r.id));
       setPathStack((prev) => [
         ...prev.slice(0, colIndex),
         { id: r.id, name: r.name, isLeaf: r.is_leaf }
       ]);
-      if (r.is_leaf) {
-        setOpen(false);
-        return;
-      }
-      const ch = await fetchList(r.id);
-      if (ch.length === 0) {
-        setOpen(false);
-        return;
-      }
-      setColumns((prev) => [...prev.slice(0, colIndex + 1), ch]);
+      setOpen(false);
     },
-    [canLoad, fetchList, onChange]
+    [canLoad, onChange]
   );
 
   const onRowEnter = useCallback(
@@ -139,9 +131,9 @@ export function RubricCascadeSelect({
 
   const onRowClick = useCallback(
     (colIndex: number, r: FpRubric) => {
-      void expandFrom(colIndex, r);
+      commitSelection(colIndex, r);
     },
-    [expandFrom]
+    [commitSelection]
   );
 
   useEffect(() => {
@@ -270,7 +262,8 @@ export function RubricCascadeSelect({
               <p className="px-3 py-2 text-sm text-slate-500">Нет рубрик</p>
             )}
             <p className="border-t border-slate-100 px-2.5 py-1.5 text-[10px] text-slate-500">
-              Подсказка: наведение открывает колонку справа, клик — выбрать рубрику.
+              Подсказка: наведение открывает колонку справа; клик по строке — выбрать
+              эту рубрику (любой уровень, не обязательно конечную) и закрыть список.
             </p>
           </div>
         )}

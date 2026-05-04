@@ -12,8 +12,19 @@ import {
   homePageBg
 } from "@/components/homeTheme";
 
-const tools: { href: string; title: string; emoji: string }[] = [
-  { href: "/compare", title: "Сравнение витрин и поиск дублей", emoji: "📊" },
+const tools: {
+  href: string;
+  title: string;
+  emoji: string;
+  /** Единственный сценарий под логином (см. middleware.ts) */
+  requiresAuth?: boolean;
+}[] = [
+  {
+    href: "/compare",
+    title: "Сравнение витрин и поиск дублей",
+    emoji: "📊",
+    requiresAuth: true
+  },
   { href: "/size-table", title: "Создать размерную таблицу", emoji: "📏" },
   { href: "/prices-stock", title: "Выгрузка цен и остатков", emoji: "💹" }
 ];
@@ -74,8 +85,15 @@ export default function AssistantHome() {
                   >
                     {it.emoji}
                   </span>
-                  <span className="min-w-0 flex-1 text-left text-[0.95rem] font-semibold leading-snug text-slate-900 sm:text-base">
-                    {it.title}
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="block text-[0.95rem] font-semibold leading-snug text-slate-900 sm:text-base">
+                      {it.title}
+                    </span>
+                    {it.requiresAuth ? (
+                      <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                        Нужен вход через Google (список ALLOWED_EMAILS)
+                      </span>
+                    ) : null}
                   </span>
                   <span
                     className="shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500"

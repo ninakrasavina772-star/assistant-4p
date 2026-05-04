@@ -1,3 +1,4 @@
+import { productBrandName } from "./brand-filter";
 import { extractProductAttributes } from "./productAttributes";
 import type { CompareProduct, FpProduct, NameLocale } from "./types";
 
@@ -27,6 +28,12 @@ export function collectArticleKeys(p: FpProduct): string[] {
   for (const x of [p.article, p.code, p.vendor_code] as (string | undefined)[]) {
     if (x == null || x === "") continue;
     const k = normArticleKey(String(x));
+    if (k) set.add(k);
+  }
+  /* Тот же «хвост карточки» a123…, что в UI как «карточка:» — на витрине часто совпадает между A/B, даже если article/code в JSON различаются. */
+  const lb = productBaseKeyFromLink(p.link);
+  if (lb) {
+    const k = normArticleKey(lb);
     if (k) set.add(k);
   }
   return [...set];
@@ -79,7 +86,7 @@ export function toCompareProduct(p: FpProduct): CompareProduct {
     link: p.link,
     eans,
     firstImage: firstImageUrl(p),
-    brand: p.brand?.name || "",
+    brand: productBrandName(p),
     ...(lb ? { linkBaseKey: lb } : {}),
     ...(artKeys[0] ? { articleKey: artKeys[0] } : {}),
     ...(attr.attrVolume ? { attrVolume: attr.attrVolume } : {}),

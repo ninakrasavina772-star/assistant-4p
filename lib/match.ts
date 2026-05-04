@@ -10,14 +10,17 @@ import type {
   NameLocale,
   NameMatchRow
 } from "./types";
+import { productBrandName } from "./brand-filter";
 import {
   buildOnlyACrossWithB,
   buildOnlyAInternalDups,
   buildOnlyBCrossWithA,
   buildOnlyBInternalDups
 } from "./crossList";
+import { classifyCrossSoftPair, prefetchOnlyBCrossPhashes } from "./dupTiers";
+import type { PhashCache } from "./imagePhash";
 import { findIntraSiteDuplicates } from "./intraSiteDups";
-import { PAIR_MIN, sameBrandForFuzzy, scoreNameAndPhoto } from "./pairScoring";
+import { sameBrandForFuzzy } from "./pairScoring";
 import {
   collectArticleKeys,
   collectEans,
@@ -98,14 +101,53 @@ function normBrand(s: string): string {
     .replace(/\s+/g, " ");
 }
 
-export function runCompare(
+/**
+ * Товары из `catalogB`, у которых **ни один** нормализованный ключ не встречается в `catalogA`.
+ * Ключи: article, code, vendor_code и суффикс карточки из ссылки (`…-a123…` → `a123`, как в UI).
+ * Если у позиции B нет ни одного ключа — её нельзя проверить по артикулу/карточке;
+ * такие строки включаются в новинки (см. `countMissingArticleKeysOnCatalogB`).
+ */
+export function computeNoveltiesByArticle(
+  catalogA: FpProduct[],
+  catalogB: FpProduct[],
+  nameLocale: NameLocale
+): {
+  noveltiesFromB: FpProduct[];
+  countMissingArticleKeysOnCatalogB: number;
+} {
+  const keysOnA = new Set<string>();
+  for (const p of catalogA) {
+    for (const k of collectArticleKeys(p)) keysOnA.add(k);
+  }
+  let missingKeysOnB = 0;
+  const noveltiesFromB = catalogB.filter((p) => {
+    const kb = collectArticleKeys(p);
+    if (kb.length === 0) {
+      missingKeysOnB += 1;
+      return true;
+    }
+    return !kb.some((k) => keysOnA.has(k));
+  });
+  noveltiesFromB.sort((a, b) =>
+    pickComparableName(toCompareProduct(a), nameLocale).localeCompare(
+      pickComparableName(toCompareProduct(b), nameLocale),
+      "ru"
+    )
+  );
+  return {
+    noveltiesFromB,
+    countMissingArticleKeysOnCatalogB: missingKeysOnB
+  };
+}
+
+export async function runCompare(
   productsA: FpProduct[],
   productsB: FpProduct[],
   nameLocale: NameLocale,
   siteALabel: string,
   siteBLabel: string,
   attrOpts?: AttrMatchOptions
-): CompareResult {
+): Promise<CompareResult> {
   const idxA = buildEanIndex(productsA, "A");
   const idxB = buildEanIndex(productsB, "B");
   const artIdxA = buildArticleIndex(productsA, "A");
@@ -198,7 +240,7 @@ export function runCompare(
 
   const byBrandB = new Map<string, FpProduct[]>();
   for (const p of restB) {
-    const key = normBrand(p.brand?.name || "") || "__no_brand__";
+    const key = normBrand(productBrandName(p)) || "__no_brand__";
     if (!byBrandB.has(key)) byBrandB.set(key, []);
     byBrandB.get(key)!.push(p);
   }
@@ -213,29 +255,39 @@ export function runCompare(
   };
   const candidates: Cand[] = [];
 
+  const byBrandArest = new Map<string, FpProduct[]>();
+  for (const p of restA) {
+    const key = normBrand(productBrandName(p)) || "__no_brand__";
+    if (!byBrandArest.has(key)) byBrandArest.set(key, []);
+    byBrandArest.get(key)!.push(p);
+  }
+  const phashCache: PhashCache = new Map();
+  await prefetchOnlyBCrossPhashes(restB, byBrandArest, nameLocale, phashCache);
+
   for (const pA of restA) {
     const cA = toCompareProduct(pA);
-    const keyA = normBrand(pA.brand?.name || "") || "__no_brand__";
+    const keyA = normBrand(productBrandName(pA)) || "__no_brand__";
     const list = byBrandB.get(keyA);
     if (!list) continue;
     for (const pB of list) {
       if (pA.id === pB.id) continue;
       const cB = toCompareProduct(pB);
       if (!sameBrandForFuzzy(cA, cB)) continue;
-      const { score, reasons } = scoreNameAndPhoto(
+      const r = await classifyCrossSoftPair(
         cA,
         cB,
         nameLocale,
-        attrOpts
+        attrOpts,
+        phashCache
       );
-      if (score < PAIR_MIN || !reasons.length) continue;
+      if (!r) continue;
       candidates.push({
         a: pA,
         b: pB,
         cA,
         cB,
-        score01: score,
-        matchReasons: reasons
+        score01: r.score,
+        matchReasons: r.matchReasons
       });
     }
   }
@@ -297,23 +349,48 @@ export function runCompare(
         "ru"
       )
     );
-  const intraSiteADups = findIntraSiteDuplicates(productsA, nameLocale, attrOpts);
-  const intraSiteBDups = findIntraSiteDuplicates(productsB, nameLocale, attrOpts);
-
-  const onlyBCrossWithA = buildOnlyBCrossWithA(
-    unplacedBByIdRaw,
+  const intraSiteADups = await findIntraSiteDuplicates(
     productsA,
     nameLocale,
     attrOpts
   );
-  const onlyACrossWithB = buildOnlyACrossWithB(
-    unplacedAByIdRaw,
+  const intraSiteBDups = await findIntraSiteDuplicates(
     productsB,
     nameLocale,
     attrOpts
   );
-  const onlyBInternalDups = buildOnlyBInternalDups(unplacedBByIdRaw, nameLocale, attrOpts);
-  const onlyAInternalDups = buildOnlyAInternalDups(unplacedAByIdRaw, nameLocale, attrOpts);
+
+  const {
+    noveltiesFromB,
+    countMissingArticleKeysOnCatalogB
+  } = computeNoveltiesByArticle(productsA, productsB, nameLocale);
+  const {
+    noveltiesFromB: noveltiesFromAsPerspective,
+    countMissingArticleKeysOnCatalogB: countMissingArticleKeysOnCatalogA
+  } = computeNoveltiesByArticle(productsB, productsA, nameLocale);
+
+  const onlyBCrossWithA = await buildOnlyBCrossWithA(
+    noveltiesFromB,
+    productsA,
+    nameLocale,
+    attrOpts
+  );
+  const onlyACrossWithB = await buildOnlyACrossWithB(
+    noveltiesFromAsPerspective,
+    productsB,
+    nameLocale,
+    attrOpts
+  );
+  const onlyBInternalDups = await buildOnlyBInternalDups(
+    noveltiesFromB,
+    nameLocale,
+    attrOpts
+  );
+  const onlyAInternalDups = await buildOnlyAInternalDups(
+    noveltiesFromAsPerspective,
+    nameLocale,
+    attrOpts
+  );
   const duplicateEanEnriched = enrichDuplicateEanForUi(
     duplicateEanWarnings,
     productsA,
@@ -330,11 +407,13 @@ export function runCompare(
     intraSiteADups: {
       eanGroups: intraSiteADups.eanGroups,
       namePhotoPairs: intraSiteADups.namePhotoPairs,
+      brandVisualPairs: intraSiteADups.brandVisualPairs,
       unlikelyPairs: intraSiteADups.unlikelyPairs
     },
     intraSiteBDups: {
       eanGroups: intraSiteBDups.eanGroups,
       namePhotoPairs: intraSiteBDups.namePhotoPairs,
+      brandVisualPairs: intraSiteBDups.brandVisualPairs,
       unlikelyPairs: intraSiteBDups.unlikelyPairs
     },
     eanMatches: eanMatches.sort((x, y) => x.ean.localeCompare(y.ean)),
@@ -356,6 +435,13 @@ export function runCompare(
       idPlacedCount: idMatches.length,
       unplacedBByIdCount: unplacedBByIdRaw.length,
       unplacedAByIdCount: unplacedAByIdRaw.length,
+      /** Товары B: ни один их артикул не найден среди артикулов A — основа новинок и кросс-дублей */
+      noveltiesBByArticleCount: noveltiesFromB.length,
+      /** Симметрично: товары A без пересечения артикулов с каталогом B */
+      noveltiesAByArticleCount: noveltiesFromAsPerspective.length,
+      /** Сколько строк B без полей артикула/code/vendor (включены в новинки как «нет кода») */
+      noveltiesIncludedBmissingArticleFields: countMissingArticleKeysOnCatalogB,
+      noveltiesIncludedAmissingArticleFields: countMissingArticleKeysOnCatalogA,
       eanMatchCount: eanMatches.length,
       articleMatchCount: articleMatches.length,
       nameCandidateCount: nameMatches.length
@@ -363,6 +449,8 @@ export function runCompare(
     duplicateEanWarnings,
     duplicateArticleWarnings,
     duplicateEanEnriched,
+    noveltiesByArticleRaw: noveltiesFromB,
+    noveltiesAByArticleRaw: noveltiesFromAsPerspective,
     rawOnlyB,
     rawOnlyA,
     onlyBCrossWithA,

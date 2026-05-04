@@ -1,4 +1,9 @@
-import { mergeBrandLists, normalizeBrandName, parseBrandListFromText } from "./brand-filter";
+import {
+  mergeBrandLists,
+  normalizeBrandName,
+  parseBrandListFromText,
+  productBrandName
+} from "./brand-filter";
 import { extractModelLine } from "./nameModel";
 import type { FpProduct } from "./types";
 
@@ -19,25 +24,48 @@ function displayNameEn(p: FpProduct): string {
 
 const norm = normalizeBrandName;
 
+/** Все текстовые названия товара для поиска модели (витрина + оригинал поставщика). */
+function allProductTitleSources(p: FpProduct): string[] {
+  const raw = [
+    displayNameRu(p),
+    displayNameEn(p),
+    p.name,
+    p.original_name,
+    p.name_original,
+    p.supplier_name
+  ];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of raw) {
+    if (x == null || typeof x !== "string") continue;
+    const t = x.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
 /**
- * Сводная нормализованная строка по названиям (RU+EN) и «модельным» срезам — для вхождений.
+ * Нормализованные фрагменты: полные названия и «модельная» часть после снятия бренда.
+ */
+function modelNormTokensForProduct(p: FpProduct): string[] {
+  const brand = productBrandName(p);
+  const tokens = new Set<string>();
+  for (const raw of allProductTitleSources(p)) {
+    const full = norm(raw);
+    if (full) tokens.add(full);
+    const line = norm(extractModelLine(raw, brand));
+    if (line) tokens.add(line);
+  }
+  return [...tokens];
+}
+
+/**
+ * Сводная строка для вхождений (совместимость с прежней логикой).
  */
 export function productModelHaystackNorm(p: FpProduct): string {
-  const brand = p.brand?.name || "";
-  const ru = displayNameRu(p);
-  const en = displayNameEn(p);
-  const base = p.name || "";
-  return norm(
-    [
-      extractModelLine(ru, brand),
-      extractModelLine(en, brand),
-      ru,
-      en,
-      base
-    ]
-      .filter((s) => s && s.trim())
-      .join(" ")
-  );
+  return norm(modelNormTokensForProduct(p).join(" "));
 }
 
 /**
@@ -61,27 +89,20 @@ export function filterFpProductsByModels(
   const out: FpProduct[] = [];
   let excludedNotInList = 0;
   for (const p of products) {
-    const brand = p.brand?.name || "";
-    const ru = displayNameRu(p);
-    const en = displayNameEn(p);
-    const mRu = norm(extractModelLine(ru, brand));
-    const mEn = norm(extractModelLine(en, brand));
-    const hay = productModelHaystackNorm(p);
-    const fullRu = norm(ru);
-    const fullEn = norm(en);
-    const fullBase = norm(p.name || "");
+    const tokens = modelNormTokensForProduct(p);
+    const hay = tokens.join(" ");
     let ok = false;
     if (matchMode === "contains") {
       for (const q of listQ) {
         if (!q) continue;
-        if (
-          hay.includes(q) ||
-          mRu.includes(q) ||
-          mEn.includes(q) ||
-          fullRu.includes(q) ||
-          fullEn.includes(q) ||
-          fullBase.includes(q)
-        ) {
+        for (const t of tokens) {
+          if (t.includes(q) || q.includes(t)) {
+            ok = true;
+            break;
+          }
+        }
+        if (ok) break;
+        if (hay.includes(q)) {
           ok = true;
           break;
         }
@@ -89,13 +110,7 @@ export function filterFpProductsByModels(
     } else {
       for (const q of listQ) {
         if (!q) continue;
-        if (
-          mRu === q ||
-          mEn === q ||
-          fullRu === q ||
-          fullEn === q ||
-          fullBase === q
-        ) {
+        if (tokens.some((t) => t === q)) {
           ok = true;
           break;
         }

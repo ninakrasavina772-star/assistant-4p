@@ -1,3 +1,4 @@
+import { firstImageRefEquivalent } from "./imageUrlMatch";
 import { nameAndModelScore } from "./nameModel";
 import { pickComparableName, productBaseKeyFromLink } from "./product";
 import { normAttrValue } from "./productAttributes";
@@ -14,9 +15,9 @@ const LINK_FAMILY_MODEL_MIN = 0.48;
 /**
  * При включённых опциях: если на обоих товарах задана характеристика и
  * значения различаются — пара не подходит. Фото остаётся важной частью: при
- * разных URL первой картинки, как и раньше, пары нет.
+ * неэквивалентных ссылках на первое фото (после нормализации URL) ветка «то же фото» не срабатывает.
  */
-function applyAttrGate(
+export function applyAttrGate(
   a: CompareProduct,
   b: CompareProduct,
   attrOpts: AttrMatchOptions | undefined,
@@ -29,7 +30,7 @@ function applyAttrGate(
   ) {
     return { score: baseScore, reasons: baseReasons };
   }
-  if (baseScore < PAIR_MIN || baseReasons.length === 0) {
+  if (baseReasons.length === 0) {
     return { score: baseScore, reasons: baseReasons };
   }
   const extra: string[] = [];
@@ -94,7 +95,7 @@ export function scoreNameAndPhoto(
   );
   const imgA = a.firstImage || "";
   const imgB = b.firstImage || "";
-  const sameImg = Boolean(imgA && imgB && imgA === imgB);
+  const sameImg = Boolean(imgA && imgB && firstImageRefEquivalent(imgA, imgB));
   if (imgA && imgB && !sameImg) {
     if (
       linkFamilyWithBothVolumes(a, b) &&
@@ -142,7 +143,8 @@ export function scoreNameAndPhoto(
 export const UNLIKELY_MODEL_MIN = 0.6;
 
 /**
- * Маловероятный дубль: **то же** первое фото (URL) + сходство модельной части ≥ порога.
+ * Маловероятный дубль: **то же** первое фото (эквивалентные URL после нормализации) +
+ * сходство модельной части ≥ порога.
  * Галочки объём/оттенок/цвет — только **подписи** к паре (сравнение нормализованных
  * значений, в т.ч. 50 мл ≈ 50ml); несовпадение объёма не убирает пару.
  */
@@ -154,7 +156,7 @@ export function scoreUnlikelyPhotoAndModel(
 ): { score: number; reasons: string[] } {
   const imgA = a.firstImage || "";
   const imgB = b.firstImage || "";
-  if (!imgA || !imgB || imgA !== imgB) {
+  if (!imgA || !imgB || !firstImageRefEquivalent(imgA, imgB)) {
     return { score: 0, reasons: [] };
   }
   const na = pickComparableName(a, nameLocale);
