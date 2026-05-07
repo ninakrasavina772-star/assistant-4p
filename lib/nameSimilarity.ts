@@ -1,13 +1,17 @@
 /**
  * Сходство названий: нормализация + несовпадение / max длина (как в старом match по Левенштейну).
  */
-function normalizeName(s: string): string {
+export function normalizeComparableName(s: string): string {
   return s
     .toLowerCase()
     .replace(/ё/g, "е")
     .replace(/[^\p{L}\p{N}\s.]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeName(s: string): string {
+  return normalizeComparableName(s);
 }
 
 function levenshtein(a: string, b: string): number {

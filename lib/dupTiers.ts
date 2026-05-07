@@ -8,6 +8,7 @@ import {
   visualSimilarFromPhash
 } from "./imagePhash";
 import { nameAndModelScore } from "./nameModel";
+import { nameSimilarity, normalizeComparableName } from "./nameSimilarity";
 import { applyAttrGate, normBrand, sameBrandForFuzzy } from "./pairScoring";
 import { pickComparableName, toCompareProduct } from "./product";
 import type {
@@ -40,6 +41,73 @@ export const MODEL_SIM_MIN_FOR_BRAND_VISUAL = 0.52;
 /** Если обе модельные строки длинные, а сходство низкое — не считаем даже маловероятным дублем. */
 const SUBSTANTIAL_MODEL_CHARS = 5;
 const MAX_MODEL_SIM_FOR_WEAK_PAIR = 0.38;
+
+/**
+ * Общий префикс из токенов модельной строки (после normalizeComparableName).
+ * «Maison X La Voie» vs «Maison X Grise» → общая часть только до расхождения.
+ */
+function modelTokensNormalized(modelLine: string): string[] {
+  return normalizeComparableName(modelLine)
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/** Убираем ведущие служебные слова из хвоста («la voie» → «voie»). */
+function stripLeadingNoiseTail(tail: string): string {
+  return tail
+    .trim()
+    .replace(/^(?:la|le|les|de|du|des|the|a|an)\s+/gi, "")
+    .trim();
+}
+
+/**
+ * Явно разные названия модели при общей линейке бренда:
+ * - После общих начальных токенов оба хвоста достаточно длинные, а похожесть хвостов низкая
+ *   (пример: «Alhambra La Voie» vs «Alhambra Grise»).
+ * - Или нет ни одного общего токена с начала, при этом общее сходство модельной строки умеренное
+ *   («Supremacy In Oud» vs «9 AM Dive» при одном бренде).
+ *
+ * Тогда не считаем пару дублем по ветке «бренд + похожее фото» (~60%) и не опускаем в «маловероятные»
+ * только из‑за картинки. Эквивалентный URL первого фото не трогаем — там отдельная ветка ~90%.
+ */
+export function softVisualBlockedByDistinctModelLine(
+  modelLineA: string,
+  modelLineB: string,
+  modelSim: number,
+  firstImageUrlEquivalent: boolean
+): boolean {
+  if (firstImageUrlEquivalent) return false;
+
+  const ta = modelTokensNormalized(modelLineA);
+  const tb = modelTokensNormalized(modelLineB);
+  let pref = 0;
+  while (pref < ta.length && pref < tb.length && ta[pref] === tb[pref]) {
+    pref++;
+  }
+  const ra = stripLeadingNoiseTail(ta.slice(pref).join(" "));
+  const rb = stripLeadingNoiseTail(tb.slice(pref).join(" "));
+
+  const MIN_TAIL = 4;
+  if (
+    ra.length >= MIN_TAIL &&
+    rb.length >= MIN_TAIL &&
+    nameSimilarity(ra, rb) < 0.66
+  ) {
+    return true;
+  }
+
+  /** Разные «стартовые» слова модели — нужно более высокое общее сходство модельной строки. */
+  if (
+    pref === 0 &&
+    modelLineA.trim().length >= 8 &&
+    modelLineB.trim().length >= 8 &&
+    modelSim < 0.74
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 function normEanKey(s: string): string {
   return String(s).replace(/\D/g, "");
@@ -168,6 +236,7 @@ function resolveTierForPair(
   if (
     brandsExactForDup(cI, cJ) &&
     qualifiesForBrandVisualTier(mA, mB, modelSim) &&
+    !softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq) &&
     imgI &&
     imgJ
   ) {
@@ -184,6 +253,7 @@ function resolveTierForPair(
 
   if (sameBrandForFuzzy(cI, cJ) && comb >= SLIGHT_NAME_UNLIKELY && imgI && imgJ) {
     if (substantialModelConflict(mA, mB, modelSim)) return null;
+    if (softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)) return null;
     if (visualFromCache(imgI, imgJ, cache, UNLIKELY_VISUAL_HAMMING_MAX)) {
       return {
         kind: "un",

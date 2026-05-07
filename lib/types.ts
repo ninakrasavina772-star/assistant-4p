@@ -178,6 +178,48 @@ export type UnlikelySearchInfo = {
   color: boolean;
 };
 
+/** Этап 1: только сравнение множеств id по рубрикам A и B (без полных карточек и без runCompare) */
+export type NoveltyIdsStageResult = {
+  resultKind: "noveltyIdsStage";
+  siteALabel: string;
+  siteBLabel: string;
+  noveltyIds: number[];
+  stats: {
+    /** Уникальных id на A после фильтров (исключения, бренды, модели) */
+    countIdsRubricA: number;
+    /** Уникальных id на B после фильтров */
+    countIdsRubricB: number;
+    /** Сколько id из B также есть на A */
+    idsOnBothSites: number;
+    /** |noveltyIds| — id есть на B, нет на A */
+    noveltyCount: number;
+  };
+  brandFilter?: CompareBrandFilterInfo;
+  modelFilter?: CompareModelFilterInfo;
+  excludeIdsA?: CompareExcludeIdsAInfo;
+};
+
+/** Мастер: полная выгрузка карточек новинок по id (GET /product/info) */
+export type NoveltiesFullExportResult = {
+  resultKind: "noveltiesFullExport";
+  products: FpProduct[];
+  siteBLabel: string;
+  nameLocale: NameLocale;
+};
+
+/** Мастер: id новинок без пересечения EAN с выгрузкой рубрики A */
+export type NoveltyIdsNoEanOnAResult = {
+  resultKind: "noveltyIdsNoEanOnA";
+  ids: number[];
+  stats: {
+    noveltyLoadedCount: number;
+    removedForEanMatchOnA: number;
+    remainingCount: number;
+  };
+  siteALabel: string;
+  siteBLabel: string;
+};
+
 /** Результат «один сайт, одна рубрика» — дубли внутри выгрузки */
 export type SingleSiteDupsResult = {
   resultKind: "singleSiteDups";
@@ -352,4 +394,6 @@ export type CompareResult = {
   onlyAInternalDups?: OnlyBInternalDupRow[];
   /** Как при «одна рубрика»: без галочек «маловероятные» в intraSite* не считаются */
   unlikelySearch?: UnlikelySearchInfo;
+  /** Сайт B загружен через GET /product/info по списку новинок (этап 1), не целиком из рубрик */
+  siteBFetchedByNoveltyIds?: boolean;
 };

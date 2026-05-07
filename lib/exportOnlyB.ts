@@ -264,6 +264,45 @@ export async function downloadOnlyBAsExcel(
   });
 }
 
+/** Полные строки по каждому товару (как неразмещённые на A): все поля API + JSON целиком. */
+export async function downloadFullFpProductsExcel(
+  items: FpProduct[],
+  nameLocale: NameLocale,
+  fileBase: string
+): Promise<void> {
+  if (typeof window === "undefined" || !items.length) return;
+  const XLSX = await import("xlsx");
+  const rows = items.map((p) =>
+    clipExcelRow(flattenEntireProduct(p, nameLocale))
+  );
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+  XLSX.utils.book_append_sheet(wb, ws, "новинки_полные".slice(0, 28));
+  XLSX.writeFile(
+    wb,
+    `${safe}_новинки_полная_выгрузка_${new Date().toISOString().slice(0, 10)}.xlsx`
+  );
+}
+
+/** Один столбец с внутренним id товара. */
+export async function downloadProductIdsColumnExcel(
+  ids: number[],
+  fileBase: string
+): Promise<void> {
+  if (typeof window === "undefined" || !ids.length) return;
+  const XLSX = await import("xlsx");
+  const rows = ids.map((id) => ({ "ID товара": String(id) }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+  XLSX.utils.book_append_sheet(wb, ws, "id_товаров".slice(0, 28));
+  XLSX.writeFile(
+    wb,
+    `${safe}_id_без_EAN_на_A_${new Date().toISOString().slice(0, 10)}.xlsx`
+  );
+}
+
 /**
  * Каждое поле JSON товара — в колонку; вложенные объекты/массивы — в JSON-строку.
  * Плюс колонка с полным объектом.
