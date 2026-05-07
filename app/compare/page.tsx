@@ -10,14 +10,24 @@ import {
 } from "@/lib/model-filter";
 import { parseExcludeProductIdsFromText } from "@/lib/excludeProductIds";
 import {
+  MAX_RUBRICS_B,
   mergeUniqueSortedRubricId,
   parseRubricIdsFromText
 } from "@/lib/rubricIds";
+import {
+  COL_ADMIN_LINK,
+  COL_DUP_NAME_OR_PHOTO,
+  COL_DUP_RESULT,
+  COL_PRODUCT_NAME,
+  type NoveltiesSheetForEanDup
+} from "@/lib/noveltiesEanDupSheet";
 import type {
   CompareProduct,
   CompareResult,
+  FpProduct,
   NoveltiesFullExportResult,
   NoveltyIdsNoEanOnAResult,
+  NoveltyIdsSliceResult,
   NoveltyIdsStageResult,
   SingleSiteDupsResult
 } from "@/lib/types";
@@ -36,6 +46,11 @@ import {
 } from "@/components/homeTheme";
 import { RubricCascadeSelect } from "@/components/RubricCascadeSelect";
 import { toCompareProduct } from "@/lib/product";
+import {
+  collectSoftDupPairsForOpenAi,
+  dupPairKey,
+  looksLikeOpenAiApiKey,
+} from "@/lib/openaiDupRefine";
 
 const SK_TOKEN_A = "fp_compare_token_a";
 const SK_TOKEN_B = "fp_compare_token_b";
@@ -43,6 +58,8 @@ const SK_LABEL_A = "fp_compare_label_a";
 const SK_LABEL_B = "fp_compare_label_b";
 const SK_REMEMBER = "fp_compare_remember_keys";
 const SK_NOVELTY_IDS_B = "fp_compare_novelty_ids_b";
+const SK_OPENAI_KEY = "fp_compare_openai_key";
+const SK_OPENAI_REM = "fp_compare_openai_key_remember";
 
 /** Как в RubricCascadeSelect — для запроса /api/rubrics */
 const MIN_API_TOKEN = 12;
@@ -215,6 +232,30 @@ const ATTR_STRICT_OPTIONS: { value: string; label: string }[] = [
   }
 ];
 
+function AiDupVerdictNote({
+  verdicts,
+  idA,
+  idB
+}: {
+  verdicts: Record<
+    string,
+    { duplicate: boolean; confidence?: number; note?: string }
+  >;
+  idA: number;
+  idB: number;
+}) {
+  const ai = verdicts[dupPairKey(idA, idB)];
+  if (!ai) return null;
+  return (
+    <p className="text-xs text-indigo-950 mt-1.5 rounded-md bg-indigo-50/95 border border-indigo-200/80 px-2 py-1.5 leading-snug">
+      <strong>OpenAI:</strong>{" "}
+      {ai.duplicate ? "похоже на один SKU" : "скорее разные SKU"} (
+      {Math.round((ai.confidence ?? 0) * 100)}%)
+      {ai.note ? ` — ${ai.note}` : ""}
+    </p>
+  );
+}
+
 export default function ComparePage() {
   const { data: session, status } = useSession();
   const [rubricA, setRubricA] = useState("");
@@ -233,12 +274,27 @@ export default function ComparePage() {
   const [excludeIdsText, setExcludeIdsText] = useState("");
   /** twoSite — два каталога; singleDups — дубли в одной рубрике (один токен) */
   const [compareMode, setCompareMode] = useState<"twoSite" | "singleDups">("twoSite");
+  /** api — рубрики и ключи; feeds — CSV из *.4partners.io/my/feed/… или файл */
+  const [catalogSource, setCatalogSource] = useState<"api" | "feeds">("api");
+  const [feedUrlA, setFeedUrlA] = useState("");
+  const [feedUrlB, setFeedUrlB] = useState("");
+  const [feedCsvTextA, setFeedCsvTextA] = useState("");
+  const [feedCsvTextB, setFeedCsvTextB] = useState("");
   /** Узкий отчёт или полный экран сравнения (сценарий: сайт A — выборка, B — полный) */
   const [reportView, setReportView] = useState<
     "full" | "noveltiesArticle" | "notOnA" | "dupsA" | "dupsB" | "crossBvsA"
   >("full");
   /** Показ дублей: все / EAN+арт / название+фото+хар. / мало: фото+хар. */
   const [dupKindFilter, setDupKindFilter] = useState<DupKindFilter>("all");
+  const [openAiKey, setOpenAiKey] = useState("");
+  const [rememberOpenAiKey, setRememberOpenAiKey] = useState(true);
+  const [aiDupMaxPairs, setAiDupMaxPairs] = useState(40);
+  const [aiDupVerdicts, setAiDupVerdicts] = useState<
+    Record<string, { duplicate: boolean; confidence?: number; note?: string }>
+  >({});
+  const [aiDupHideRejected, setAiDupHideRejected] = useState(false);
+  const [aiDupBusy, setAiDupBusy] = useState(false);
+  const [aiDupErr, setAiDupErr] = useState<string | null>(null);
   /** Дубли на A: внутри рубрики A — или неразм. B↔A (список по id) */
   const [dupScopeA, setDupScopeA] = useState<"intraA" | "unplacedVsA">(
     "intraA"
@@ -265,6 +321,28 @@ export default function ComparePage() {
   const [noveltyStageSummary, setNoveltyStageSummary] = useState<string | null>(
     null
   );
+  /** Карточки по сохранённым id новинок — просмотр в мастере до жёлтого «Найти новинки» */
+  const [noveltyIdsPreviewProducts, setNoveltyIdsPreviewProducts] = useState<
+    FpProduct[] | null
+  >(null);
+  const [noveltyIdsPreviewLoading, setNoveltyIdsPreviewLoading] =
+    useState(false);
+  /** Локальный инструмент: дубли по EAN в таблице «Новинки» (Excel/CSV), без API */
+  const [eanDupTool, setEanDupTool] = useState<null | {
+    base: NoveltiesSheetForEanDup;
+    labels: string[];
+    duplicatesFound: number;
+    totalRows: number;
+    preview: { article: string; ean: string; dup: string }[];
+  }>(null);
+  /** Локально: дубли по совпадению названия → ссылки админки других строк (как Apps Script) */
+  const [namePhotoDupTool, setNamePhotoDupTool] = useState<null | {
+    base: NoveltiesSheetForEanDup;
+    labels: string[];
+    duplicatesFound: number;
+    totalRows: number;
+    preview: { article: string; name: string; link: string; dup: string }[];
+  }>(null);
   const [loading, setLoading] = useState(false);
   const [loadElapsed, setLoadElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -289,12 +367,18 @@ export default function ComparePage() {
   }, []);
   const [data, setData] = useState<CompareResult | SingleSiteDupsResult | null>(null);
   const compareAbortRef = useRef<AbortController | null>(null);
+  const noveltyPreviewAbortRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
 
   const rubricBParsedIds = useMemo(
     () => parseRubricIdsFromText(rubricsBText),
     [rubricsBText]
   );
+
+  const feedReadyA =
+    feedUrlA.trim().length > 0 || feedCsvTextA.trim().length > 0;
+  const feedReadyB =
+    feedUrlB.trim().length > 0 || feedCsvTextB.trim().length > 0;
 
   useEffect(() => {
     if (!loading) {
@@ -320,6 +404,12 @@ export default function ComparePage() {
       const lb = sessionStorage.getItem(SK_LABEL_B);
       if (la) setSiteLabelA(la);
       if (lb) setSiteLabelB(lb);
+      if (sessionStorage.getItem(SK_OPENAI_REM) !== "0") {
+        const ok = sessionStorage.getItem(SK_OPENAI_KEY);
+        if (ok) setOpenAiKey(ok);
+      } else {
+        setRememberOpenAiKey(false);
+      }
     } catch {
       // ignore
     }
@@ -346,6 +436,11 @@ export default function ComparePage() {
       // ignore
     }
   }, []);
+
+  useEffect(() => {
+    setAiDupVerdicts({});
+    setAiDupErr(null);
+  }, [data]);
 
   const persistKeys = useCallback(
     (nextA: string, nextB: string, nextLa: string, nextLb: string) => {
@@ -381,6 +476,9 @@ export default function ComparePage() {
   }, []);
 
   const clearStoredNoveltyIds = useCallback(() => {
+    noveltyPreviewAbortRef.current?.abort();
+    noveltyPreviewAbortRef.current = null;
+    setNoveltyIdsPreviewProducts(null);
     setNoveltyIdsStored([]);
     setNoveltyStageSummary(null);
     try {
@@ -388,6 +486,18 @@ export default function ComparePage() {
     } catch {
       // ignore
     }
+  }, []);
+
+  useEffect(() => {
+    noveltyPreviewAbortRef.current?.abort();
+    noveltyPreviewAbortRef.current = null;
+    setNoveltyIdsPreviewProducts(null);
+  }, [noveltyIdsStored]);
+
+  useEffect(() => {
+    return () => {
+      noveltyPreviewAbortRef.current?.abort();
+    };
   }, []);
 
   const cancelRun = useCallback(() => {
@@ -413,6 +523,7 @@ export default function ComparePage() {
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
       const fetchSiteBOnlyByNoveltyIds =
+        catalogSource !== "feeds" &&
         compareMode === "twoSite" &&
         noveltyIdsStored.length > 0 &&
         (twoSiteGoal === "noveltiesById" ||
@@ -423,6 +534,30 @@ export default function ComparePage() {
         signal: ac.signal,
         body: JSON.stringify({
           mode: compareMode === "singleDups" ? "singleDups" : undefined,
+          dataSource: catalogSource === "feeds" ? "feeds" : undefined,
+          feedUrlA:
+            catalogSource === "feeds" && feedUrlA.trim()
+              ? feedUrlA.trim()
+              : undefined,
+          feedUrlB:
+            catalogSource === "feeds" &&
+            compareMode === "twoSite" &&
+            feedUrlB.trim()
+              ? feedUrlB.trim()
+              : undefined,
+          feedCsvTextA:
+            catalogSource === "feeds" &&
+            !feedUrlA.trim() &&
+            feedCsvTextA.trim()
+              ? feedCsvTextA
+              : undefined,
+          feedCsvTextB:
+            catalogSource === "feeds" &&
+            compareMode === "twoSite" &&
+            !feedUrlB.trim() &&
+            feedCsvTextB.trim()
+              ? feedCsvTextB
+              : undefined,
           rubricA: Number(rubricA),
           ...(compareMode === "twoSite" &&
           !fetchSiteBOnlyByNoveltyIds &&
@@ -524,7 +659,12 @@ export default function ComparePage() {
     twoSiteGoal,
     useNoveltyIdsForSiteB,
     noveltyIdsStored,
-    selectReportView
+    selectReportView,
+    catalogSource,
+    feedUrlA,
+    feedUrlB,
+    feedCsvTextA,
+    feedCsvTextB
   ]);
 
   const brandListCount = useMemo(
@@ -554,8 +694,10 @@ export default function ComparePage() {
   }, [tokenA, tokenB]);
 
   const rubricAOk = Number(rubricA) > 0;
+  const rubricBCountOk = rubricBParsedIds.length <= MAX_RUBRICS_B;
   const rubricBOk =
-    compareMode !== "twoSite" || rubricBParsedIds.length >= 1;
+    compareMode !== "twoSite" ||
+    (rubricBParsedIds.length >= 1 && rubricBCountOk);
 
   const dupContourUsesNoveltyList =
     compareMode === "twoSite" &&
@@ -573,9 +715,10 @@ export default function ComparePage() {
     compareMode !== "twoSite" ||
     dupContourUsesNoveltyList ||
     noveltiesByIdUsesStoredList ||
-    rubricBParsedIds.length >= 1;
+    (rubricBParsedIds.length >= 1 && rubricBCountOk);
 
   const brandsRequiredForTwoSite =
+    catalogSource === "feeds" ||
     compareMode !== "twoSite" ||
     dupContourUsesNoveltyList ||
     noveltiesByIdUsesStoredList ||
@@ -586,27 +729,41 @@ export default function ComparePage() {
 
   const comparePrimaryDisabled =
     loading ||
-    !rubricAOk ||
-    !rubricBOkForRun ||
-    !brandsRequiredForTwoSite ||
-    !noveltyListOkForDup;
+    (catalogSource === "feeds"
+      ? compareMode === "singleDups"
+        ? !feedReadyA
+        : !feedReadyA || !feedReadyB
+      : !rubricAOk || !rubricBOkForRun) ||
+    (catalogSource !== "feeds" && !brandsRequiredForTwoSite) ||
+    (catalogSource !== "feeds" && !noveltyListOkForDup);
 
   const compareDisabledHint = !loading
-    ? !brandsRequiredForTwoSite && compareMode === "twoSite"
-      ? dupContourUsesNoveltyList
-        ? "При желании укажите бренды ниже — пустой список значит все бренды среди сохранённых новинок."
-        : "Для двух магазинов укажите хотя бы один бренд — поле ниже или «Добавить список из Excel». Без ограничения по бренду сравнение не запускается."
-      : !rubricAOk
-        ? "Кнопка ожидает числовой id рубрики A: выберите в списке выше или введите вручную в поле «Прямой ввод id». Нужен ключ API 12+ симв. в поле A, чтобы подгрузились рубрики."
-        : compareMode === "twoSite" && !rubricBOkForRun
-          ? "Укажите хотя бы одну рубрику B: клик в каскаде добавляет id в список, либо введите id вручную — несколько через запятую или с новой строки. Если ключ B пуст, каскад B строится по ключу A."
-          : dupContourUsesNoveltyList && noveltyIdsStored.length === 0
-            ? "Включён старый режим «только список новинок» для B: выполните синий «Шаг 1» выше или снимите галочку в дополнительном блоке."
-            : null
+    ? catalogSource === "feeds"
+      ? compareMode === "singleDups"
+        ? !feedReadyA
+          ? "Режим фидов: загрузите CSV сайта A или вставьте ссылку https://….4partners.io/my/feed/….csv"
+          : null
+        : !feedReadyA || !feedReadyB
+          ? "Режим фидов: для A и B нужны ссылки на фиды или загруженные CSV (по одному источнику на сторону)."
+          : null
+      : !brandsRequiredForTwoSite && compareMode === "twoSite"
+        ? dupContourUsesNoveltyList
+          ? "При желании укажите бренды ниже — пустой список значит все бренды среди сохранённых новинок."
+          : "Для двух магазинов укажите хотя бы один бренд — поле ниже или «Добавить список из Excel». Без ограничения по бренду сравнение не запускается."
+        : !rubricAOk
+          ? "Кнопка ожидает числовой id рубрики A: выберите в списке выше или введите вручную в поле «Прямой ввод id». Нужен ключ API 12+ симв. в поле A, чтобы подгрузились рубрики."
+          : compareMode === "twoSite" && rubricBParsedIds.length > MAX_RUBRICS_B
+            ? `На сайте B допускается не более ${MAX_RUBRICS_B} узких рубрик — уменьшите список id в поле ниже.`
+            : compareMode === "twoSite" && !rubricBOkForRun
+            ? "Укажите хотя бы одну рубрику B: клик в каскаде добавляет id в список, либо введите id вручную — несколько через запятую или с новой строки. Если ключ B пуст, каскад B строится по ключу A."
+            : dupContourUsesNoveltyList && noveltyIdsStored.length === 0
+              ? "Включён старый режим «только список новинок» для B: выполните синий «Шаг 1» выше или снимите галочку в дополнительном блоке."
+              : null
     : null;
 
   const noveltyIdsStageDisabled =
     loading ||
+    catalogSource === "feeds" ||
     compareMode !== "twoSite" ||
     !rubricAOk ||
     !rubricBOk;
@@ -627,52 +784,150 @@ export default function ComparePage() {
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
-      const res = await fetch("/api/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: ac.signal,
-        body: JSON.stringify({
-          comparePhase: "noveltyIds",
-          rubricA: Number(rubricA),
-          rubricsB: rubricBParsedIds,
-          nameLocale,
-          siteVariation,
-          tokenA: tokenA.trim() || undefined,
-          tokenB: tokenB.trim() || undefined,
-          siteALabel: siteLabelA.trim() || undefined,
-          siteBLabel: siteLabelB.trim() || undefined,
-          brands: brandList.length > 0 ? brandList : undefined,
-          brandMatch: brandMatchContains ? "contains" : "exact",
-          models: modelList.length > 0 ? modelList : undefined,
-          modelMatch: modelMatchContains ? "contains" : "exact",
-          excludeIdsA: excludeList.length > 0 ? excludeList : undefined
-        })
-      });
-      const raw = await res.text();
-      let json: (NoveltyIdsStageResult & { error?: string }) | { error?: string };
-      try {
-        json = (raw ? JSON.parse(raw) : {}) as typeof json;
-      } catch {
-        const oneLine = raw.replace(/\s+/g, " ").trim();
-        const frag = oneLine.slice(0, 220);
-        setError(
-          `Ответ сервера не JSON (HTTP ${res.status}). Фрагмент: ${frag || "—"}`
-        );
-        return;
+
+      const baseBody = {
+        rubricA: Number(rubricA),
+        rubricsB: rubricBParsedIds,
+        nameLocale,
+        siteVariation,
+        tokenA: tokenA.trim() || undefined,
+        tokenB: tokenB.trim() || undefined,
+        siteALabel: siteLabelA.trim() || undefined,
+        siteBLabel: siteLabelB.trim() || undefined,
+        brands: brandList.length > 0 ? brandList : undefined,
+        brandMatch: brandMatchContains ? ("contains" as const) : ("exact" as const),
+        models: modelList.length > 0 ? modelList : undefined,
+        modelMatch: modelMatchContains ? ("contains" as const) : ("exact" as const),
+        excludeIdsA: excludeList.length > 0 ? excludeList : undefined
+      };
+
+      async function fetchSlice(
+        leg: "A" | "B",
+        rubricSliceId: number,
+        page: number
+      ): Promise<NoveltyIdsSliceResult> {
+        const res = await fetch("/api/compare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ac.signal,
+          body: JSON.stringify({
+            ...baseBody,
+            comparePhase: "noveltyIdsSlice",
+            noveltyIdsSlice: { leg, rubricId: rubricSliceId, page }
+          })
+        });
+        const raw = await res.text();
+        let json: (NoveltyIdsSliceResult & { error?: string }) | { error?: string };
+        try {
+          json = (raw ? JSON.parse(raw) : {}) as typeof json;
+        } catch {
+          const oneLine = raw.replace(/\s+/g, " ").trim();
+          const frag = oneLine.slice(0, 220);
+          throw new Error(
+            `Ответ сервера не JSON (HTTP ${res.status}). Фрагмент: ${frag || "—"}`
+          );
+        }
+        if (!res.ok || ("error" in json && json.error)) {
+          throw new Error(
+            "error" in json && json.error ? String(json.error) : `Ошибка ${res.status}`
+          );
+        }
+        if (!("resultKind" in json) || json.resultKind !== "noveltyIdsSlice") {
+          throw new Error("Неожиданный ответ этапа 1 (слайс).");
+        }
+        return json as NoveltyIdsSliceResult;
       }
-      if (!res.ok) {
-        setError("error" in json && json.error ? json.error : `Ошибка ${res.status}`);
-        return;
+
+      const idsA = new Set<number>();
+      const idsB = new Set<number>();
+      const rawCatalogA = new Set<number>();
+      let bmA = 0,
+        bnA = 0,
+        mnA = 0,
+        exA = 0;
+      let bmB = 0,
+        bnB = 0,
+        mnB = 0;
+
+      for (let page = 1; ; page++) {
+        const sl = await fetchSlice("A", Number(rubricA), page);
+        for (const id of sl.ids) idsA.add(id);
+        for (const id of sl.rawCatalogIdsBeforeExclude) rawCatalogA.add(id);
+        bmA += sl.statsSlice.brandExcludedMissing;
+        bnA += sl.statsSlice.brandExcludedNotInList;
+        mnA += sl.statsSlice.modelExcludedNotInList;
+        exA += sl.statsSlice.excludeRemovedFromA;
+        if (!sl.hasMore) break;
       }
-      if ("error" in json && json.error) {
-        setError(String(json.error));
-        return;
+
+      for (const rid of rubricBParsedIds) {
+        for (let page = 1; ; page++) {
+          const sl = await fetchSlice("B", rid, page);
+          for (const id of sl.ids) idsB.add(id);
+          bmB += sl.statsSlice.brandExcludedMissing;
+          bnB += sl.statsSlice.brandExcludedNotInList;
+          mnB += sl.statsSlice.modelExcludedNotInList;
+          if (!sl.hasMore) break;
+        }
       }
-      if (!("resultKind" in json) || json.resultKind !== "noveltyIdsStage") {
-        setError("Неожиданный ответ этапа 1.");
-        return;
+
+      let listIdsNotFoundInRubric = 0;
+      for (const id of excludeList) {
+        if (!rawCatalogA.has(id)) listIdsNotFoundInRubric++;
       }
-      const st = json as NoveltyIdsStageResult;
+
+      let idsOnBothSites = 0;
+      for (const id of idsB) {
+        if (idsA.has(id)) idsOnBothSites++;
+      }
+      const noveltyIds = [...idsB].filter((id) => !idsA.has(id)).sort((a, b) => a - b);
+
+      const st: NoveltyIdsStageResult = {
+        resultKind: "noveltyIdsStage",
+        siteALabel: siteLabelA.trim() || "A",
+        siteBLabel: siteLabelB.trim() || "B",
+        noveltyIds,
+        stats: {
+          countIdsRubricA: idsA.size,
+          countIdsRubricB: idsB.size,
+          idsOnBothSites,
+          noveltyCount: noveltyIds.length
+        },
+        brandFilter:
+          brandList.length > 0
+            ? {
+                enabled: true,
+                matchMode: brandMatchContains ? "contains" : "exact",
+                brandsSample: brandList.slice(0, 50),
+                totalBrands: brandList.length,
+                excludedMissingBrandA: bmA,
+                excludedNotInListA: bnA,
+                excludedMissingBrandB: bmB,
+                excludedNotInListB: bnB
+              }
+            : undefined,
+        modelFilter:
+          modelList.length > 0
+            ? {
+                enabled: true,
+                matchMode: modelMatchContains ? "contains" : "exact",
+                modelsSample: modelList.slice(0, 50),
+                totalModels: modelList.length,
+                excludedNotInListA: mnA,
+                excludedNotInListB: mnB
+              }
+            : undefined,
+        excludeIdsA:
+          excludeList.length > 0
+            ? {
+                enabled: true,
+                listSize: excludeList.length,
+                removedFromA: exA,
+                listIdsNotFoundInRubric
+              }
+            : undefined
+      };
+
       try {
         sessionStorage.setItem(SK_NOVELTY_IDS_B, JSON.stringify(st.noveltyIds));
       } catch {
@@ -720,20 +975,11 @@ export default function ComparePage() {
   const wizardStep2Disabled =
     loading || noveltyIdsStored.length === 0 || compareMode !== "twoSite";
 
-  const runWizardFullExport = useCallback(async () => {
-    if (noveltyIdsStored.length === 0) {
-      setError("Сначала шаг 1: получите список id новинок.");
-      return;
-    }
-    userCancelledRef.current = false;
-    setError(null);
-    setLoading(true);
-    const ac = new AbortController();
-    compareAbortRef.current = ac;
-    const timeoutId = window.setTimeout(() => {
-      ac.abort();
-    }, COMPARE_FETCH_TIMEOUT_MS);
-    try {
+  const requestNoveltiesFullExportResult = useCallback(
+    async (signal: AbortSignal): Promise<NoveltiesFullExportResult> => {
+      if (noveltyIdsStored.length === 0) {
+        throw new Error("Сначала шаг 1: получите список id новинок.");
+      }
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
@@ -743,7 +989,7 @@ export default function ComparePage() {
       const res = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: ac.signal,
+        signal,
         body: JSON.stringify({
           wizardTask: "noveltiesFullExport",
           noveltyIdsB: noveltyIdsStored,
@@ -768,24 +1014,57 @@ export default function ComparePage() {
       } catch {
         const oneLine = raw.replace(/\s+/g, " ").trim();
         const frag = oneLine.slice(0, 220);
-        setError(
+        throw new Error(
           `Ответ сервера не JSON (HTTP ${res.status}). Фрагмент: ${frag || "—"}`
         );
-        return;
       }
       if (!res.ok) {
-        setError("error" in json && json.error ? json.error : `Ошибка ${res.status}`);
-        return;
+        throw new Error(
+          "error" in json && json.error ? String(json.error) : `Ошибка ${res.status}`
+        );
       }
       if ("error" in json && json.error) {
-        setError(String(json.error));
-        return;
+        throw new Error(String(json.error));
       }
       if (!("resultKind" in json) || json.resultKind !== "noveltiesFullExport") {
-        setError("Неожиданный ответ выгрузки.");
-        return;
+        throw new Error("Неожиданный ответ выгрузки.");
       }
-      const out = json as NoveltiesFullExportResult;
+      return json as NoveltiesFullExportResult;
+    },
+    [
+      noveltyIdsStored,
+      rubricA,
+      nameLocale,
+      siteVariation,
+      tokenA,
+      tokenB,
+      siteLabelA,
+      siteLabelB,
+      rememberKeys,
+      persistKeys,
+      brandText,
+      modelText,
+      excludeIdsText,
+      brandMatchContains,
+      modelMatchContains
+    ]
+  );
+
+  const runWizardFullExport = useCallback(async () => {
+    if (noveltyIdsStored.length === 0) {
+      setError("Сначала шаг 1: получите список id новинок.");
+      return;
+    }
+    userCancelledRef.current = false;
+    setError(null);
+    setLoading(true);
+    const ac = new AbortController();
+    compareAbortRef.current = ac;
+    const timeoutId = window.setTimeout(() => {
+      ac.abort();
+    }, COMPARE_FETCH_TIMEOUT_MS);
+    try {
+      const out = await requestNoveltiesFullExportResult(ac.signal);
       const { downloadFullFpProductsExcel } = await import("@/lib/exportOnlyB");
       const base = (siteLabelB.trim() || "новинки_B").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
       await downloadFullFpProductsExcel(out.products, out.nameLocale, base);
@@ -806,23 +1085,35 @@ export default function ComparePage() {
       userCancelledRef.current = false;
       setLoading(false);
     }
-  }, [
-    noveltyIdsStored,
-    rubricA,
-    nameLocale,
-    siteVariation,
-    tokenA,
-    tokenB,
-    siteLabelA,
-    siteLabelB,
-    rememberKeys,
-    persistKeys,
-    brandText,
-    modelText,
-    excludeIdsText,
-    brandMatchContains,
-    modelMatchContains
-  ]);
+  }, [noveltyIdsStored, requestNoveltiesFullExportResult, siteLabelB]);
+
+  const loadNoveltyIdsPreview = useCallback(async () => {
+    if (noveltyIdsStored.length === 0) {
+      setError("Сначала шаг 1: получите список id новинок.");
+      return;
+    }
+    setError(null);
+    noveltyPreviewAbortRef.current?.abort();
+    const ac = new AbortController();
+    noveltyPreviewAbortRef.current = ac;
+    setNoveltyIdsPreviewLoading(true);
+    try {
+      const out = await requestNoveltiesFullExportResult(ac.signal);
+      setNoveltyIdsPreviewProducts(out.products);
+    } catch (e) {
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (!isAbort) {
+        setError(e instanceof Error ? e.message : "Сеть");
+      }
+    } finally {
+      setNoveltyIdsPreviewLoading(false);
+      noveltyPreviewAbortRef.current = null;
+    }
+  }, [noveltyIdsStored, requestNoveltiesFullExportResult]);
+
+  const cancelNoveltyIdsPreviewLoad = useCallback(() => {
+    noveltyPreviewAbortRef.current?.abort();
+  }, []);
 
   const runWizardIdsNoEanOnA = useCallback(async () => {
     if (noveltyIdsStored.length === 0) {
@@ -1111,14 +1402,17 @@ export default function ComparePage() {
 
   const assistantSteps = useMemo(() => {
     const rubricsReady =
-      rubricAOk &&
-      (compareMode === "singleDups" || rubricBOkForRun);
+      catalogSource === "feeds"
+        ? compareMode === "singleDups"
+          ? feedReadyA
+          : feedReadyA && feedReadyB
+        : rubricAOk && (compareMode === "singleDups" || rubricBOkForRun);
     const filtersReady =
       compareMode !== "twoSite" || brandsRequiredForTwoSite;
     const readyToRun =
       rubricsReady &&
       filtersReady &&
-      noveltyListOkForDup &&
+      (catalogSource === "feeds" || noveltyListOkForDup) &&
       !loading;
     const step3Title =
       compareMode === "twoSite"
@@ -1141,19 +1435,34 @@ export default function ComparePage() {
       },
       {
         n: 2,
-        title: "Рубрики",
+        title: catalogSource === "feeds" ? "CSV-фиды" : "Рубрики",
         hint:
-          compareMode === "twoSite"
-            ? noveltiesByIdUsesStoredList || dupContourUsesNoveltyList
-              ? "A — одна рубрика (для каталога A и синего шага 1). Для жёлтого «Найти новинки» витрина B берётся только из сохранённого списка id; поля рубрик B нужны для шага 1 и если список id очищен."
-              : "A — одна рубрика; B — одна или несколько (если товары разнесены по каталогу), id в списке."
-            : "Нужна одна рубрика (id больше нуля).",
+          catalogSource === "feeds"
+            ? compareMode === "twoSite"
+              ? "Два экспортных CSV (ссылка https://….4partners.io/my/feed/….csv или тот же файл с компьютера). Один источник на сторону: не заполняйте одновременно и ссылку, и файл."
+              : "Один фид или файл — внутренние дубли по отобранным строкам."
+            : compareMode === "twoSite"
+              ? noveltiesByIdUsesStoredList || dupContourUsesNoveltyList
+                ? "A — одна рубрика (для каталога A и синего шага 1). Для жёлтого «Найти новинки» витрина B берётся только из сохранённого списка id; поля рубрик B нужны для шага 1 и если список id очищен."
+                : `A — одна рубрика; B — до ${MAX_RUBRICS_B} узких рубрик (если товары разнесены по каталогу), id в списке.`
+              : "Нужна одна рубрика (id больше нуля).",
         ok: rubricsReady,
-        fix: !rubricAOk
-          ? "Укажите рубрику для сайта A."
-          : compareMode === "twoSite" && !rubricBOkForRun
-            ? "Укажите хотя бы один id рубрики для сайта B (список ниже) — нужно для синего шага 1 и для запуска без сохранённых id. Если список новинок уже сохранён и выбрана задача «Найти новинки», для жёлтой кнопки рубрика B не обязательна."
-            : null
+        fix:
+          catalogSource === "feeds"
+            ? compareMode === "singleDups"
+              ? !feedReadyA
+                ? "Укажите ссылку на фид или загрузите CSV."
+                : null
+              : !feedReadyA || !feedReadyB
+                ? "Нужны источники данных для A и для B."
+                : null
+            : !rubricAOk
+              ? "Укажите рубрику для сайта A."
+              : compareMode === "twoSite" && rubricBParsedIds.length > MAX_RUBRICS_B
+                ? `На сайте B не более ${MAX_RUBRICS_B} рубрик — сократите список id.`
+                : compareMode === "twoSite" && !rubricBOkForRun
+                ? "Укажите хотя бы один id рубрики для сайта B (список ниже) — нужно для синего шага 1 и для запуска без сохранённых id. Если список новинок уже сохранён и выбрана задача «Найти новинки», для жёлтой кнопки рубрика B не обязательна."
+                : null
       },
       {
         n: 3,
@@ -1169,7 +1478,8 @@ export default function ComparePage() {
           compareMode === "twoSite" &&
           !brandsRequiredForTwoSite &&
           !dupContourUsesNoveltyList &&
-          !noveltiesByIdUsesStoredList
+          !noveltiesByIdUsesStoredList &&
+          catalogSource !== "feeds"
             ? "Добавьте хотя бы один бренд в поле ниже или загрузите список из файла."
             : null
       },
@@ -1179,17 +1489,23 @@ export default function ComparePage() {
         hint: "Один запрос: всё считается сразу; дальше только переключение вкладок.",
         ok: readyToRun,
         fix:
-          rubricsReady && filtersReady && noveltyListOkForDup
+          rubricsReady &&
+          filtersReady &&
+          (catalogSource === "feeds" || noveltyListOkForDup)
             ? null
             : "Сначала закройте шаги выше.",
         anchor: "#compare-run-anchor"
       }
     ];
   }, [
+    catalogSource,
+    feedReadyA,
+    feedReadyB,
     compareMode,
     twoSiteGoal,
     rubricAOk,
     rubricBOkForRun,
+    rubricBParsedIds.length,
     dupContourUsesNoveltyList,
     noveltiesByIdUsesStoredList,
     brandsRequiredForTwoSite,
@@ -1231,7 +1547,7 @@ export default function ComparePage() {
 
     if (compareMode === "twoSite" && rubricBParsedIds.length > 1) {
       out.push(
-        `На «${lb}» задаёте ${rubricBParsedIds.length} рубрик: выгрузки идут параллельно, товары склеиваются без дубля по id — удобно, когда нужный бренд размазан по разным веткам каталога (часто надёжнее одной «толстой» родительской рубрики).`
+        `На «${lb}» задаёте ${rubricBParsedIds.length} рубрик (не более ${MAX_RUBRICS_B}): выгрузки идут параллельно, товары склеиваются без дубля по id — удобно для узких веток каталога вместо одной «толстой» родительской рубрики.`
       );
     }
 
@@ -1396,6 +1712,81 @@ export default function ComparePage() {
     return rows.filter((r) => internalRowMatchesFilter(r.kind, dupKindFilter));
   }, [data, dupKindFilter]);
 
+  const aiDupPassesSoftDup = useCallback(
+    (kind: string, idA: number, idB: number) => {
+      if (!aiDupHideRejected) return true;
+      if (!isSoftDupScoreKind(kind)) return true;
+      const k = dupPairKey(idA, idB);
+      const v = aiDupVerdicts[k];
+      if (v === undefined) return true;
+      return v.duplicate === true;
+    },
+    [aiDupHideRejected, aiDupVerdicts]
+  );
+
+  const crossBvsARowsDisplayed = useMemo(
+    () =>
+      crossBvsARowsFiltered.filter((row) =>
+        aiDupPassesSoftDup(row.kind, row.onA.id, row.fromB.id)
+      ),
+    [crossBvsARowsFiltered, aiDupPassesSoftDup]
+  );
+
+  const onlyBCrossWithADisplayed = useMemo(() => {
+    if (!data || "resultKind" in data) return [];
+    return onlyBCrossWithAFiltered.filter((r) =>
+      aiDupPassesSoftDup(r.kind, r.productOnA.id, r.productFromOnlyB.id)
+    );
+  }, [data, onlyBCrossWithAFiltered, aiDupPassesSoftDup]);
+
+  const onlyACrossWithBDisplayed = useMemo(() => {
+    if (!data || "resultKind" in data) return [];
+    return onlyACrossWithBFiltered.filter((r) =>
+      aiDupPassesSoftDup(r.kind, r.productFromOnlyA.id, r.productOnB.id)
+    );
+  }, [data, onlyACrossWithBFiltered, aiDupPassesSoftDup]);
+
+  const onlyBInternalDupsDisplayed = useMemo(() => {
+    if (!data || "resultKind" in data) return [];
+    return onlyBInternalDupsFiltered.filter((r) =>
+      aiDupPassesSoftDup(r.kind, r.first.id, r.second.id)
+    );
+  }, [data, onlyBInternalDupsFiltered, aiDupPassesSoftDup]);
+
+  const onlyAInternalDupsDisplayed = useMemo(() => {
+    if (!data || "resultKind" in data) return [];
+    return onlyAInternalDupsFiltered.filter((r) =>
+      aiDupPassesSoftDup(r.kind, r.first.id, r.second.id)
+    );
+  }, [data, onlyAInternalDupsFiltered, aiDupPassesSoftDup]);
+
+  const singleNamePhotoDisplayed = useMemo(() => {
+    if (!data || !("resultKind" in data) || data.resultKind !== "singleSiteDups") {
+      return [];
+    }
+    return data.namePhotoPairs.filter((r) =>
+      aiDupPassesSoftDup("name_photo", r.a.id, r.b.id)
+    );
+  }, [data, aiDupPassesSoftDup]);
+
+  const singleBrandVisualDisplayed = useMemo(() => {
+    if (!data || !("resultKind" in data) || data.resultKind !== "singleSiteDups") {
+      return [];
+    }
+    return (data.brandVisualPairs ?? []).filter((r) =>
+      aiDupPassesSoftDup("brand_visual", r.a.id, r.b.id)
+    );
+  }, [data, aiDupPassesSoftDup]);
+
+  const singleUnlikelyDisplayed = useMemo(() => {
+    if (!data || !("resultKind" in data) || data.resultKind !== "singleSiteDups") {
+      return [];
+    }
+    return (data.unlikelyPairs ?? []).filter((r) =>
+      aiDupPassesSoftDup("unlikely", r.a.id, r.b.id)
+    );
+  }, [data, aiDupPassesSoftDup]);
+
   const unplacedBList = useMemo((): CompareProduct[] => {
     if (!data || "resultKind" in data) return [];
     return (data.unplacedBByIdRaw ?? []).map((p) => toCompareProduct(p));
@@ -1406,6 +1797,31 @@ export default function ComparePage() {
     if (!data || "resultKind" in data) return [];
     return (data.noveltiesByArticleRaw ?? []).map((p) => toCompareProduct(p));
   }, [data]);
+
+  /** Карточки для превью «новинки по id» в мастере (до жёлтого сравнения). */
+  const noveltyIdsPreviewCompareRows = useMemo((): CompareProduct[] => {
+    if (!noveltyIdsPreviewProducts?.length) return [];
+    return noveltyIdsPreviewProducts.map((p) => toCompareProduct(p));
+  }, [noveltyIdsPreviewProducts]);
+
+  const downloadNoveltyIdsPreviewExcel = useCallback(async () => {
+    const items = noveltyIdsPreviewProducts;
+    if (!items?.length) return;
+    setError(null);
+    try {
+      const { downloadFullFpProductsExcel } = await import("@/lib/exportOnlyB");
+      const base = (siteLabelB.trim() || "новинки_B")
+        .replace(/[\\/:*?"<>|]+/g, "_")
+        .slice(0, 80);
+      await downloadFullFpProductsExcel(items, nameLocale, base);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Не удалось сформировать Excel (нужен пакет xlsx: npm install)"
+      );
+    }
+  }, [noveltyIdsPreviewProducts, nameLocale, siteLabelB]);
 
   const downloadNoveltiesPlainExcel = useCallback(async () => {
     if (!data || "resultKind" in data || !data.noveltiesByArticleRaw?.length)
@@ -1455,7 +1871,7 @@ export default function ComparePage() {
 
   const downloadCrossDupPairsExcel = useCallback(async () => {
     if (!data || "resultKind" in data) return;
-    const rows = onlyBCrossWithAFiltered;
+    const rows = onlyBCrossWithADisplayed;
     if (!rows.length) return;
     setError(null);
     try {
@@ -1476,7 +1892,71 @@ export default function ComparePage() {
           : "Не удалось сформировать Excel (нужен пакет xlsx: npm install)"
       );
     }
-  }, [data, onlyBCrossWithAFiltered]);
+  }, [data, onlyBCrossWithADisplayed]);
+
+  const runOpenAiDupRefine = useCallback(async () => {
+    if (!data) return;
+    const key = openAiKey.trim();
+    if (!looksLikeOpenAiApiKey(key)) {
+      setAiDupErr("Нужен ключ OpenAI API (sk-… или sk-proj-…)");
+      return;
+    }
+    const pairs = collectSoftDupPairsForOpenAi(
+      data,
+      data.nameLocale,
+      Math.min(80, Math.max(1, aiDupMaxPairs))
+    );
+    if (!pairs.length) {
+      setAiDupErr("Нет мягких пар для проверки при текущем отчёте.");
+      return;
+    }
+    setAiDupErr(null);
+    setAiDupBusy(true);
+    try {
+      const res = await fetch("/api/ai/dup-refine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openaiApiKey: key, pairs }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        verdicts?: {
+          pairKey: string;
+          duplicate: boolean;
+          confidence: number;
+          note?: string;
+        }[];
+      };
+      if (!res.ok) throw new Error(json.error || res.statusText);
+      const map: Record<
+        string,
+        { duplicate: boolean; confidence?: number; note?: string }
+      > = {};
+      for (const v of json.verdicts ?? []) {
+        map[v.pairKey] = {
+          duplicate: v.duplicate,
+          confidence: v.confidence,
+          note: v.note,
+        };
+      }
+      setAiDupVerdicts(map);
+      try {
+        if (rememberOpenAiKey && typeof window !== "undefined") {
+          sessionStorage.setItem(SK_OPENAI_KEY, key);
+          sessionStorage.setItem(SK_OPENAI_REM, "1");
+        } else if (typeof window !== "undefined") {
+          sessionStorage.removeItem(SK_OPENAI_KEY);
+          sessionStorage.setItem(SK_OPENAI_REM, "0");
+        }
+      } catch {
+        // ignore
+      }
+    } catch (e) {
+      setAiDupErr(e instanceof Error ? e.message : "Ошибка запроса AI");
+    } finally {
+      setAiDupBusy(false);
+    }
+  }, [data, openAiKey, aiDupMaxPairs, rememberOpenAiKey]);
 
   const downloadOnlyBExcel = useCallback(async () => {
     if (!data || !("rawOnlyB" in data) || !data.rawOnlyB?.length) return;
@@ -1594,6 +2074,172 @@ export default function ComparePage() {
     },
     []
   );
+
+  const onNoveltiesEanDupFile = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = "";
+      if (!f) return;
+      setError(null);
+      try {
+        const sheetMod = await import("@/lib/noveltiesEanDupSheet");
+        const { labelsForEanDuplicates, EAN_DUP_NONE_RU } = await import(
+          "@/lib/eanDuplicateLabels"
+        );
+        const sheet = await sheetMod.loadNoveltiesMatrixFromFile(f);
+        const { articles, eans } = sheetMod.extractArticleEanColumns(sheet);
+        const rowsIn = articles.map((article, i) => ({
+          article,
+          ean: eans[i] ?? ""
+        }));
+        const labels = labelsForEanDuplicates(rowsIn);
+        const duplicatesFound = labels.filter((l) => l !== EAN_DUP_NONE_RU).length;
+        const preview = articles.slice(0, 40).map((article, i) => ({
+          article,
+          ean: eans[i] ?? "",
+          dup: labels[i] ?? ""
+        }));
+        setEanDupTool({
+          base: sheet,
+          labels,
+          duplicatesFound,
+          totalRows: articles.length,
+          preview
+        });
+      } catch (err) {
+        setEanDupTool(null);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Не удалось разобрать файл (нужны колонки «Артикул» и «EAN»)."
+        );
+      }
+    },
+    []
+  );
+
+  const downloadNoveltiesEanDupExcel = useCallback(async () => {
+    if (!eanDupTool) return;
+    setError(null);
+    try {
+      const sheetMod = await import("@/lib/noveltiesEanDupSheet");
+      const matrix = sheetMod.sheetWithDupColumn(
+        eanDupTool.base,
+        eanDupTool.labels
+      );
+      await sheetMod.downloadSheetMatrixAsExcel(
+        matrix,
+        "novelties_ean_dup",
+        eanDupTool.base.sheetName || "Новинки",
+        "ean_dup"
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Не удалось сохранить Excel"
+      );
+    }
+  }, [eanDupTool]);
+
+  const onNoveltiesNamePhotoDupFile = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = "";
+      if (!f) return;
+      setError(null);
+      try {
+        const sheetMod = await import("@/lib/noveltiesEanDupSheet");
+        const { labelsForNamePhotoDuplicates, NAME_PHOTO_DUP_NONE_RU } =
+          await import("@/lib/namePhotoDuplicateLabels");
+        const sheet = await sheetMod.loadNoveltiesNamePhotoMatrixFromFile(f);
+        const { articles, names, links } =
+          sheetMod.extractArticleNameLinkColumns(sheet);
+        const rowsIn = articles.map((article, i) => ({
+          article,
+          name: names[i] ?? "",
+          link: links[i] ?? ""
+        }));
+        const labels = labelsForNamePhotoDuplicates(rowsIn);
+        const duplicatesFound = labels.filter(
+          (l) => l !== NAME_PHOTO_DUP_NONE_RU
+        ).length;
+        const preview = articles.slice(0, 40).map((article, i) => ({
+          article,
+          name: names[i] ?? "",
+          link: links[i] ?? "",
+          dup: labels[i] ?? ""
+        }));
+        setNamePhotoDupTool({
+          base: sheet,
+          labels,
+          duplicatesFound,
+          totalRows: articles.length,
+          preview
+        });
+      } catch (err) {
+        setNamePhotoDupTool(null);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Не удалось разобрать файл (нужны колонки Артикул, Название товара, ссылка на админку)."
+        );
+      }
+    },
+    []
+  );
+
+  const downloadNoveltiesNamePhotoDupExcel = useCallback(async () => {
+    if (!namePhotoDupTool) return;
+    setError(null);
+    try {
+      const sheetMod = await import("@/lib/noveltiesEanDupSheet");
+      const matrix = sheetMod.sheetWithNamePhotoDupColumn(
+        namePhotoDupTool.base,
+        namePhotoDupTool.labels
+      );
+      await sheetMod.downloadSheetMatrixAsExcel(
+        matrix,
+        "novelties_name_photo_dup",
+        namePhotoDupTool.base.sheetName || "Новинки",
+        "name_photo_dup"
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Не удалось сохранить Excel"
+      );
+    }
+  }, [namePhotoDupTool]);
+
+  const onFeedFileA = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setError(null);
+    void (async () => {
+      try {
+        const text = await f.text();
+        setFeedCsvTextA(text);
+        setFeedUrlA("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Не удалось прочитать файл");
+      }
+    })();
+  }, []);
+
+  const onFeedFileB = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    setError(null);
+    void (async () => {
+      try {
+        const text = await f.text();
+        setFeedCsvTextB(text);
+        setFeedUrlB("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Не удалось прочитать файл");
+      }
+    })();
+  }, []);
 
   return (
     <div className={appSubpageRoot}>
@@ -1727,6 +2373,102 @@ export default function ComparePage() {
                 Кнопки шага 2 здесь тоже работают только с этим списком. Рубрики B в форме по-прежнему нужны для синего шага 1;
                 если очистите id — снова понадобится хотя бы одна рубрика B для полного сравнения.
               </p>
+            </div>
+          )}
+
+          {noveltyIdsStored.length > 0 && (
+            <div className="mt-5 rounded-xl border border-violet-200 bg-violet-50/45 px-4 py-4 space-y-3 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wider text-violet-900">
+                Просмотр карточек в браузере
+              </p>
+              <p className="text-sm text-slate-700 leading-relaxed">
+                Запрос такой же, как у шага 2, пункт 1 — полные карточки по каждому сохранённому id (с учётом
+                брендов и моделей в форме). Можно пролистать список здесь; Excel сформируется из уже загруженных
+                данных без повторного запроса к серверу.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={
+                    loading ||
+                    wizardStep2Disabled ||
+                    noveltyIdsPreviewLoading
+                  }
+                  onClick={() => void loadNoveltyIdsPreview()}
+                  className="rounded-lg bg-violet-700 text-white px-3 py-2 text-sm font-semibold shadow-sm hover:bg-violet-800 disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {noveltyIdsPreviewLoading
+                    ? "Загрузка карточек…"
+                    : "Показать новинки в интерфейсе"}
+                </button>
+                {noveltyIdsPreviewLoading ? (
+                  <button
+                    type="button"
+                    onClick={cancelNoveltyIdsPreviewLoad}
+                    className="text-xs font-semibold text-violet-900 underline hover:text-violet-950"
+                  >
+                    Прервать загрузку таблицы
+                  </button>
+                ) : null}
+                {noveltyIdsPreviewProducts !== null &&
+                noveltyIdsPreviewProducts.length > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={noveltyIdsPreviewLoading}
+                      onClick={() => void downloadNoveltyIdsPreviewExcel()}
+                      className="rounded-lg border-2 border-violet-700 bg-white text-violet-950 px-3 py-2 text-sm font-semibold hover:bg-violet-50 disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      Excel — полная выгрузка (как шаг 2.1)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={noveltyIdsPreviewLoading}
+                      onClick={() => setNoveltyIdsPreviewProducts(null)}
+                      className="text-sm text-slate-600 underline hover:text-slate-900"
+                    >
+                      Скрыть таблицу
+                    </button>
+                  </>
+                ) : null}
+              </div>
+              {noveltyIdsPreviewProducts !== null ? (
+                <p className="text-xs text-slate-600">
+                  Карточек в ответе:{" "}
+                  <strong>{noveltyIdsPreviewProducts.length}</strong>
+                  {" · "}
+                  id в сохранённом списке: <strong>{noveltyIdsStored.length}</strong>
+                  {noveltyIdsPreviewProducts.length > 0 &&
+                  noveltyIdsPreviewProducts.length !== noveltyIdsStored.length ? (
+                    <span className="text-amber-800">
+                      {" "}
+                      — числа могут различаться, если часть id не вернула карточку или отсеялась фильтрами
+                      бренда/модели.
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+              {noveltyIdsPreviewCompareRows.length > 0 ? (
+                <div className="max-h-[min(55vh,920px)] overflow-y-auto space-y-2 pr-1 rounded-lg border border-violet-100 bg-white/85 p-2">
+                  {noveltyIdsPreviewCompareRows.map((c) => (
+                    <div
+                      key={c.id}
+                      className="p-3 rounded-lg border border-violet-200/70 bg-white"
+                    >
+                      <ProductCell
+                        c={c}
+                        siteLabel={siteLabelB.trim() || "Сайт B"}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : noveltyIdsPreviewProducts !== null &&
+                noveltyIdsPreviewProducts.length === 0 ? (
+                <p className="text-sm text-amber-900 bg-amber-50/80 border border-amber-200 rounded-lg px-3 py-2">
+                  По сохранённым id не вернулась ни одна карточка — проверьте ключ API для B и фильтры брендов /
+                  моделей.
+                </p>
+              ) : null}
             </div>
           )}
 
@@ -1998,9 +2740,135 @@ export default function ComparePage() {
         <div className={homeCardHeader + " mb-5 -mx-5 -mt-5 sm:-mx-6 sm:-mt-6 rounded-t-2xl"}>
           <h2 className={homeCardTitle}>Параметры выгрузки</h2>
           <p className="mt-2 text-sm text-slate-600 leading-relaxed max-w-xl">
-            Ключи, рубрики и фильтры — здесь задаётся, что именно загрузится из API.
+            {catalogSource === "feeds"
+              ? "Два CSV-фида 4Partners (ссылка или файл на каждую витрину). Фильтры по брендам, моделям и исключению id на A те же, что для API."
+              : "Ключи, рубрики и фильтры — здесь задаётся, что именно загрузится из API."}
           </p>
         </div>
+
+        <div className="mb-6 rounded-xl border border-indigo-200 bg-indigo-50/50 px-4 py-3 space-y-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+            Источник каталогов
+          </p>
+          <label className="flex items-start gap-2 text-sm text-slate-800 cursor-pointer">
+            <input
+              type="radio"
+              name="catalogSource"
+              className="mt-1"
+              checked={catalogSource === "api"}
+              onChange={() => {
+                setCatalogSource("api");
+                setError(null);
+              }}
+            />
+            <span>
+              <strong className="text-slate-900">API по рубрикам</strong> — ключи и id рубрик (как раньше).
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-slate-800 cursor-pointer">
+            <input
+              type="radio"
+              name="catalogSource"
+              className="mt-1"
+              checked={catalogSource === "feeds"}
+              onChange={() => {
+                setCatalogSource("feeds");
+                setError(null);
+              }}
+            />
+            <span>
+              <strong className="text-slate-900">CSV-фиды</strong> — ссылка вида{" "}
+              <code className="text-[11px] bg-white px-1 rounded border border-indigo-100">
+                https://….4partners.io/my/feed/brand.csv
+              </code>{" "}
+              или загрузка того же файла с компьютера (не используйте ссылку и файл одновременно для одной
+              стороны).
+            </span>
+          </label>
+        </div>
+
+        {catalogSource === "feeds" && (
+          <div className="mb-6 rounded-xl border border-emerald-300/80 bg-emerald-50/40 px-4 py-4 space-y-4">
+            <p className="text-sm text-slate-800 leading-relaxed">
+              Сервер скачивает CSV по https с домена{" "}
+              <strong className="text-emerald-950">*.4partners.io</strong>. Строки с одинаковым «Id товара»
+              сливаются в одну карточку (варианты: несколько EAN и картинок).
+            </p>
+            <div className="space-y-2 rounded-lg border border-emerald-200 bg-white/80 px-3 py-3">
+              <span className="text-xs font-semibold text-slate-800">
+                Сайт A ({siteLabelA.trim() || "A"})
+              </span>
+              <input
+                type="url"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
+                value={feedUrlA}
+                onChange={(e) => {
+                  setFeedUrlA(e.target.value);
+                  if (e.target.value.trim()) setFeedCsvTextA("");
+                }}
+                placeholder="https://rivegauche.4partners.io/my/feed/….csv"
+                spellCheck={false}
+              />
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span>или файл:</span>
+                <input
+                  type="file"
+                  accept=".csv,.txt"
+                  onChange={onFeedFileA}
+                  className="text-slate-700 max-w-full"
+                />
+                {feedCsvTextA.trim().length > 0 && (
+                  <button
+                    type="button"
+                    className="text-sky-700 underline"
+                    onClick={() => setFeedCsvTextA("")}
+                  >
+                    очистить загруженный текст
+                  </button>
+                )}
+              </div>
+            </div>
+            {compareMode === "twoSite" && (
+              <div className="space-y-2 rounded-lg border border-emerald-200 bg-white/80 px-3 py-3">
+                <span className="text-xs font-semibold text-slate-800">
+                  Сайт B ({siteLabelB.trim() || "B"})
+                </span>
+                <input
+                  type="url"
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
+                  value={feedUrlB}
+                  onChange={(e) => {
+                    setFeedUrlB(e.target.value);
+                    if (e.target.value.trim()) setFeedCsvTextB("");
+                  }}
+                  placeholder="https://….4partners.io/my/feed/….csv"
+                  spellCheck={false}
+                />
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                  <span>или файл:</span>
+                  <input
+                    type="file"
+                    accept=".csv,.txt"
+                    onChange={onFeedFileB}
+                    className="text-slate-700 max-w-full"
+                  />
+                  {feedCsvTextB.trim().length > 0 && (
+                    <button
+                      type="button"
+                      className="text-sky-700 underline"
+                      onClick={() => setFeedCsvTextB("")}
+                    >
+                      очистить загруженный текст
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {catalogSource === "api" && (
+          <>
         <h2 className="text-sm font-semibold text-slate-800 mb-3">
           Ключи API (4Partners) и подписи
         </h2>
@@ -2142,11 +3010,14 @@ export default function ComparePage() {
             Очистить ключи и подписи
           </button>
         </div>
+          </>
+        )}
 
         <p className="text-sm font-semibold text-slate-900 mb-4 mt-6 px-0.5 border-l-4 border-slate-300 pl-3 py-0.5">
           Текущая задача: {catalogTaskTitle}
         </p>
 
+        {catalogSource === "api" && (
         <details className="mb-4 rounded-xl border-2 border-amber-200/90 bg-amber-50/20" open>
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
             Рубрики<span className="text-red-600 ml-0.5">*</span> — выберите рубрики для выгрузки (обязательно)
@@ -2187,15 +3058,21 @@ export default function ComparePage() {
           {compareMode === "twoSite" && (
             <div className="space-y-2">
               <RubricCascadeSelect
-                label="Сайт B — клик по рубрике добавляет её id в список ниже"
+                label={`Сайт B — клик по рубрике добавляет id в список ниже (до ${MAX_RUBRICS_B} рубрик)`}
                 token={tokenForRubricsB}
                 value=""
                 onChange={(idStr) => {
                   const id = Number(String(idStr).replace(/\D/g, ""));
                   if (id > 0) {
-                    setRubricsBText((prev) =>
-                      mergeUniqueSortedRubricId(prev, id)
-                    );
+                    setRubricsBText((prev) => {
+                      const r = mergeUniqueSortedRubricId(prev, id);
+                      if (r.limitReached) {
+                        setError(
+                          `На сайте B не более ${MAX_RUBRICS_B} рубрик — удалите лишние id из списка или замените одну из них.`
+                        );
+                      }
+                      return r.text;
+                    });
                   }
                 }}
               />
@@ -2207,9 +3084,11 @@ export default function ComparePage() {
             Или прямой ввод id рубрики (из админки / API)
           </p>
           <p className="text-[11px] text-slate-500 mb-2">
-            Для A — одно число. Для B — несколько id (каждый добавляет каскад или вводите сами).
+            Для A — одно число. Для B — до {MAX_RUBRICS_B} id узких рубрик (каскад или ввод сами).
             Кнопка запуска внизу активна, если для A задан id &gt; 0
-            {compareMode === "twoSite" ? " и в списке B есть хотя бы один id." : "."}
+            {compareMode === "twoSite"
+              ? ` и в списке B от 1 до ${MAX_RUBRICS_B} id рубрик.`
+              : "."}
           </p>
           <div
             className={`grid gap-3 ${
@@ -2234,7 +3113,7 @@ export default function ComparePage() {
             {compareMode === "twoSite" && (
               <label className="block sm:col-span-2">
                 <span className="text-xs font-medium text-slate-700">
-                  Id рубрик сайта B — одна или несколько (с новой строки или через запятую)
+                  Id рубрик сайта B — до {MAX_RUBRICS_B} узких рубрик (с новой строки или через запятую)
                 </span>
                 <textarea
                   className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono min-h-[88px]"
@@ -2264,13 +3143,19 @@ export default function ComparePage() {
                 >
                   {rubricBOk
                     ? `${rubricBParsedIds.length} рубр.: ${rubricBParsedIds.join(", ")}`
-                    : "нужен хотя бы один id"}
+                    : rubricBParsedIds.length > MAX_RUBRICS_B
+                      ? `слишком много (макс. ${MAX_RUBRICS_B}): ${rubricBParsedIds.length} id`
+                      : "нужен хотя бы один id"}
                 </strong>
               </>
             )}
           </p>
         </div>
-        <div className="grid sm:grid-cols-2 gap-4 mb-1">
+          </div>
+        </details>
+        )}
+
+        <div className="grid sm:grid-cols-2 gap-4 mb-4">
           <label className="block">
             <span className="text-xs font-medium text-slate-500">
               Сопоставлять по названию (если EAN нет/не сматчилось)
@@ -2286,7 +3171,7 @@ export default function ComparePage() {
           </label>
           <label className="block">
             <span className="text-xs font-medium text-slate-500">
-              Site variation (как в API)
+              Site variation (как в API; для фидов почти не используется)
             </span>
             <input
               className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
@@ -2296,8 +3181,6 @@ export default function ComparePage() {
             />
           </label>
         </div>
-          </div>
-        </details>
 
         {(compareMode === "twoSite" || compareMode === "singleDups") && (
           <details className="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm ring-1 ring-slate-200/40" open>
@@ -2529,6 +3412,171 @@ export default function ComparePage() {
                 </p>
               )}
             </div>
+          </div>
+        </details>
+
+        <details className="mb-4 rounded-xl border border-violet-200 bg-violet-50/35">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
+            Дубли по EAN в листе «Новинки» (файл Excel/CSV, без API)
+          </summary>
+          <div className="border-t border-violet-100 px-4 pb-4 pt-3 space-y-3">
+            <p className="text-xs text-slate-700 leading-relaxed">
+              Как в вашем скрипте: в первой строке должны быть колонки{" "}
+              <strong className="text-slate-800">«Артикул»</strong> и{" "}
+              <strong className="text-slate-800">«EAN»</strong>. Для{" "}
+              <strong className="text-slate-800">.xlsx</strong> берётся лист{" "}
+              <strong className="text-slate-800">«Новинки»</strong>, если он есть, иначе первый лист.
+              Колонка <strong className="text-slate-800">«{COL_DUP_RESULT}»</strong> будет добавлена в конец или
+              перезаписана, если уже есть. Совпадающие артикулы в ячейке перечисляются через запятую с пробелом
+              (в Apps Script у <code className="text-[11px]">join</code> был пустой разделитель — строки
+              слипались).
+            </p>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <input
+                type="file"
+                accept=".xlsx,.xls,.xlsm,.csv,.txt"
+                onChange={onNoveltiesEanDupFile}
+                className="text-slate-700 text-xs max-w-full"
+              />
+            </div>
+            {eanDupTool && (
+              <div className="space-y-3 rounded-lg border border-violet-100 bg-white/80 px-3 py-3">
+                <p className="text-xs font-medium text-slate-800">
+                  Строк данных: {eanDupTool.totalRows}. С дублями по EAN (как в логгере скрипта):{" "}
+                  {eanDupTool.duplicatesFound}.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void downloadNoveltiesEanDupExcel()}
+                    className="rounded-lg border border-violet-400 bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-700"
+                  >
+                    Скачать Excel с «{COL_DUP_RESULT}»
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEanDupTool(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Сбросить
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Превью — первые {eanDupTool.preview.length} строк (полная таблица в файле).
+                </p>
+                <div className="overflow-auto max-h-72 rounded-md border border-slate-200 bg-white">
+                  <table className="min-w-full border-collapse text-[11px]">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                        <th className="p-2 font-semibold text-slate-700">Артикул</th>
+                        <th className="p-2 font-semibold text-slate-700">EAN</th>
+                        <th className="p-2 font-semibold text-slate-700">{COL_DUP_RESULT}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {eanDupTool.preview.map((row, idx) => (
+                        <tr key={idx} className="border-b border-slate-100">
+                          <td className="p-2 font-mono text-slate-800">{row.article || "—"}</td>
+                          <td className="p-2 font-mono text-slate-800">{row.ean || "—"}</td>
+                          <td className="p-2 text-slate-700">{row.dup}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+
+        <details className="mb-4 rounded-xl border border-teal-200 bg-teal-50/35">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
+            Дубли по названию и ссылке (лист «Новинки», без API)
+          </summary>
+          <div className="border-t border-teal-100 px-4 pb-4 pt-3 space-y-3">
+            <p className="text-xs text-slate-700 leading-relaxed">
+              Как в скрипте <strong className="text-slate-800">findDuplicatesByName</strong>: строки с одинаковым{" "}
+              <strong className="text-slate-800">«{COL_PRODUCT_NAME}»</strong> (после trim и приведения к нижнему регистру)
+              считаются группой. В колонку результата попадают <strong className="text-slate-800">уникальные</strong>{" "}
+              <strong className="text-slate-800">«{COL_ADMIN_LINK}»</strong> с <em>других</em> строк группы (пустые ссылки
+              не показываются). Сравнение картинок по пикселям не делается — только название и список ссылок, как в
+              таблице. Колонка <strong className="text-slate-800">«{COL_DUP_NAME_OR_PHOTO}»</strong> добавится или
+              перезапишется. Несколько ссылок в ячейке разделены переводом строки (в Apps Script{" "}
+              <code className="text-[11px]">join</code> был с пустым разделителем).
+            </p>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <input
+                type="file"
+                accept=".xlsx,.xls,.xlsm,.csv,.txt"
+                onChange={onNoveltiesNamePhotoDupFile}
+                className="text-slate-700 text-xs max-w-full"
+              />
+            </div>
+            {namePhotoDupTool && (
+              <div className="space-y-3 rounded-lg border border-teal-100 bg-white/80 px-3 py-3">
+                <p className="text-xs font-medium text-slate-800">
+                  Строк данных: {namePhotoDupTool.totalRows}. Строк с найденными ссылками-дублями:{" "}
+                  {namePhotoDupTool.duplicatesFound}.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void downloadNoveltiesNamePhotoDupExcel()}
+                    className="rounded-lg border border-teal-500 bg-teal-600 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-700"
+                  >
+                    Скачать Excel с «{COL_DUP_NAME_OR_PHOTO}»
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNamePhotoDupTool(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Сбросить
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Превью — первые {namePhotoDupTool.preview.length} строк.
+                </p>
+                <div className="overflow-auto max-h-72 rounded-md border border-slate-200 bg-white">
+                  <table className="min-w-full border-collapse text-[11px]">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                        <th className="p-2 font-semibold text-slate-700">Артикул</th>
+                        <th className="p-2 font-semibold text-slate-700 max-w-[140px]">
+                          {COL_PRODUCT_NAME}
+                        </th>
+                        <th className="p-2 font-semibold text-slate-700 max-w-[120px]">
+                          {COL_ADMIN_LINK}
+                        </th>
+                        <th className="p-2 font-semibold text-slate-700 min-w-[160px]">
+                          {COL_DUP_NAME_OR_PHOTO}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {namePhotoDupTool.preview.map((row, idx) => (
+                        <tr key={idx} className="border-b border-slate-100 align-top">
+                          <td className="p-2 font-mono text-slate-800">{row.article || "—"}</td>
+                          <td className="p-2 text-slate-700 break-words max-w-[200px]">
+                            {row.name || "—"}
+                          </td>
+                          <td className="p-2 text-sky-800 break-all max-w-[180px]">
+                            {row.link ? (
+                              <span title={row.link}>{row.link.length > 48 ? `${row.link.slice(0, 48)}…` : row.link}</span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="p-2 text-slate-700 whitespace-pre-wrap break-all max-w-[260px]">
+                            {row.dup}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </details>
 
@@ -2841,6 +3889,86 @@ export default function ComparePage() {
                   >
                     Маловероятные дубли (фото + бренд + тип, название модели слабее ~60%)
                   </button>
+                </div>
+                <div className="mt-5 pt-4 border-t border-indigo-200/70 space-y-3">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Уточнение мягких дублей через OpenAI
+                  </p>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    После расчёта можно отправить пары слоёв ~90% / ~60% / «маловероятные» на оценку
+                    модели (по названию и бренду; без загрузки картинок в AI). Личный ключ передаётся
+                    только в ваш backend-приложение на время запроса и дальше в OpenAI — в базу не
+                    пишется.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-end flex-wrap">
+                    <label className="block flex-1 min-w-[200px]">
+                      <span className="text-xs font-medium text-slate-600">
+                        API-ключ OpenAI
+                      </span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        className={homeInput + " mt-1 font-mono text-sm"}
+                        value={openAiKey}
+                        placeholder="sk-… или sk-proj-…"
+                        onChange={(e) => setOpenAiKey(e.target.value)}
+                      />
+                    </label>
+                    <label className="block w-full sm:w-28">
+                      <span className="text-xs font-medium text-slate-600">Макс. пар</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={80}
+                        className={homeInput + " mt-1 tabular-nums"}
+                        value={aiDupMaxPairs}
+                        onChange={(e) =>
+                          setAiDupMaxPairs(
+                            Math.min(
+                              80,
+                              Math.max(1, Number(e.target.value) || 40)
+                            )
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={rememberOpenAiKey}
+                        onChange={(e) => setRememberOpenAiKey(e.target.checked)}
+                      />
+                      Помнить ключ в браузере (sessionStorage)
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <button
+                      type="button"
+                      disabled={aiDupBusy || !data}
+                      onClick={() => void runOpenAiDupRefine()}
+                      className="rounded-xl bg-indigo-800 text-white px-4 py-2.5 text-sm font-semibold hover:bg-indigo-950 disabled:opacity-50"
+                    >
+                      {aiDupBusy ? "Запрос к OpenAI…" : "Проверить мягкие пары AI"}
+                    </button>
+                    <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={aiDupHideRejected}
+                        onChange={(e) => setAiDupHideRejected(e.target.checked)}
+                      />
+                      Скрыть пары, где AI сказал «не дубль»
+                    </label>
+                    {Object.keys(aiDupVerdicts).length > 0 && (
+                      <span className="text-xs text-indigo-900 tabular-nums">
+                        Вердиктов в сессии: {Object.keys(aiDupVerdicts).length}
+                      </span>
+                    )}
+                  </div>
+                  {aiDupErr && (
+                    <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                      {aiDupErr}
+                    </p>
+                  )}
                 </div>
                 {(reportView === "dupsA" || reportView === "dupsB") && (
                   <div className="mt-5 pt-4 border-t border-amber-200/80">
@@ -3324,11 +4452,11 @@ export default function ComparePage() {
               Внутри бренда. Товары из EAN-групп выше сюда не включаются. При галочках
               объём/оттенок/цвет — жёсткий отсев по расхождению.
             </p>
-            {data.namePhotoPairs.length === 0 && (
+            {singleNamePhotoDisplayed.length === 0 && (
               <p className="text-sm text-slate-500">Нет</p>
             )}
             <div className="space-y-3">
-              {data.namePhotoPairs.map((row, i) => (
+              {singleNamePhotoDisplayed.map((row, i) => (
                 <div
                   key={`${row.a.id}-${row.b.id}-${i}`}
                   className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-slate-200 bg-amber-50/40"
@@ -3338,6 +4466,13 @@ export default function ComparePage() {
                   <div className="sm:col-span-2 text-xs text-slate-600">
                     балл: <strong>{(row.score * 100).toFixed(0)}%</strong>{" "}
                     {row.matchReasons.length ? `(${row.matchReasons.join(" + ")})` : null}
+                  </div>
+                  <div className="sm:col-span-2">
+                    <AiDupVerdictNote
+                      verdicts={aiDupVerdicts}
+                      idA={row.a.id}
+                      idB={row.b.id}
+                    />
                   </div>
                 </div>
               ))}
@@ -3359,11 +4494,11 @@ export default function ComparePage() {
               без «искусственного интеллекта» и без совпадения URL. Порог здесь{" "}
               <strong className="text-slate-800">мягче</strong>, чем у блока «маловероятные» ниже.
             </p>
-            {(data.brandVisualPairs?.length ?? 0) === 0 ? (
+            {singleBrandVisualDisplayed.length === 0 ? (
               <p className="text-sm text-slate-500">Нет</p>
             ) : (
               <div className="space-y-3">
-                {(data.brandVisualPairs ?? []).map((row, i) => (
+                {singleBrandVisualDisplayed.map((row, i) => (
                   <div
                     key={`${row.a.id}-${row.b.id}-bv-${i}`}
                     className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-sky-200 bg-sky-50/40"
@@ -3375,6 +4510,13 @@ export default function ComparePage() {
                       {row.matchReasons.length
                         ? `(${row.matchReasons.join(" + ")})`
                         : null}
+                    </div>
+                    <div className="sm:col-span-2">
+                      <AiDupVerdictNote
+                        verdicts={aiDupVerdicts}
+                        idA={row.a.id}
+                        idB={row.b.id}
+                      />
                     </div>
                   </div>
                 ))}
@@ -3398,17 +4540,17 @@ export default function ComparePage() {
               в первую очередь при совпадении по <strong className="text-slate-800">EAN или артикулу</strong>.
               Галочки объём / оттенок / цвет на этот слой не действуют.
             </p>
-            {(data.unlikelyPairs?.length ?? 0) === 0 ? (
+            {singleUnlikelyDisplayed.length === 0 ? (
               <p className="text-sm text-slate-500 mb-3 leading-relaxed">
                 Ничего подходящего: либо нет пар под эти условия, либо кандидаты отсечены как разные типы товара по заголовку.
               </p>
             ) : (
               <p className="text-sm text-slate-600 mb-3">
-                Найдено пар: <strong className="tabular-nums">{data.unlikelyPairs!.length}</strong>
+                Найдено пар: <strong className="tabular-nums">{singleUnlikelyDisplayed.length}</strong>
               </p>
             )}
             <div className="space-y-3">
-              {(data.unlikelyPairs ?? []).map((row, i) => (
+              {singleUnlikelyDisplayed.map((row, i) => (
                 <div
                   key={`${row.a.id}-${row.b.id}-${i}`}
                   className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-slate-200 bg-violet-50/40"
@@ -3417,6 +4559,13 @@ export default function ComparePage() {
                   <ProductCell c={row.b} siteLabel={data.siteLabel} />
                   <div className="sm:col-span-2 text-sm text-slate-600 leading-relaxed">
                     {row.matchReasons?.join(" + ")}
+                  </div>
+                  <div className="sm:col-span-2">
+                    <AiDupVerdictNote
+                      verdicts={aiDupVerdicts}
+                      idA={row.a.id}
+                      idB={row.b.id}
+                    />
                   </div>
                 </div>
               ))}
@@ -3797,11 +4946,11 @@ export default function ComparePage() {
                 <button
                   type="button"
                   onClick={downloadCrossDupPairsExcel}
-                  disabled={!onlyBCrossWithAFiltered.length}
+                  disabled={!onlyBCrossWithADisplayed.length}
                   className="rounded-lg bg-amber-800 text-white px-3 py-2 text-sm font-medium hover:bg-amber-900 disabled:opacity-50"
                   title="Отдельный файл по строкам вкладки E с учётом фильтра «тип дубля»"
                 >
-                  Excel — строки найденных дублей ({onlyBCrossWithAFiltered.length})
+                  Excel — строки найденных дублей ({onlyBCrossWithADisplayed.length})
                 </button>
               </div>
               <p className="text-xs text-slate-500 mb-3">
@@ -3828,6 +4977,15 @@ export default function ComparePage() {
             const isA = reportView === "dupsA";
             const intra = isA ? data.intraSiteADups : data.intraSiteBDups;
             const dupSiteLabel = isA ? data.siteALabel : data.siteBLabel;
+            const intraNpDisp = intra.namePhotoPairs.filter((row) =>
+              aiDupPassesSoftDup("name_photo", row.a.id, row.b.id)
+            );
+            const intraBvDisp = (intra.brandVisualPairs ?? []).filter((row) =>
+              aiDupPassesSoftDup("brand_visual", row.a.id, row.b.id)
+            );
+            const intraUnDisp = (intra.unlikelyPairs ?? []).filter((row) =>
+              aiDupPassesSoftDup("unlikely", row.a.id, row.b.id)
+            );
             const scopeIntra = isA ? dupScopeA === "intraA" : dupScopeB === "intraB";
             return (
             <section
@@ -3904,20 +5062,27 @@ export default function ComparePage() {
                       <h3 className="text-sm font-semibold text-slate-900 mb-2">
                         ~90%: частичное название + эквивалентный URL фото
                       </h3>
-                      {intra.namePhotoPairs.length === 0 && (
+                      {intraNpDisp.length === 0 && (
                         <p className="text-sm text-slate-500">Нет</p>
                       )}
                       <div className="space-y-3">
-                        {intra.namePhotoPairs.map((row, i) => (
+                        {intraNpDisp.map((row, i) => (
                           <div
                             key={`intra-np-${row.a.id}-${row.b.id}-${i}`}
                             className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-slate-200 bg-amber-50/40"
                           >
                             <ProductCell c={row.a} siteLabel={dupSiteLabel} />
                             <ProductCell c={row.b} siteLabel={dupSiteLabel} />
-                            <div className="sm:col-span-2 text-xs text-slate-600">
-                              {(row.score * 100).toFixed(0)}% ·{" "}
-                              {row.matchReasons?.join(" + ")}
+                            <div className="sm:col-span-2 space-y-1">
+                              <div className="text-xs text-slate-600">
+                                {(row.score * 100).toFixed(0)}% ·{" "}
+                                {row.matchReasons?.join(" + ")}
+                              </div>
+                              <AiDupVerdictNote
+                                verdicts={aiDupVerdicts}
+                                idA={row.a.id}
+                                idB={row.b.id}
+                              />
                             </div>
                           </div>
                         ))}
@@ -3932,20 +5097,27 @@ export default function ComparePage() {
                         (автопревью, порог мягче, чем у «маловероятных»). При разных EAN (если есть у обеих карточек) не
                         считаем.
                       </h3>
-                      {(intra.brandVisualPairs?.length ?? 0) === 0 ? (
+                      {intraBvDisp.length === 0 ? (
                         <p className="text-sm text-slate-500">Нет</p>
                       ) : (
                         <div className="space-y-3">
-                          {(intra.brandVisualPairs ?? []).map((row, i) => (
+                          {intraBvDisp.map((row, i) => (
                             <div
                               key={`intra-bv-${row.a.id}-${row.b.id}-${i}`}
                               className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-sky-200 bg-sky-50/40"
                             >
                               <ProductCell c={row.a} siteLabel={dupSiteLabel} />
                               <ProductCell c={row.b} siteLabel={dupSiteLabel} />
-                              <div className="sm:col-span-2 text-sm text-slate-600 leading-relaxed">
-                                {(row.score * 100).toFixed(0)}% ·{" "}
-                                {row.matchReasons?.join(" + ")}
+                              <div className="sm:col-span-2 space-y-1">
+                                <div className="text-sm text-slate-600 leading-relaxed">
+                                  {(row.score * 100).toFixed(0)}% ·{" "}
+                                  {row.matchReasons?.join(" + ")}
+                                </div>
+                                <AiDupVerdictNote
+                                  verdicts={aiDupVerdicts}
+                                  idA={row.a.id}
+                                  idB={row.b.id}
+                                />
                               </div>
                             </div>
                           ))}
@@ -3963,21 +5135,28 @@ export default function ComparePage() {
                         Пары «парфюм / туалетная вода» против «туши / mascara» по явным словам в заголовке робот сюда не
                         выводит. На белом фоне редкие ложные попадания возможны — смотрите EAN и артикул.
                       </p>
-                      {(intra.unlikelyPairs?.length ?? 0) === 0 && (
+                      {intraUnDisp.length === 0 && (
                         <p className="text-sm text-slate-600 mb-2 leading-relaxed">
                           Нет строк: нет подходящих пар или они отсечены по правилам выше.
                         </p>
                       )}
                       <div className="space-y-3">
-                        {(intra.unlikelyPairs ?? []).map((row, i) => (
+                        {intraUnDisp.map((row, i) => (
                           <div
                             key={`intra-u-${row.a.id}-${row.b.id}-${i}`}
                             className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-violet-200 bg-violet-50/40"
                           >
                             <ProductCell c={row.a} siteLabel={dupSiteLabel} />
                             <ProductCell c={row.b} siteLabel={dupSiteLabel} />
-                            <div className="sm:col-span-2 text-sm text-slate-600 leading-relaxed">
-                              {row.matchReasons?.join(" + ")}
+                            <div className="sm:col-span-2 space-y-1">
+                              <div className="text-sm text-slate-600 leading-relaxed">
+                                {row.matchReasons?.join(" + ")}
+                              </div>
+                              <AiDupVerdictNote
+                                verdicts={aiDupVerdicts}
+                                idA={row.a.id}
+                                idB={row.b.id}
+                              />
                             </div>
                           </div>
                         ))}
@@ -3993,11 +5172,11 @@ export default function ComparePage() {
                     <h3 className="text-sm font-semibold text-emerald-900 mb-2">
                       Новинки {data.siteBLabel} (по артикулу) — возможный дубль в полном {data.siteALabel}
                     </h3>
-                    {onlyBCrossWithAFiltered.length === 0 && (
+                    {onlyBCrossWithADisplayed.length === 0 && (
                       <p className="text-sm text-slate-500">Нет</p>
                     )}
                     <div className="space-y-3">
-                      {onlyBCrossWithAFiltered.map((row, i) => (
+                      {onlyBCrossWithADisplayed.map((row, i) => (
                         <div
                           key={`ca-${i}-${row.productFromOnlyB.id}-${row.productOnA.id}`}
                           className="p-4 rounded-xl border border-emerald-200 bg-white"
@@ -4043,6 +5222,13 @@ export default function ComparePage() {
                                 : ""}
                             </p>
                           )}
+                          {isSoftDupScoreKind(row.kind) && (
+                            <AiDupVerdictNote
+                              verdicts={aiDupVerdicts}
+                              idA={row.productOnA.id}
+                              idB={row.productFromOnlyB.id}
+                            />
+                          )}
                         </div>
                       ))}
                     </div>
@@ -4051,11 +5237,11 @@ export default function ComparePage() {
                     <h3 className="text-sm font-semibold text-amber-900 mb-2">
                       Дубли внутри списка новинок ({data.siteBLabel})
                     </h3>
-                    {onlyBInternalDupsFiltered.length === 0 && (
+                    {onlyBInternalDupsDisplayed.length === 0 && (
                       <p className="text-sm text-slate-500">Нет</p>
                     )}
                     <div className="space-y-3">
-                      {onlyBInternalDupsFiltered.map((row, i) => (
+                      {onlyBInternalDupsDisplayed.map((row, i) => (
                         <div
                           key={`ib-${i}-${row.first.id}-${row.second.id}`}
                           className="p-4 rounded-xl border border-amber-200 bg-amber-50/30"
@@ -4086,6 +5272,13 @@ export default function ComparePage() {
                                 : ""}
                             </p>
                           )}
+                          {isSoftDupScoreKind(row.kind) && (
+                            <AiDupVerdictNote
+                              verdicts={aiDupVerdicts}
+                              idA={row.first.id}
+                              idB={row.second.id}
+                            />
+                          )}
                         </div>
                       ))}
                     </div>
@@ -4099,11 +5292,11 @@ export default function ComparePage() {
                     <h3 className="text-sm font-semibold text-emerald-900 mb-2">
                       Новинки {data.siteALabel} (по артикулу) — возможный дубль в полном {data.siteBLabel}
                     </h3>
-                    {onlyACrossWithBFiltered.length === 0 && (
+                    {onlyACrossWithBDisplayed.length === 0 && (
                       <p className="text-sm text-slate-500">Нет</p>
                     )}
                     <div className="space-y-3">
-                      {onlyACrossWithBFiltered.map((row, i) => (
+                      {onlyACrossWithBDisplayed.map((row, i) => (
                         <div
                           key={`cb-${i}-${row.productFromOnlyA.id}-${row.productOnB.id}`}
                           className="p-4 rounded-xl border border-emerald-200 bg-white"
@@ -4149,6 +5342,13 @@ export default function ComparePage() {
                                 : ""}
                             </p>
                           )}
+                          {isSoftDupScoreKind(row.kind) && (
+                            <AiDupVerdictNote
+                              verdicts={aiDupVerdicts}
+                              idA={row.productFromOnlyA.id}
+                              idB={row.productOnB.id}
+                            />
+                          )}
                         </div>
                       ))}
                     </div>
@@ -4157,11 +5357,11 @@ export default function ComparePage() {
                     <h3 className="text-sm font-semibold text-amber-900 mb-2">
                       Дубли внутри списка новинок ({data.siteALabel})
                     </h3>
-                    {onlyAInternalDupsFiltered.length === 0 && (
+                    {onlyAInternalDupsDisplayed.length === 0 && (
                       <p className="text-sm text-slate-500">Нет</p>
                     )}
                     <div className="space-y-3">
-                      {onlyAInternalDupsFiltered.map((row, i) => (
+                      {onlyAInternalDupsDisplayed.map((row, i) => (
                         <div
                           key={`ia-${i}-${row.first.id}-${row.second.id}`}
                           className="p-4 rounded-xl border border-amber-200 bg-amber-50/30"
@@ -4191,6 +5391,13 @@ export default function ComparePage() {
                                 ? ` (${row.matchReasons.join(" + ")})`
                                 : ""}
                             </p>
+                          )}
+                          {isSoftDupScoreKind(row.kind) && (
+                            <AiDupVerdictNote
+                              verdicts={aiDupVerdicts}
+                              idA={row.first.id}
+                              idB={row.second.id}
+                            />
                           )}
                         </div>
                       ))}
@@ -4233,10 +5440,10 @@ export default function ComparePage() {
                 <button
                   type="button"
                   onClick={downloadCrossDupPairsExcel}
-                  disabled={!onlyBCrossWithAFiltered.length}
+                  disabled={!onlyBCrossWithADisplayed.length}
                   className="rounded-lg bg-emerald-900 text-white px-3 py-2 text-sm font-medium hover:bg-emerald-950 disabled:opacity-50"
                 >
-                  Скачать пары дублей (Excel, {onlyBCrossWithAFiltered.length} строк)
+                  Скачать пары дублей (Excel, {onlyBCrossWithADisplayed.length} строк)
                 </button>
                 <button
                   type="button"
@@ -4247,11 +5454,11 @@ export default function ComparePage() {
                   Скачать все новинки с колонкой «дубль да/нет»
                 </button>
               </div>
-              {crossBvsARowsFiltered.length === 0 && (
+              {crossBvsARowsDisplayed.length === 0 && (
                 <p className="text-sm text-slate-500">Нет — по выбранному фильтру типа дубля.</p>
               )}
               <div className="space-y-3 max-h-[min(80vh,1600px)] overflow-y-auto pr-1">
-                {crossBvsARowsFiltered.map((row, i) => (
+                {crossBvsARowsDisplayed.map((row, i) => (
                   <div
                     key={`${row.fromB.id}-${row.onA.id}-${i}`}
                     className="p-4 rounded-xl border border-emerald-200 bg-white space-y-2"
@@ -4286,6 +5493,13 @@ export default function ComparePage() {
                           ? ` (${row.matchReasons.join(" + ")})`
                           : ""}
                       </p>
+                    )}
+                    {isSoftDupScoreKind(row.kind) && (
+                      <AiDupVerdictNote
+                        verdicts={aiDupVerdicts}
+                        idA={row.onA.id}
+                        idB={row.fromB.id}
+                      />
                     )}
                   </div>
                 ))}
@@ -4559,10 +5773,10 @@ export default function ComparePage() {
                   отчёта. У одной позиции B может быть несколько попаданий в A.
                 </p>
                 <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
-                  {onlyBCrossWithAFiltered.length === 0 && (
+                  {onlyBCrossWithADisplayed.length === 0 && (
                     <p className="text-sm text-slate-500">Нет</p>
                   )}
-                  {onlyBCrossWithAFiltered.map((row, i) => (
+                  {onlyBCrossWithADisplayed.map((row, i) => (
                     <div
                       key={`x-${i}-${row.productFromOnlyB.id}-${row.productOnA.id}-${row.kind}`}
                       className="p-3 rounded-lg border border-emerald-100 bg-white space-y-2"
@@ -4591,6 +5805,13 @@ export default function ComparePage() {
                             : ""}
                         </p>
                       )}
+                      {isSoftDupScoreKind(row.kind) && (
+                        <AiDupVerdictNote
+                          verdicts={aiDupVerdicts}
+                          idA={row.productOnA.id}
+                          idB={row.productFromOnlyB.id}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -4604,10 +5825,10 @@ export default function ComparePage() {
                   <strong> мало: фото+хар.</strong> — по фильтру выше.
                 </p>
                 <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
-                  {onlyBInternalDupsFiltered.length === 0 && (
+                  {onlyBInternalDupsDisplayed.length === 0 && (
                     <p className="text-sm text-slate-500">Нет</p>
                   )}
-                  {onlyBInternalDupsFiltered.map((row, i) => (
+                  {onlyBInternalDupsDisplayed.map((row, i) => (
                     <div
                       key={`d-${i}-${row.first.id}-${row.second.id}-${row.kind}`}
                       className="p-3 rounded-lg border border-amber-100 bg-white space-y-2"
@@ -4631,6 +5852,13 @@ export default function ComparePage() {
                             ? ` (${row.matchReasons.join(" + ")})`
                             : ""}
                         </p>
+                      )}
+                      {isSoftDupScoreKind(row.kind) && (
+                        <AiDupVerdictNote
+                          verdicts={aiDupVerdicts}
+                          idA={row.first.id}
+                          idB={row.second.id}
+                        />
                       )}
                     </div>
                   ))}
