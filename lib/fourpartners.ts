@@ -1,395 +1,13 @@
+import { filterFpProductsActiveOffers } from "./activeOfferVariations";
 import { filterFpProductsByBrands, type BrandMatchMode } from "./brand-filter";
-import {
-  filterFpProductsByModels,
-  type ModelMatchMode
-} from "./model-filter";
+import { filterFpProductsByModels, type ModelMatchMode } from "./model-filter";
+import { filterSiteAByExcludedProductIds } from "./excludeProductIds";
 import type { FpProduct } from "./types";
 
 const DEFAULT_BASE = "https://api.4partners.io/v1";
-
 const USER_AGENT = "rubric-compare/0.1";
+const MAX_RUBRIC_PAGES = 5000;
 
-type ApiResponse<T> = {
-  status?: string;
-  status_code?: number;
-  message?: string;
-  result?: T;
-};
-
-function baseUrl() {
-  return (process.env.FOURPARTNERS_API_BASE || DEFAULT_BASE).replace(/\/$/, "");
-}
-
-export async function fetchProductListPage(
-  token: string,
-  siteVariation: string,
-  rubricId: number,
-  page: number
-): Promise<FpProduct[]> {
-  const url = `${baseUrl()}/product/list/${encodeURIComponent(siteVariation)}/products`;
-  const body = JSON.stringify({
-    page,
-    filter_rubrics: [rubricId],
-    order: "popular"
-  });
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "X-Auth-Token": token,
-      "User-Agent": USER_AGENT
-    },
-    body,
-    cache: "no-store"
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`4Partners ${res.status}: ${t.slice(0, 500)}`);
-  }
-  const json = (await res.json()) as ApiResponse<{ products?: FpProduct[] }>;
-  if (json.status && json.status !== "ok" && json.status_code && json.status_code >= 400) {
-    throw new Error(json.message || `4Partners: ${String(json.status_code)}`);
-  }
-  return json.result?.products || [];
-}
-
-/** Один и тот же page size, что в ответе API (обычно до 500 за запрос). */
-const PAGE_SIZE_HINT = 500;
-
-/**
- * Пайплайн на каждой странице выгрузки: меньше держим в памяти и быстрее match,
- * чем «скачать всю рубрику → потом отфильтровать».
- * Число запросов к API то же; пик RAM и работа runCompare снижаются.
- */
-export type RubricFetchPipeline = {
-  excludeIds?: Set<number>;
-  /** Для счётчика «id из списка не встретился в рубрике» */
-  excludeIdsRaw?: number[];
-  brands?: string[];
-  brandMatch?: BrandMatchMode;
-  models?: string[];
-  modelMatch?: ModelMatchMode;
-};
-
-export type FetchAllProductsResult = {
-  products: FpProduct[];
-  brandExcludedMissing: number;
-  brandExcludedNotInList: number;
-  modelExcludedNotInList: number;
-  excludeMeta?: {
-    removedFromA: number;
-    listIdsNotFoundInRubric: number;
-  };
-};
-
-export async function fetchAllProductsInRubric(
-  token: string,
-  siteVariation: string,
-  rubricId: number,
-  pipeline?: RubricFetchPipeline
-): Promise<FetchAllProductsResult> {
-  const excludeSet = pipeline?.excludeIds;
-  const excludeRaw = pipeline?.excludeIdsRaw;
-  const brands = pipeline?.brands?.length ? pipeline.brands : null;
-  const brandMatch: BrandMatchMode = pipeline?.brandMatch === "contains" ? "contains" : "exact";
-  const models = pipeline?.models?.length ? pipeline.models : null;
-  const modelMatch: ModelMatchMode = pipeline?.modelMatch === "exact" ? "exact" : "contains";
-
-  const all: FpProduct[] = [];
-  let brandExcludedMissing = 0;
-  let brandExcludedNotInList = 0;
-  let modelExcludedNotInList = 0;
-  let removedFromA = 0;
-  const idsSeenInRubric = new Set<number>();
-
-  for (let page = 1; ; page++) {
-    const chunk = await fetchProductListPage(token, siteVariation, rubricId, page);
-    if (!chunk.length) break;
-    for (const p of chunk) {
-      idsSeenInRubric.add(p.id);
-    }
-    let working = chunk;
-    if (excludeSet && excludeSet.size > 0) {
-      for (const p of chunk) {
-        if (excludeSet.has(p.id)) removedFromA += 1;
-      }
-      working = working.filter((p) => !excludeSet.has(p.id));
-    }
-    if (brands) {
-      const r = filterFpProductsByBrands(working, brands, brandMatch);
-      brandExcludedMissing += r.excludedMissingBrand;
-      brandExcludedNotInList += r.excludedNotInList;
-      working = r.products;
-    }
-    if (models) {
-      const r = filterFpProductsByModels(working, models, modelMatch);
-      modelExcludedNotInList += r.excludedNotInList;
-      working = r.products;
-    }
-    all.push(...working);
-    if (chunk.length < PAGE_SIZE_HINT) break;
-  }
-
-  let excludeMeta: FetchAllProductsResult["excludeMeta"];
-  if (excludeSet && excludeRaw && excludeRaw.length > 0) {
-    let listIdsNotFoundInRubric = 0;
-    for (const id of excludeSet) {
-      if (!idsSeenInRubric.has(id)) listIdsNotFoundInRubric += 1;
-    }
-    excludeMeta = { removedFromA, listIdsNotFoundInRubric };
-  }
-
-  return {
-    products: all,
-    brandExcludedMissing,
-    brandExcludedNotInList,
-    modelExcludedNotInList,
-    excludeMeta
-  };
-}
-
-/** Только уникальные id товаров по рубрике (после того же пайплайна, что fetchAllProductsInRubric — мало RAM). */
-export type FetchRubricIdsResult = Omit<FetchAllProductsResult, "products"> & {
-  ids: number[];
-};
-
-export async function fetchRubricProductIds(
-  token: string,
-  siteVariation: string,
-  rubricId: number,
-  pipeline?: RubricFetchPipeline
-): Promise<FetchRubricIdsResult> {
-  const excludeSet = pipeline?.excludeIds;
-  const excludeRaw = pipeline?.excludeIdsRaw;
-  const brands = pipeline?.brands?.length ? pipeline.brands : null;
-  const brandMatch: BrandMatchMode =
-    pipeline?.brandMatch === "contains" ? "contains" : "exact";
-  const models = pipeline?.models?.length ? pipeline.models : null;
-  const modelMatch: ModelMatchMode =
-    pipeline?.modelMatch === "exact" ? "exact" : "contains";
-
-  const idSet = new Set<number>();
-  let brandExcludedMissing = 0;
-  let brandExcludedNotInList = 0;
-  let modelExcludedNotInList = 0;
-  let removedFromA = 0;
-  const idsSeenInRubric = new Set<number>();
-
-  for (let page = 1; ; page++) {
-    const chunk = await fetchProductListPage(token, siteVariation, rubricId, page);
-    if (!chunk.length) break;
-    for (const p of chunk) {
-      idsSeenInRubric.add(p.id);
-    }
-    let working = chunk;
-    if (excludeSet && excludeSet.size > 0) {
-      for (const p of chunk) {
-        if (excludeSet.has(p.id)) removedFromA += 1;
-      }
-      working = working.filter((p) => !excludeSet.has(p.id));
-    }
-    if (brands) {
-      const r = filterFpProductsByBrands(working, brands, brandMatch);
-      brandExcludedMissing += r.excludedMissingBrand;
-      brandExcludedNotInList += r.excludedNotInList;
-      working = r.products;
-    }
-    if (models) {
-      const r = filterFpProductsByModels(working, models, modelMatch);
-      modelExcludedNotInList += r.excludedNotInList;
-      working = r.products;
-    }
-    for (const p of working) {
-      idSet.add(p.id);
-    }
-    if (chunk.length < PAGE_SIZE_HINT) break;
-  }
-
-  let excludeMeta: FetchAllProductsResult["excludeMeta"];
-  if (excludeSet && excludeRaw && excludeRaw.length > 0) {
-    let listIdsNotFoundInRubric = 0;
-    for (const id of excludeSet) {
-      if (!idsSeenInRubric.has(id)) listIdsNotFoundInRubric += 1;
-    }
-    excludeMeta = { removedFromA, listIdsNotFoundInRubric };
-  }
-
-  const ids = [...idSet].sort((a, b) => a - b);
-
-  return {
-    ids,
-    brandExcludedMissing,
-    brandExcludedNotInList,
-    modelExcludedNotInList,
-    excludeMeta
-  };
-}
-
-/** Несколько рубрик B: id объединяются без дублей. */
-export async function fetchMergedRubricsProductIds(
-  token: string,
-  siteVariation: string,
-  rubricIds: number[],
-  pipeline?: RubricFetchPipeline
-): Promise<FetchRubricIdsResult> {
-  const uniqIds = [...new Set(rubricIds.filter((id) => id > 0))];
-  if (uniqIds.length === 0) {
-    return {
-      ids: [],
-      brandExcludedMissing: 0,
-      brandExcludedNotInList: 0,
-      modelExcludedNotInList: 0
-    };
-  }
-  if (uniqIds.length === 1) {
-    return fetchRubricProductIds(token, siteVariation, uniqIds[0]!, pipeline);
-  }
-  const batches = await Promise.all(
-    uniqIds.map((rubricId) =>
-      fetchRubricProductIds(token, siteVariation, rubricId, pipeline)
-    )
-  );
-  const merged = new Set<number>();
-  let brandExcludedMissing = 0;
-  let brandExcludedNotInList = 0;
-  let modelExcludedNotInList = 0;
-  for (const batch of batches) {
-    brandExcludedMissing += batch.brandExcludedMissing;
-    brandExcludedNotInList += batch.brandExcludedNotInList;
-    modelExcludedNotInList += batch.modelExcludedNotInList;
-    for (const id of batch.ids) {
-      merged.add(id);
-    }
-  }
-  return {
-    ids: [...merged].sort((a, b) => a - b),
-    brandExcludedMissing,
-    brandExcludedNotInList,
-    modelExcludedNotInList
-  };
-}
-
-/** GET /product/info/{ids}/{siteVariation} — до 50 id за запрос (Partner Site API). */
-const PRODUCT_INFO_BATCH = 50;
-
-function pushProductsFromInfoPayload(result: unknown, out: FpProduct[]): void {
-  if (!result || typeof result !== "object") return;
-  const r = result as Record<string, unknown>;
-  const arr = r.products;
-  if (Array.isArray(arr)) {
-    out.push(...(arr as FpProduct[]));
-    return;
-  }
-  const prod = r.product;
-  if (Array.isArray(prod)) {
-    out.push(...(prod as FpProduct[]));
-    return;
-  }
-  if (prod && typeof prod === "object" && "id" in prod) {
-    out.push(prod as FpProduct);
-  }
-}
-
-export async function fetchProductsByIds(
-  token: string,
-  siteVariation: string,
-  ids: number[]
-): Promise<FpProduct[]> {
-  const uniq = [
-    ...new Set(
-      ids
-        .map((n) => Math.floor(Number(n)))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    )
-  ].sort((a, b) => a - b);
-  const out: FpProduct[] = [];
-  const seen = new Set<number>();
-
-  for (let i = 0; i < uniq.length; i += PRODUCT_INFO_BATCH) {
-    const batch = uniq.slice(i, i + PRODUCT_INFO_BATCH);
-    const idsPath = batch.join(",");
-    const url = `${baseUrl()}/product/info/${idsPath}/${encodeURIComponent(siteVariation)}`;
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "X-Auth-Token": token,
-        "User-Agent": USER_AGENT
-      },
-      cache: "no-store"
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`4Partners product/info ${res.status}: ${t.slice(0, 500)}`);
-    }
-    const json = (await res.json()) as ApiResponse<unknown>;
-    if (
-      json.status &&
-      json.status !== "ok" &&
-      json.status_code &&
-      json.status_code >= 400
-    ) {
-      throw new Error(json.message || `4Partners: ${String(json.status_code)}`);
-    }
-    pushProductsFromInfoPayload(json.result, out);
-  }
-
-  const deduped: FpProduct[] = [];
-  for (const p of out) {
-    if (!seen.has(p.id)) {
-      seen.add(p.id);
-      deduped.push(p);
-    }
-  }
-  return deduped;
-}
-
-/** Несколько рубрик на одной витрине B: параллельная выгрузка, склейка по id без дублей (первое вхождение). */
-export async function fetchMergedRubricsProducts(
-  token: string,
-  siteVariation: string,
-  rubricIds: number[],
-  pipeline?: RubricFetchPipeline
-): Promise<FetchAllProductsResult> {
-  const uniqIds = [...new Set(rubricIds.filter((id) => id > 0))];
-  if (uniqIds.length === 0) {
-    return {
-      products: [],
-      brandExcludedMissing: 0,
-      brandExcludedNotInList: 0,
-      modelExcludedNotInList: 0
-    };
-  }
-  if (uniqIds.length === 1) {
-    return fetchAllProductsInRubric(token, siteVariation, uniqIds[0]!, pipeline);
-  }
-  const batches = await Promise.all(
-    uniqIds.map((rubricId) =>
-      fetchAllProductsInRubric(token, siteVariation, rubricId, pipeline)
-    )
-  );
-  const byId = new Map<number, FpProduct>();
-  let brandExcludedMissing = 0;
-  let brandExcludedNotInList = 0;
-  let modelExcludedNotInList = 0;
-  for (const batch of batches) {
-    brandExcludedMissing += batch.brandExcludedMissing;
-    brandExcludedNotInList += batch.brandExcludedNotInList;
-    modelExcludedNotInList += batch.modelExcludedNotInList;
-    for (const p of batch.products) {
-      if (!byId.has(p.id)) byId.set(p.id, p);
-    }
-  }
-  return {
-    products: [...byId.values()],
-    brandExcludedMissing,
-    brandExcludedNotInList,
-    modelExcludedNotInList
-  };
-}
-
-/** Категория из /rubric/main и /rubric/child (Partner Site API V1) */
 export type FpRubric = {
   id: number;
   parent_id: number | null;
@@ -401,64 +19,372 @@ export type FpRubric = {
   position?: number;
 };
 
-async function readRubricListResponse(
-  res: Response
-): Promise<FpRubric[]> {
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`4Partners ${res.status}: ${t.slice(0, 500)}`);
-  }
-  const json = (await res.json()) as ApiResponse<{ rubrics?: FpRubric[] }>;
-  if (json.status && json.status !== "ok" && json.status_code && json.status_code >= 400) {
-    throw new Error(json.message || `4Partners: ${String(json.status_code)}`);
-  }
-  return json.result?.rubrics || [];
+type ApiEnvelope<T> = { status?: string; status_code?: number; result?: T };
+
+function apiBase(): string {
+  return (process.env.FOURPARTNERS_API_BASE || DEFAULT_BASE).replace(/\/+$/, "");
 }
 
-/** Активные витринные рубрики (без бана) — для выпадающих списков */
-export function filterActiveRubricsForUi(rubrics: FpRubric[]): FpRubric[] {
-  return rubrics.filter(
-    (r) => r.is_active === true && r.is_ban !== true
-  );
+async function fpFetch(token: string, path: string, init?: RequestInit): Promise<Response> {
+  const url = `${apiBase()}${path.startsWith("/") ? path : `/${path}`}`;
+  return fetch(url, {
+    ...init,
+    headers: {
+      "X-Auth-Token": token,
+      "User-Agent": USER_AGENT,
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.headers as Record<string, string>)
+    },
+    cache: "no-store"
+  });
 }
 
-export function sortRubricsForUi(rubrics: FpRubric[]): FpRubric[] {
-  return [...rubrics].sort(
-    (a, b) =>
-      (a.position ?? 0) - (b.position ?? 0) ||
-      a.name.localeCompare(b.name, "ru", { sensitivity: "base" })
-  );
+function httpErr(path: string, res: Response, text: string): never {
+  throw new Error(`4Partners ${path} → HTTP ${res.status}: ${text.slice(0, 500)}`);
+}
+
+export type RubricFetchPipeline = {
+  brands?: string[];
+  brandMatch?: BrandMatchMode;
+  models?: string[];
+  modelMatch?: ModelMatchMode;
+  excludeIds?: Set<number>;
+  excludeIdsRaw?: number[];
+};
+
+export type FetchRubricProductsResult = {
+  products: FpProduct[];
+  excludeMeta?: { removedFromA: number; listIdsNotFoundInRubric: number };
+  brandExcludedMissing: number;
+  brandExcludedNotInList: number;
+  modelExcludedNotInList: number;
+};
+
+export type FetchRubricIdsResult = {
+  ids: number[];
+  excludeMeta?: { removedFromA: number; listIdsNotFoundInRubric: number };
+  brandExcludedMissing: number;
+  brandExcludedNotInList: number;
+  modelExcludedNotInList: number;
+};
+
+function normalizeRubrics(raw: FpRubric[]): FpRubric[] {
+  return raw
+    .filter((r) => r.is_active !== false && r.is_ban !== true)
+    .sort((a, b) => {
+      const d = (a.position ?? 0) - (b.position ?? 0);
+      return d !== 0 ? d : String(a.name).localeCompare(String(b.name), "ru");
+    });
 }
 
 export async function fetchMainRubrics(token: string): Promise<FpRubric[]> {
-  const url = `${baseUrl()}/rubric/main`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "X-Auth-Token": token,
-      "User-Agent": USER_AGENT
-    },
-    cache: "no-store"
-  });
-  const list = await readRubricListResponse(res);
-  return sortRubricsForUi(filterActiveRubricsForUi(list));
+  const res = await fpFetch(token, "/rubric/main", { method: "GET" });
+  const text = await res.text();
+  if (!res.ok) httpErr("/rubric/main", res, text);
+  const json = JSON.parse(text) as ApiEnvelope<{ rubrics?: FpRubric[] }>;
+  return normalizeRubrics(json.result?.rubrics ?? []);
 }
 
-export async function fetchRubricChildren(
+export async function fetchRubricChildren(token: string, parentId: number): Promise<FpRubric[]> {
+  const path = `/rubric/child/${parentId}`;
+  const res = await fpFetch(token, path, { method: "GET" });
+  const text = await res.text();
+  if (!res.ok) httpErr(path, res, text);
+  const json = JSON.parse(text) as ApiEnvelope<{ rubrics?: FpRubric[] }>;
+  return normalizeRubrics(json.result?.rubrics ?? []);
+}
+
+function readPagination(result: Record<string, unknown>) {
+  const pg =
+    (result.pagination_info as Record<string, unknown> | undefined) ||
+    (result.pager as Record<string, unknown> | undefined) ||
+    {};
+  return {
+    hasMore: Boolean(pg.has_more ?? pg.hasMore ?? false),
+    page: Number(pg.page ?? 1),
+    perPage: Number(pg.per_page ?? pg.perPage ?? 0)
+  };
+}
+
+function readProducts(result: Record<string, unknown>): FpProduct[] {
+  const raw =
+    (result.products as FpProduct[] | undefined) ||
+    (result.product as FpProduct[] | undefined) ||
+    [];
+  return Array.isArray(raw) ? raw : [];
+}
+
+async function fetchProductListRawPage(
   token: string,
-  parentId: number
-): Promise<FpRubric[]> {
-  const url = `${baseUrl()}/rubric/child/${encodeURIComponent(String(parentId))}`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "X-Auth-Token": token,
-      "User-Agent": USER_AGENT
-    },
-    cache: "no-store"
+  variation: string,
+  rubricId: number,
+  page: number
+) {
+  const path = `/product/list/${encodeURIComponent(variation)}/products`;
+  const res = await fpFetch(token, path, {
+    method: "POST",
+    body: JSON.stringify({ page, filter_rubrics: [rubricId], order: "popular" })
   });
-  const list = await readRubricListResponse(res);
-  return sortRubricsForUi(filterActiveRubricsForUi(list));
+  const text = await res.text();
+  if (!res.ok) httpErr(path, res, text);
+  const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
+  const result = (json.result ?? {}) as Record<string, unknown>;
+  const products = filterFpProductsActiveOffers(readProducts(result));
+  const pag = readPagination(result);
+  return {
+    products,
+    hasMore: pag.hasMore,
+    page: pag.page,
+    perPage: pag.perPage
+  };
+}
+
+export function applyRubricFetchPipeline(products: FpProduct[], pipe: RubricFetchPipeline, leg: "A" | "B") {
+  let working = products;
+  let excludeRemovedFromA = 0;
+
+  if (leg === "A" && pipe.excludeIds && pipe.excludeIds.size > 0) {
+    const ex = filterSiteAByExcludedProductIds(
+      working,
+      pipe.excludeIdsRaw?.length ? pipe.excludeIdsRaw : [...pipe.excludeIds]
+    );
+    excludeRemovedFromA = ex.removedFromA;
+    working = ex.products;
+  }
+
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  if (pipe.brands?.length) {
+    const r = filterFpProductsByBrands(working, pipe.brands, pipe.brandMatch ?? "exact");
+    brandExcludedMissing = r.excludedMissingBrand;
+    brandExcludedNotInList = r.excludedNotInList;
+    working = r.products;
+  }
+
+  let modelExcludedNotInList = 0;
+  if (pipe.models?.length) {
+    const r = filterFpProductsByModels(working, pipe.models, pipe.modelMatch ?? "exact");
+    modelExcludedNotInList = r.excludedNotInList;
+    working = r.products;
+  }
+
+  return {
+    out: working,
+    excludeRemovedFromA,
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList
+  };
+}
+
+export async function fetchNoveltyIdsSlicePage(
+  token: string,
+  variation: string,
+  rubricId: number,
+  page: number,
+  pipe: RubricFetchPipeline,
+  leg: "A" | "B"
+) {
+  const { products: raw, hasMore, page: pg, perPage } = await fetchProductListRawPage(
+    token,
+    variation,
+    rubricId,
+    page
+  );
+  const rawCatalogIdsBeforeExclude = raw.map((p) => p.id);
+  const applied = applyRubricFetchPipeline(raw, pipe, leg);
+  return {
+    ids: applied.out.map((p) => p.id),
+    rawCatalogIdsBeforeExclude,
+    hasMore,
+    page: pg,
+    perPage,
+    brandExcludedMissing: applied.brandExcludedMissing,
+    brandExcludedNotInList: applied.brandExcludedNotInList,
+    modelExcludedNotInList: applied.modelExcludedNotInList,
+    excludeRemovedFromA: applied.excludeRemovedFromA
+  };
+}
+
+export async function fetchAllProductsInRubric(
+  token: string,
+  variation: string,
+  rubricId: number,
+  pipe: RubricFetchPipeline
+): Promise<FetchRubricProductsResult> {
+  const merged = new Map<number, FpProduct>();
+  const rawSeen = new Set<number>();
+  let pageReq = 1;
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  let modelExcludedNotInList = 0;
+  let excludeRemovedFromA = 0;
+
+  for (let iter = 0; iter < MAX_RUBRIC_PAGES; iter++) {
+    const { products: raw, hasMore, page: pg } = await fetchProductListRawPage(
+      token,
+      variation,
+      rubricId,
+      pageReq
+    );
+    for (const p of raw) rawSeen.add(p.id);
+    const applied = applyRubricFetchPipeline(raw, pipe, "A");
+    excludeRemovedFromA += applied.excludeRemovedFromA;
+    brandExcludedMissing += applied.brandExcludedMissing;
+    brandExcludedNotInList += applied.brandExcludedNotInList;
+    modelExcludedNotInList += applied.modelExcludedNotInList;
+    for (const p of applied.out) merged.set(p.id, p);
+    if (!hasMore || raw.length === 0) break;
+    pageReq = pg + 1;
+  }
+
+  let excludeMeta: FetchRubricProductsResult["excludeMeta"];
+  if (pipe.excludeIdsRaw?.length) {
+    let nf = 0;
+    for (const id of pipe.excludeIdsRaw) if (!rawSeen.has(id)) nf++;
+    excludeMeta = { removedFromA: excludeRemovedFromA, listIdsNotFoundInRubric: nf };
+  }
+
+  return {
+    products: [...merged.values()],
+    excludeMeta,
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList
+  };
+}
+
+async function fetchAllProductIdsInRubric(
+  token: string,
+  variation: string,
+  rubricId: number,
+  pipe: RubricFetchPipeline,
+  leg: "A" | "B"
+): Promise<FetchRubricIdsResult> {
+  const merged = new Set<number>();
+  const rawSeen = new Set<number>();
+  let pageReq = 1;
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  let modelExcludedNotInList = 0;
+  let excludeRemovedFromA = 0;
+
+  for (let iter = 0; iter < MAX_RUBRIC_PAGES; iter++) {
+    const { products: raw, hasMore, page: pg } = await fetchProductListRawPage(
+      token,
+      variation,
+      rubricId,
+      pageReq
+    );
+    for (const p of raw) rawSeen.add(p.id);
+    const applied = applyRubricFetchPipeline(raw, pipe, leg);
+    excludeRemovedFromA += applied.excludeRemovedFromA;
+    brandExcludedMissing += applied.brandExcludedMissing;
+    brandExcludedNotInList += applied.brandExcludedNotInList;
+    modelExcludedNotInList += applied.modelExcludedNotInList;
+    for (const p of applied.out) merged.add(p.id);
+    if (!hasMore || raw.length === 0) break;
+    pageReq = pg + 1;
+  }
+
+  let excludeMeta: FetchRubricIdsResult["excludeMeta"];
+  if (leg === "A" && pipe.excludeIdsRaw?.length) {
+    let nf = 0;
+    for (const id of pipe.excludeIdsRaw) if (!rawSeen.has(id)) nf++;
+    excludeMeta = { removedFromA: excludeRemovedFromA, listIdsNotFoundInRubric: nf };
+  }
+
+  return {
+    ids: [...merged].sort((a, b) => a - b),
+    excludeMeta,
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList
+  };
+}
+
+export async function fetchMergedRubricsProducts(
+  token: string,
+  variation: string,
+  rubricIds: number[],
+  pipe: RubricFetchPipeline
+): Promise<FetchRubricProductsResult> {
+  const maps = await Promise.all(
+    rubricIds.map((rid) => fetchAllProductsInRubric(token, variation, rid, pipe))
+  );
+  const merged = new Map<number, FpProduct>();
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  let modelExcludedNotInList = 0;
+  let excludeMeta: FetchRubricProductsResult["excludeMeta"];
+
+  for (const m of maps) {
+    for (const p of m.products) merged.set(p.id, p);
+    brandExcludedMissing += m.brandExcludedMissing;
+    brandExcludedNotInList += m.brandExcludedNotInList;
+    modelExcludedNotInList += m.modelExcludedNotInList;
+    if (m.excludeMeta) excludeMeta = m.excludeMeta;
+  }
+
+  return {
+    products: [...merged.values()],
+    excludeMeta,
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList
+  };
+}
+
+export async function fetchMergedRubricsProductIds(
+  token: string,
+  variation: string,
+  rubricIds: number[],
+  pipe: RubricFetchPipeline,
+  leg: "A" | "B"
+): Promise<FetchRubricIdsResult> {
+  const maps = await Promise.all(
+    rubricIds.map((rid) => fetchAllProductIdsInRubric(token, variation, rid, pipe, leg))
+  );
+  const merged = new Set<number>();
+  let brandExcludedMissing = 0;
+  let brandExcludedNotInList = 0;
+  let modelExcludedNotInList = 0;
+  let excludeMeta: FetchRubricIdsResult["excludeMeta"];
+
+  for (const m of maps) {
+    for (const id of m.ids) merged.add(id);
+    brandExcludedMissing += m.brandExcludedMissing;
+    brandExcludedNotInList += m.brandExcludedNotInList;
+    modelExcludedNotInList += m.modelExcludedNotInList;
+    if (m.excludeMeta) excludeMeta = m.excludeMeta;
+  }
+
+  return {
+    ids: [...merged].sort((a, b) => a - b),
+    excludeMeta,
+    brandExcludedMissing,
+    brandExcludedNotInList,
+    modelExcludedNotInList
+  };
+}
+
+export async function fetchProductsByIds(
+  token: string,
+  variation: string,
+  ids: number[]
+): Promise<FpProduct[]> {
+  if (!ids.length) return [];
+  const out: FpProduct[] = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
+    const res = await fpFetch(token, path, { method: "GET" });
+    const text = await res.text();
+    if (!res.ok) httpErr(path, res, text);
+    const json = JSON.parse(text) as ApiEnvelope<{ product?: FpProduct | FpProduct[] }>;
+    const prod = json.result?.product;
+    const arr = Array.isArray(prod) ? prod : prod ? [prod] : [];
+    out.push(...filterFpProductsActiveOffers(arr));
+  }
+  return out;
 }

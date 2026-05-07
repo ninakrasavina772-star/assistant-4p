@@ -27,6 +27,8 @@ export type FpProduct = {
       ean?: string;
       images?: string[];
       link?: string;
+      /** Активный остаток по офферу (Partner API); null/0 — вариант без активного оффера */
+      quantity?: number | null;
     }
   > | null;
   /** Артикул/код, если API отдаёт */
@@ -176,6 +178,26 @@ export type UnlikelySearchInfo = {
   volume: boolean;
   shade: boolean;
   color: boolean;
+};
+
+/** Один запрос пагинации для шага 1 «новинки по id» (укладывается в короткий лимит Vercel). */
+export type NoveltyIdsSliceResult = {
+  resultKind: "noveltyIdsSlice";
+  leg: "A" | "B";
+  rubricId: number;
+  /** Страница из запроса клиента (для продолжения цикла). */
+  page: number;
+  ids: number[];
+  /** Все id карточек на странице до исключения по списку id на A (только для сверки excludeIds). */
+  rawCatalogIdsBeforeExclude: number[];
+  hasMore: boolean;
+  perPage: number;
+  statsSlice: {
+    brandExcludedMissing: number;
+    brandExcludedNotInList: number;
+    modelExcludedNotInList: number;
+    excludeRemovedFromA: number;
+  };
 };
 
 /** Этап 1: только сравнение множеств id по рубрикам A и B (без полных карточек и без runCompare) */
@@ -396,4 +418,6 @@ export type CompareResult = {
   unlikelySearch?: UnlikelySearchInfo;
   /** Сайт B загружен через GET /product/info по списку новинок (этап 1), не целиком из рубрик */
   siteBFetchedByNoveltyIds?: boolean;
+  /** Каталоги A/B из CSV-фидов (не выгрузка по рубрикам API) */
+  catalogFromFeeds?: boolean;
 };

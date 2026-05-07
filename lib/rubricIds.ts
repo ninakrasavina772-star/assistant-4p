@@ -1,5 +1,8 @@
-/** id рубрик из текста поля или каскада (Б — можно несколько). */
-const MAX_RUBRIC_IDS = 40;
+/** Максимум узких рубрик на витрине B (API + UI). */
+export const MAX_RUBRICS_B = 6;
+
+/** Защита от огромной вставки в поле: после стольки уникальных id дальше не читаем. */
+const MAX_RUBRIC_IDS_PARSED = 64;
 
 export function parseRubricIdsFromText(text: string): number[] {
   const seen = new Set<number>();
@@ -13,19 +16,33 @@ export function parseRubricIdsFromText(text: string): number[] {
     if (seen.has(id)) continue;
     seen.add(id);
     out.push(id);
-    if (out.length >= MAX_RUBRIC_IDS) break;
+    if (out.length >= MAX_RUBRIC_IDS_PARSED) break;
   }
   return out;
 }
 
 export function mergeUniqueSortedRubricId(
   currentText: string,
-  rubricId: number
-): string {
-  if (!Number.isFinite(rubricId) || rubricId < 1) return currentText;
+  rubricId: number,
+  options?: { max?: number }
+): { text: string; limitReached: boolean } {
+  const max = options?.max ?? MAX_RUBRICS_B;
+  if (!Number.isFinite(rubricId) || rubricId < 1) {
+    return { text: currentText, limitReached: false };
+  }
   const xs = parseRubricIdsFromText(currentText);
-  if (!xs.includes(rubricId)) xs.push(rubricId);
-  return xs
-    .sort((a, b) => a - b)
-    .join("\n");
+  if (xs.includes(rubricId)) {
+    return {
+      text: xs.sort((a, b) => a - b).join("\n"),
+      limitReached: false
+    };
+  }
+  if (xs.length >= max) {
+    return { text: currentText, limitReached: true };
+  }
+  xs.push(rubricId);
+  return {
+    text: xs.sort((a, b) => a - b).join("\n"),
+    limitReached: false
+  };
 }

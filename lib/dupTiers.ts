@@ -7,7 +7,7 @@ import {
   type PhashCache,
   visualSimilarFromPhash
 } from "./imagePhash";
-import { nameAndModelScore } from "./nameModel";
+import { modelLineStrictPrefixExtensionConflict, nameAndModelScore } from "./nameModel";
 import { nameSimilarity, normalizeComparableName } from "./nameSimilarity";
 import { applyAttrGate, normBrand, sameBrandForFuzzy } from "./pairScoring";
 import { pickComparableName, toCompareProduct } from "./product";
@@ -223,6 +223,8 @@ function resolveTierForPair(
   const imgI = cI.firstImage || "";
   const imgJ = cJ.firstImage || "";
   const urlEq = firstImageRefEquivalent(imgI, imgJ);
+
+  if (modelLineStrictPrefixExtensionConflict(mA, mB) && !urlEq) return null;
 
   if (urlEq && comb >= PARTIAL_NAME_MIN_90) {
     const g = applyAttrGate(cI, cJ, attrOpts, 0.9, [
