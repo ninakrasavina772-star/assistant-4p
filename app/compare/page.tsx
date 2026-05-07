@@ -1478,8 +1478,7 @@ export default function ComparePage() {
           compareMode === "twoSite" &&
           !brandsRequiredForTwoSite &&
           !dupContourUsesNoveltyList &&
-          !noveltiesByIdUsesStoredList &&
-          catalogSource !== "feeds"
+          !noveltiesByIdUsesStoredList
             ? "Добавьте хотя бы один бренд в поле ниже или загрузите список из файла."
             : null
       },
