@@ -412,6 +412,11 @@ export default function ComparePage() {
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
+      const fetchSiteBOnlyByNoveltyIds =
+        compareMode === "twoSite" &&
+        noveltyIdsStored.length > 0 &&
+        (twoSiteGoal === "noveltiesById" ||
+          (twoSiteGoal === "dupContourAgainstA" && useNoveltyIdsForSiteB));
       const res = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -420,16 +425,11 @@ export default function ComparePage() {
           mode: compareMode === "singleDups" ? "singleDups" : undefined,
           rubricA: Number(rubricA),
           ...(compareMode === "twoSite" &&
-          !(
-            twoSiteGoal === "dupContourAgainstA" && useNoveltyIdsForSiteB
-          ) &&
+          !fetchSiteBOnlyByNoveltyIds &&
           rubricBParsedIds.length > 0
             ? { rubricsB: rubricBParsedIds }
             : {}),
-          ...(compareMode === "twoSite" &&
-          twoSiteGoal === "dupContourAgainstA" &&
-          useNoveltyIdsForSiteB &&
-          noveltyIdsStored.length > 0
+          ...(fetchSiteBOnlyByNoveltyIds
             ? {
                 siteBFetchMode: "noveltyIds",
                 noveltyIdsB: noveltyIdsStored
@@ -562,15 +562,23 @@ export default function ComparePage() {
     twoSiteGoal === "dupContourAgainstA" &&
     useNoveltyIdsForSiteB;
 
+  /** После синего шага 1: полное сравнение «Найти новинки» берёт B только по сохранённым id */
+  const noveltiesByIdUsesStoredList =
+    compareMode === "twoSite" &&
+    twoSiteGoal === "noveltiesById" &&
+    noveltyIdsStored.length > 0;
+
   /** Для основного запуска: в режиме «только новинки» рубрики B не обязательны */
   const rubricBOkForRun =
     compareMode !== "twoSite" ||
     dupContourUsesNoveltyList ||
+    noveltiesByIdUsesStoredList ||
     rubricBParsedIds.length >= 1;
 
   const brandsRequiredForTwoSite =
     compareMode !== "twoSite" ||
     dupContourUsesNoveltyList ||
+    noveltiesByIdUsesStoredList ||
     brandListCount > 0;
 
   const noveltyListOkForDup =
@@ -1114,7 +1122,7 @@ export default function ComparePage() {
       !loading;
     const step3Title =
       compareMode === "twoSite"
-        ? dupContourUsesNoveltyList
+        ? dupContourUsesNoveltyList || noveltiesByIdUsesStoredList
           ? "Бренды (по желанию) и доп. фильтры"
           : "Бренды (обязательно) и доп. фильтры"
         : "Доп. фильтры: бренды, модели, id";
@@ -1136,13 +1144,15 @@ export default function ComparePage() {
         title: "Рубрики",
         hint:
           compareMode === "twoSite"
-            ? "A — одна рубрика; B — одна или несколько (если товары разнесены по каталогу), id в списке."
+            ? noveltiesByIdUsesStoredList || dupContourUsesNoveltyList
+              ? "A — одна рубрика (для каталога A и синего шага 1). Для жёлтого «Найти новинки» витрина B берётся только из сохранённого списка id; поля рубрик B нужны для шага 1 и если список id очищен."
+              : "A — одна рубрика; B — одна или несколько (если товары разнесены по каталогу), id в списке."
             : "Нужна одна рубрика (id больше нуля).",
         ok: rubricsReady,
         fix: !rubricAOk
           ? "Укажите рубрику для сайта A."
           : compareMode === "twoSite" && !rubricBOkForRun
-            ? "Укажите хотя бы один id рубрики для сайта B (список ниже) или включите режим «только список новинок» и сохраните этап 1."
+            ? "Укажите хотя бы один id рубрики для сайта B (список ниже) — нужно для синего шага 1 и для запуска без сохранённых id. Если список новинок уже сохранён и выбрана задача «Найти новинки», для жёлтой кнопки рубрика B не обязательна."
             : null
       },
       {
@@ -1150,7 +1160,7 @@ export default function ComparePage() {
         title: step3Title,
         hint:
           compareMode === "twoSite"
-            ? dupContourUsesNoveltyList
+            ? dupContourUsesNoveltyList || noveltiesByIdUsesStoredList
               ? "Сайт B подгружается только по сохранённым id новинок; бренды и модели дополнительно отфильтруют этот список после получения карточек из API."
               : "Обязательно укажите бренды; при необходимости откройте блоки ниже — модели, исключение id, ужесточение по объёму/цвету."
             : "По желанию сузьте рубрику брендами, моделями или уберите лишние id с опорной витрины.",
@@ -1158,7 +1168,8 @@ export default function ComparePage() {
         fix:
           compareMode === "twoSite" &&
           !brandsRequiredForTwoSite &&
-          !dupContourUsesNoveltyList
+          !dupContourUsesNoveltyList &&
+          !noveltiesByIdUsesStoredList
             ? "Добавьте хотя бы один бренд в поле ниже или загрузите список из файла."
             : null
       },
@@ -1180,6 +1191,7 @@ export default function ComparePage() {
     rubricAOk,
     rubricBOkForRun,
     dupContourUsesNoveltyList,
+    noveltiesByIdUsesStoredList,
     brandsRequiredForTwoSite,
     noveltyListOkForDup,
     loading
@@ -1205,6 +1217,11 @@ export default function ComparePage() {
         `Первым экраном откроются товары на «${lb}», для которых нет пары с тем же внутренним id на «${la}». Это список «новых номенклатурных карточек» относительно опоры, если смотреть по id.`
       );
       out.push("Таблицу можно сохранить в Excel на открывшейся вкладке.");
+      if (noveltiesByIdUsesStoredList) {
+        out.push(
+          `Жёлтый запуск подгружает «${lb}» только по сохранённому списку id новинок, без полной выгрузки рубрики B.`
+        );
+      }
     } else {
       out.push(
         `Первым откроется сравнение пар: карточка на «${la}» и кандидат с «${lb}» — сначала надёжные совпадения по коду, затем мягкие по названию и картинке.`
@@ -1256,6 +1273,7 @@ export default function ComparePage() {
     assistantSiteNames,
     compareMode,
     twoSiteGoal,
+    noveltiesByIdUsesStoredList,
     brandListCount,
     modelListCount,
     excludeIdsListCount,
@@ -1697,6 +1715,21 @@ export default function ComparePage() {
             )}
           </div>
 
+          {noveltyIdsStored.length > 0 && (
+            <div className="mt-5 rounded-xl border-2 border-emerald-500 bg-emerald-50/95 px-4 py-3 text-sm text-emerald-950 shadow-sm">
+              <p className="font-bold leading-snug">
+                Витрина B для расчёта — только по сохранённым{" "}
+                <strong>{noveltyIdsStored.length}</strong> id новинок
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-emerald-900/95">
+                Жёлтая кнопка «Найти новинки» внизу страницы больше{" "}
+                <strong>не выгружает всю рубрику B</strong>: подтягиваются только эти id (быстрее и совпадает с шагом 1).
+                Кнопки шага 2 здесь тоже работают только с этим списком. Рубрики B в форме по-прежнему нужны для синего шага 1;
+                если очистите id — снова понадобится хотя бы одна рубрика B для полного сравнения.
+              </p>
+            </div>
+          )}
+
           <div
             className={`mt-6 rounded-xl border px-4 py-4 space-y-4 ${
               wizardStep2Disabled
@@ -1706,8 +1739,10 @@ export default function ComparePage() {
           >
             <p className="text-xs font-bold uppercase tracking-wider text-slate-700">Шаг 2</p>
             <p className="text-sm text-slate-700 leading-relaxed">
-              Доступно после шага 1. Дубли открываются на странице с вкладками; Excel для задач 1 и 3 скачивается
-              сразу после ответа сервера.
+              Доступно после шага 1. Сервер запрашивает карточки по каждому id из списка — при тысячах позиций это может
+              занять минуты или упираться в лимит хостинга; если долго «крутится», откройте вкладку «Сеть» (F12) или нажмите
+              «Отменить» у жёлтой кнопки внизу во время запроса. Дубли открываются на странице с вкладками; Excel для задач 1 и 3
+              скачивается сразу после ответа сервера.
             </p>
             <div className="grid gap-3 lg:grid-cols-3">
               <button
@@ -1756,6 +1791,34 @@ export default function ComparePage() {
               </button>
             </div>
           </div>
+
+          {loading && (
+            <div
+              className="mt-5 rounded-xl border border-sky-400 bg-sky-50 px-4 py-3 text-sm text-sky-950 shadow-inner"
+              role="status"
+              aria-live="polite"
+            >
+              <p className="font-medium leading-snug">
+                Идёт запрос к серверу (шаг 1 или шаг 2 мастера, или жёлтая кнопка ниже)… Это нормально, если таблица не
+                обновляется несколько десятков секунд.
+              </p>
+              <p className="mt-2 text-xs text-sky-900/90">
+                Прошло: <strong>{formatLoadElapsed(loadElapsed)}</strong>
+                {loadElapsed >= 40 ? (
+                  <span className="block mt-1">
+                    Дольше обычного — на бесплатном Vercel часто лимит ~60 с; большой список id или рубрика могут не успеть.
+                  </span>
+                ) : null}
+              </p>
+              <button
+                type="button"
+                onClick={cancelRun}
+                className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                Отменить запрос
+              </button>
+            </div>
+          )}
         </section>
       )}
 
