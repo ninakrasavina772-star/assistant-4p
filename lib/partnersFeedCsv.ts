@@ -95,7 +95,7 @@ function mergeAggs(aggs: Map<number, Agg>): FpProduct[] {
 export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]> {
   const stripped = stripPartnersFeedPreamble(csvText);
   const XLSX = await import("xlsx");
-  const wb = XLSX.read(stripped, { type: "string", FSRT: true });
+  const wb = XLSX.read(stripped, { type: "string" });
   const sh = wb.SheetNames[0];
   if (!sh) throw new Error("Пустой CSV после заголовка");
   const sheet = wb.Sheets[sh];
