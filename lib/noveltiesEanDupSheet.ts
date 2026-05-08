@@ -7,11 +7,17 @@ export const COL_EAN = "EAN";
 /** Заголовок результата в вашей таблице */
 export const COL_DUP_RESULT = "Дубль по eан";
 export const COL_DUP_RESULT_ALT = "Дубль по EAN";
+/** Латиница «ean», как часто в Google Sheets */
+export const COL_DUP_RESULT_ALT2 = "Дубль по ean";
 
 /** Лист «Новинки»: дубли по одинаковому названию → ссылки админки других строк */
 export const COL_PRODUCT_NAME = "Название товара";
 export const COL_ADMIN_LINK = "ссылка на админку";
+/** Как в выгрузке из Google Таблиц (без «ку» на конце) */
+export const COL_ADMIN_LINK_ALT = "ссылка на админ";
 export const COL_DUP_NAME_OR_PHOTO = "Дубль по названию или фото";
+/** Как в вашем листе со скриптом */
+export const COL_DUP_NAME_OR_PHOTO_ALT = "Дубль по названию";
 
 export type NoveltiesSheetForEanDup = {
   sheetName: string;
@@ -58,10 +64,13 @@ export function parseNoveltiesSheetForNamePhotoDup(
   const headerCells = matrix[0]!.map(normHeader);
   const art = findCol(headerCells, COL_ARTICLE);
   const nm = findCol(headerCells, COL_PRODUCT_NAME);
-  const lk = findCol(headerCells, COL_ADMIN_LINK);
+  const lk = findCol(headerCells, COL_ADMIN_LINK, COL_ADMIN_LINK_ALT);
   if (art < 0) throw new Error(`Не найдена колонка «${COL_ARTICLE}».`);
   if (nm < 0) throw new Error(`Не найдена колонка «${COL_PRODUCT_NAME}».`);
-  if (lk < 0) throw new Error(`Не найдена колонка «${COL_ADMIN_LINK}».`);
+  if (lk < 0)
+    throw new Error(
+      `Не найдена колонка «${COL_ADMIN_LINK}» или «${COL_ADMIN_LINK_ALT}».`
+    );
   const rows: string[][] = [headerCells];
   for (let r = 1; r < matrix.length; r++) {
     const line = matrix[r] ?? [];
@@ -153,7 +162,7 @@ export function extractArticleNameLinkColumns(sheet: NoveltiesSheetForEanDup): {
   const headers = sheet.rows[0]!.map(normHeader);
   const art = findCol(headers, COL_ARTICLE);
   const nm = findCol(headers, COL_PRODUCT_NAME);
-  const lk = findCol(headers, COL_ADMIN_LINK);
+  const lk = findCol(headers, COL_ADMIN_LINK, COL_ADMIN_LINK_ALT);
   const articles: string[] = [];
   const names: string[] = [];
   const links: string[] = [];
@@ -172,7 +181,7 @@ export function sheetWithDupColumn(
   labels: string[]
 ): string[][] {
   const headers = sheet.rows[0]!.map(normHeader);
-  let dupIdx = findCol(headers, COL_DUP_RESULT, COL_DUP_RESULT_ALT);
+  let dupIdx = findCol(headers, COL_DUP_RESULT, COL_DUP_RESULT_ALT, COL_DUP_RESULT_ALT2);
   const width = Math.max(...sheet.rows.map((r) => r.length), dupIdx >= 0 ? dupIdx + 1 : headers.length + 1);
 
   const headerRow = [...sheet.rows[0]!];
@@ -181,7 +190,13 @@ export function sheetWithDupColumn(
     dupIdx = headerRow.length;
     headerRow.push(COL_DUP_RESULT);
   } else {
-    headerRow[dupIdx] = COL_DUP_RESULT;
+    const prev = normHeader(headerRow[dupIdx]);
+    headerRow[dupIdx] =
+      prev === COL_DUP_RESULT_ALT ||
+      prev === COL_DUP_RESULT_ALT2 ||
+      prev === COL_DUP_RESULT
+        ? prev
+        : COL_DUP_RESULT;
   }
 
   const dataRowCount = sheet.rows.length - 1;
@@ -206,7 +221,7 @@ export function sheetWithNamePhotoDupColumn(
   labels: string[]
 ): string[][] {
   const headers = sheet.rows[0]!.map(normHeader);
-  let dupIdx = findCol(headers, COL_DUP_NAME_OR_PHOTO);
+  let dupIdx = findCol(headers, COL_DUP_NAME_OR_PHOTO, COL_DUP_NAME_OR_PHOTO_ALT);
   const width = Math.max(...sheet.rows.map((r) => r.length), dupIdx >= 0 ? dupIdx + 1 : headers.length + 1);
 
   const headerRow = [...sheet.rows[0]!];
@@ -215,7 +230,11 @@ export function sheetWithNamePhotoDupColumn(
     dupIdx = headerRow.length;
     headerRow.push(COL_DUP_NAME_OR_PHOTO);
   } else {
-    headerRow[dupIdx] = COL_DUP_NAME_OR_PHOTO;
+    const prev = normHeader(headerRow[dupIdx]);
+    headerRow[dupIdx] =
+      prev === COL_DUP_NAME_OR_PHOTO_ALT || prev === COL_DUP_NAME_OR_PHOTO
+        ? prev
+        : COL_DUP_NAME_OR_PHOTO;
   }
 
   const dataRowCount = sheet.rows.length - 1;

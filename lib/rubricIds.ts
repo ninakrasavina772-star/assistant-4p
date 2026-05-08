@@ -46,3 +46,9 @@ export function mergeUniqueSortedRubricId(
     limitReached: false
   };
 }
+
+/** Убрать один id из текста (как в поле B); порядок пересортировывается. */
+export function removeRubricIdFromText(currentText: string, rubricId: number): string {
+  const xs = parseRubricIdsFromText(currentText).filter((id) => id !== rubricId);
+  return xs.join("\n");
+}

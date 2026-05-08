@@ -248,7 +248,15 @@ export type SingleSiteDupsResult = {
   siteLabel: string;
   nameLocale: NameLocale;
   rubricId: number;
-  stats: { count: number };
+  stats: {
+    count: number;
+    /** Режим: список id из файла/тела запроса, карточки подтянуты по API */
+    idList?: {
+      requestedIds: number;
+      /** Сколько id из запроса не вернулись из /product/info (нет прав, удалён, опечатка) */
+      missingInApi: number;
+    };
+  };
   brandFilter?: CompareBrandFilterInfo;
   modelFilter?: CompareModelFilterInfo;
   excludeIdsA?: CompareExcludeIdsAInfo;

@@ -1,22 +1,35 @@
 import type { FpProduct } from "./types";
 
-/** Маркер строки заголовков в экспортном CSV 4Partners */
-const HEADER_MARKERS = ["Id товара", "ID товара"];
+/** Маркеры id товара в строке заголовка (русский и английский экспорт 4Partners) */
+const ID_HEADER_SUBSTRINGS = ["id товара", "product id"];
+/** Артикул / код вендора — достаточно одного вместе с id */
+const ARTICLE_HEADER_SUBSTRINGS = ["артикул", "sku", "article", "vendor code", "код товара"];
+
+function lineLooksLikePartnersFeedHeader(line: string): boolean {
+  const l = line.toLowerCase().replace(/^\uFEFF/, "");
+  const hasId = ID_HEADER_SUBSTRINGS.some((s) => l.includes(s));
+  const hasArticle = ARTICLE_HEADER_SUBSTRINGS.some((s) => l.includes(s));
+  /** Отдельное слово/колонка ean: не цепляемся за «ocean» и т.п. */
+  const hasEanCol =
+    /,\s*ean\s*,/i.test(line) ||
+    /,"ean"\s*,/i.test(line) ||
+    /^ean\s*,/i.test(l.trim()) ||
+    /,\s*ean\s*$/i.test(line);
+  return hasId && (hasArticle || hasEanCol);
+}
 
 export function stripPartnersFeedPreamble(fullText: string): string {
   const t = fullText.replace(/^\uFEFF/, "");
   const lines = t.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
+  const maxScan = Math.min(lines.length, 80);
+  for (let i = 0; i < maxScan; i++) {
     const line = lines[i]!;
-    if (
-      HEADER_MARKERS.some((m) => line.includes(m)) &&
-      (line.includes("Артикул") || line.includes("EAN"))
-    ) {
+    if (lineLooksLikePartnersFeedHeader(line)) {
       return lines.slice(i).join("\n");
     }
   }
   throw new Error(
-    `В тексте не найдена строка заголовка CSV с «${HEADER_MARKERS[0]}» и колонкой артикула/EAN`
+    "Не найдена строка заголовка фида. Нужны колонки id товара (например «Id товара» или «Product Id») и хотя бы одна из: артикул / SKU / EAN. Первые строки файла — не таблица или другой формат экспорта."
   );
 }
 
@@ -36,6 +49,26 @@ function findColIdx(headers: string[], ...names: string[]): number {
   return -1;
 }
 
+/** Нормализованное полное имя колонки — для нечёткого совпадения */
+function normHeaderKey(h: string): string {
+  return normCell(h)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Первая колонка, чей нормализованный заголовок содержит все токены (порядок не важен). */
+function findColIdxByTokens(headers: string[], tokens: string[]): number {
+  if (!tokens.length) return -1;
+  const row = headers.map(normHeaderKey);
+  for (let i = 0; i < row.length; i++) {
+    const key = row[i]!;
+    if (key && tokens.every((t) => key.includes(t))) return i;
+  }
+  return -1;
+}
 type Agg = {
   id: number;
   name: string;
@@ -107,16 +140,43 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
   if (!rows.length) throw new Error("Нет строк данных");
 
   const headers = (rows[0] ?? []).map(normCell);
-  const idIdx = findColIdx(headers, "Id товара", "ID товара");
-  const artIdx = findColIdx(headers, "Артикул");
-  const eanIdx = findColIdx(headers, "EAN");
-  const brandIdx = findColIdx(headers, "Бренд");
-  const urlIdx = findColIdx(headers, "Url", "URL");
-  const nameIdx = findColIdx(headers, "Название товара");
-  const imgIdx = findColIdx(headers, "Изображения варианта");
+  const idIdx = findColIdx(
+    headers,
+    "Id товара",
+    "ID товара",
+    "Product Id",
+    "Product ID"
+  );
+  const artIdx = findColIdx(
+    headers,
+    "Артикул",
+    "SKU",
+    "Article",
+    "Vendor code"
+  );
+  const eanIdx = findColIdx(headers, "EAN", "GTIN", "Gtin", "Штрихкод", "Ean");
+  const brandIdx = findColIdx(headers, "Бренд", "Brand");
+  const urlIdx = findColIdx(headers, "Url", "URL", "Link");
+  let nameIdx = findColIdx(
+    headers,
+    "Название товара",
+    "Product Name",
+    "Name"
+  );
+  if (nameIdx < 0) nameIdx = findColIdxByTokens(headers, ["product", "name"]);
+  let imgIdx = findColIdx(
+    headers,
+    "Изображения варианта",
+    "Variant Images",
+    "Product Images"
+  );
+  if (imgIdx < 0) imgIdx = findColIdxByTokens(headers, ["variant", "image"]);
 
-  if (idIdx < 0) throw new Error("Нет колонки «Id товара»");
-  if (nameIdx < 0) throw new Error("Нет колонки «Название товара»");
+  if (idIdx < 0) {
+    throw new Error(
+      "Не найдена колонка id товара. Ожидаются «Id товара», «ID товара» или «Product Id» (экспорт 4Partners)."
+    );
+  }
 
   const aggs = new Map<number, Agg>();
 
