@@ -203,10 +203,9 @@ type ResolvedTier =
 /** Параметры мягкой кросс-пары ({@link classifyCrossSoftPair}). */
 export type CrossSoftDupOptions = {
   /**
-   * Не блокировать пару только из‑за непересекающихся EAN (~8+ цифр на обеих карточках).
-   * Нужно для второго контура: «новинки по артикулу» против полного каталога — артикулы уже разошлись,
-   * но фиды могли дать разные штрихкоды при той же позиции; иначе ~90/~60/~45 почти всегда пустые
-   * на косметике с заполненными баркодами.
+   * Не блокировать пару только из‑за непересекающихся EAN (валидные штрихкоды на обеих карточках, но разные).
+   * Включено для второго контура между витринами и для мягкого слоя **в одной рубрике**: иначе при заполненных
+   * GTIN почти не остаётся кандидатов по названию/фото (~ косметика).
    */
   skipDisjointEanGuard?: boolean;
 };
@@ -307,7 +306,8 @@ function collectPairWork(
   byFuzzyBrand: Map<string, FpProduct[]>,
   usedInEan: Set<number>,
   nameLocale: NameLocale,
-  bannedPairKeys?: Set<string>
+  bannedPairKeys?: Set<string>,
+  pairOpts?: CrossSoftDupOptions
 ): PairWork[] {
   const out: PairWork[] = [];
   for (const [, list] of byFuzzyBrand) {
@@ -324,7 +324,12 @@ function collectPairWork(
         const na = pickComparableName(cI, nameLocale);
         const nb = pickComparableName(cJ, nameLocale);
         if (wordFollowedByConflictingDigit(na, nb)) continue;
-        if (softDupBlockedByDisjointEans(cI, cJ)) continue;
+        if (
+          !pairOpts?.skipDisjointEanGuard &&
+          softDupBlockedByDisjointEans(cI, cJ)
+        ) {
+          continue;
+        }
         const { full, model } = nameAndModelScore(
           na,
           nb,
@@ -364,6 +369,11 @@ const TIER_WEIGHT: Record<ResolvedTier["kind"], number> = {
   un: 1
 };
 
+/** Внутри одной рубрики не режем мягкий слой из‑за разных GTIN на паре (см. CrossSoftDupOptions). */
+const INTRA_RUBRIC_SOFT_OPTS: CrossSoftDupOptions = {
+  skipDisjointEanGuard: true
+};
+
 export async function computeIntraSoftDupTiers(
   byFuzzyBrand: Map<string, FpProduct[]>,
   usedInEan: Set<number>,
@@ -379,7 +389,8 @@ export async function computeIntraSoftDupTiers(
     byFuzzyBrand,
     usedInEan,
     nameLocale,
-    bannedPairKeys
+    bannedPairKeys,
+    INTRA_RUBRIC_SOFT_OPTS
   );
   const cache: PhashCache = new Map();
   await prefetchPhashes(urlsNeedingPhash(pairs), cache);
@@ -387,7 +398,14 @@ export async function computeIntraSoftDupTiers(
   type Scored = PairWork & { res: ResolvedTier };
   const scored: Scored[] = [];
   for (const p of pairs) {
-    const res = resolveTierForPair(p.cI, p.cJ, nameLocale, attrOpts, cache);
+    const res = resolveTierForPair(
+      p.cI,
+      p.cJ,
+      nameLocale,
+      attrOpts,
+      cache,
+      INTRA_RUBRIC_SOFT_OPTS
+    );
     if (res) scored.push({ ...p, res });
   }
 
