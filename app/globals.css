@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --fg: #0f172a;
+  --muted: #64748b;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --link: #0d4f9c;
+  /* 4Partners: жёлтый квадрат + чёрный текст (как в фирменном знаке) */
+  --4p-yellow: #ffd740;
+  --4p-yellow-hover: #f5cd38;
+  --4p-yellow-muted: rgba(255, 215, 64, 0.45);
+  --4p-black: #0a0a0a;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--fg);
+  background: linear-gradient(165deg, #f8fafc 0%, #e8eef5 100%);
+  min-height: 100vh;
+}
