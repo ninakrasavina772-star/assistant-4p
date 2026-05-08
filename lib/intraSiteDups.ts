@@ -1,6 +1,6 @@
 import { productBrandName } from "./brand-filter";
 import { computeIntraSoftDupTiers } from "./dupTiers";
-import { collectEans, toCompareProduct } from "./product";
+import { collectEanIndexKeys, toCompareProduct } from "./product";
 import { normBrand } from "./pairScoring";
 import type {
   AttrMatchOptions,
@@ -52,8 +52,7 @@ export async function findIntraSiteDuplicates(
   const idToP = new Map<number, FpProduct>();
   for (const p of products) {
     idToP.set(p.id, p);
-    for (const e of collectEans(p)) {
-      if (!e) continue;
+    for (const e of collectEanIndexKeys(p)) {
       if (!eanToIds.has(e)) eanToIds.set(e, new Set());
       eanToIds.get(e)!.add(p.id);
     }

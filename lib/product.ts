@@ -57,6 +57,30 @@ export function collectEans(p: FpProduct): string[] {
   return [...set];
 }
 
+/** Минимальная длина цифр, чтобы считать значение штрихкодом для склейки дублей (EAN‑8 и длиннее). */
+export const MIN_EAN_INDEX_DIGITS = 8;
+
+/**
+ * Ключ для индексов/групп EAN: только цифры; убираем пробелы и дефисы из фида.
+ * Иначе одна и та же позиция с «460053…» и «460 053 …» не сходилась.
+ */
+export function eanKeyForIndex(raw: string | null | undefined): string | null {
+  if (raw == null || raw === "") return null;
+  const d = String(raw).replace(/\D/g, "");
+  if (d.length < MIN_EAN_INDEX_DIGITS) return null;
+  return d;
+}
+
+/** Уникальные канонические штрихкода карточки для сопоставления. */
+export function collectEanIndexKeys(p: FpProduct): string[] {
+  const keys = new Set<string>();
+  for (const raw of collectEans(p)) {
+    const k = eanKeyForIndex(raw);
+    if (k) keys.add(k);
+  }
+  return [...keys];
+}
+
 function displayNames(p: FpProduct) {
   const base = p.name || "";
   const ru = p.i18n?.ru?.name?.trim() || base;

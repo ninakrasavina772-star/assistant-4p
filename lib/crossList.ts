@@ -9,7 +9,11 @@ import {
   prefetchOnlyBCrossPhashes
 } from "./dupTiers";
 import { type PhashCache } from "./imagePhash";
-import { collectArticleKeys, collectEans, toCompareProduct } from "./product";
+import {
+  collectArticleKeys,
+  collectEanIndexKeys,
+  toCompareProduct
+} from "./product";
 import { normBrand, sameBrandForFuzzy } from "./pairScoring";
 import type {
   AttrMatchOptions,
@@ -46,8 +50,7 @@ export async function buildOnlyBCrossWithA(
     const bk = normBrandKeyStr(pA);
     if (!byBrandA.has(bk)) byBrandA.set(bk, []);
     byBrandA.get(bk)!.push(pA);
-    for (const e of collectEans(pA)) {
-      if (!e) continue;
+    for (const e of collectEanIndexKeys(pA)) {
       if (!eanToA.has(e)) eanToA.set(e, []);
       eanToA.get(e)!.push(pA);
     }
@@ -69,8 +72,7 @@ export async function buildOnlyBCrossWithA(
   for (const pB of rawOnlyB) {
     const cB = toCompareProduct(pB);
     const hitA = new Set<number>();
-    for (const e of collectEans(pB)) {
-      if (!e) continue;
+    for (const e of collectEanIndexKeys(pB)) {
       for (const pA of eanToA.get(e) || []) {
         if (pA.id === pB.id) continue;
         if (hitA.has(pA.id)) continue;
@@ -165,8 +167,7 @@ export async function buildOnlyACrossWithB(
     const bk = normBrandKeyStr(pB);
     if (!byBrandB.has(bk)) byBrandB.set(bk, []);
     byBrandB.get(bk)!.push(pB);
-    for (const e of collectEans(pB)) {
-      if (!e) continue;
+    for (const e of collectEanIndexKeys(pB)) {
       if (!eanToB.has(e)) eanToB.set(e, []);
       eanToB.get(e)!.push(pB);
     }
@@ -188,8 +189,7 @@ export async function buildOnlyACrossWithB(
   for (const pA of rawOnlyA) {
     const cA = toCompareProduct(pA);
     const hitB = new Set<number>();
-    for (const e of collectEans(pA)) {
-      if (!e) continue;
+    for (const e of collectEanIndexKeys(pA)) {
       for (const pB of eanToB.get(e) || []) {
         if (pA.id === pB.id) continue;
         if (hitB.has(pB.id)) continue;
@@ -284,8 +284,7 @@ export async function buildOnlyBInternalDups(
   const out: OnlyBInternalDupRow[] = [];
   const eanToProducts = new Map<string, FpProduct[]>();
   for (const p of rawOnlyB) {
-    for (const e of collectEans(p)) {
-      if (!e) continue;
+    for (const e of collectEanIndexKeys(p)) {
       if (!eanToProducts.has(e)) eanToProducts.set(e, []);
       eanToProducts.get(e)!.push(p);
     }

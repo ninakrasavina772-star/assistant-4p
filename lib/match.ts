@@ -23,7 +23,7 @@ import { findIntraSiteDuplicates } from "./intraSiteDups";
 import { sameBrandForFuzzy } from "./pairScoring";
 import {
   collectArticleKeys,
-  collectEans,
+  collectEanIndexKeys,
   pickComparableName,
   toCompareProduct
 } from "./product";
@@ -59,8 +59,7 @@ function buildEanIndex(products: FpProduct[], site: "A" | "B") {
   const dups: { ean: string; productIds: number[]; site: "A" | "B" }[] = [];
   const eanToIds = new Map<string, Set<number>>();
   for (const p of products) {
-    for (const ean of collectEans(p)) {
-      if (!ean) continue;
+    for (const ean of collectEanIndexKeys(p)) {
       if (!eanToIds.has(ean)) eanToIds.set(ean, new Set());
       eanToIds.get(ean)!.add(p.id);
       if (!map.has(ean)) map.set(ean, p.id);

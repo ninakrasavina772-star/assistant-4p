@@ -18,7 +18,7 @@ import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
 import { MAX_RUBRICS_B } from "@/lib/rubricIds";
 import { parsePartnersFeedCsv } from "@/lib/partnersFeedCsv";
 import { runCompare } from "@/lib/match";
-import { collectEans } from "@/lib/product";
+import { collectEanIndexKeys } from "@/lib/product";
 import type {
   AttrMatchOptions,
   CompareBrandFilterInfo,
@@ -409,8 +409,8 @@ export async function POST(req: NextRequest) {
       const mergedA = await fetchMergedRubricsProducts(tokenA, siteVariation, [rubricA], pipeA);
       const eanOnA = new Set<string>();
       for (const p of mergedA.products) {
-        for (const e of collectEans(p)) {
-          if (e) eanOnA.add(e);
+        for (const k of collectEanIndexKeys(p)) {
+          eanOnA.add(k);
         }
       }
       let loaded = await fetchProductsByIds(tokenB, siteVariation, noveltyIds);
@@ -418,8 +418,8 @@ export async function POST(req: NextRequest) {
       const idsOut: number[] = [];
       let removedForEanMatchOnA = 0;
       for (const p of loaded) {
-        const eans = collectEans(p);
-        if (eans.some((e) => e && eanOnA.has(e))) {
+        const keys = collectEanIndexKeys(p);
+        if (keys.some((k) => eanOnA.has(k))) {
           removedForEanMatchOnA++;
           continue;
         }

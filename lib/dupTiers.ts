@@ -402,17 +402,12 @@ export async function computeIntraSoftDupTiers(
     return Math.max(a.pa.id, a.pb.id) - Math.max(b.pa.id, b.pb.id);
   });
 
-  const used = new Set<number>();
   const namePhotoPairs: IntraNamePhotoPairRow[] = [];
   const brandVisualPairs: IntraNamePhotoPairRow[] = [];
   const unlikelyPairs: IntraUnlikelyPairRow[] = [];
 
+  // Без жадного «один id — одна строка»: выводим все пары, прошедшие пороги (в рубрике иначе 2–3 при сотнях кандидатов).
   for (const s of scored) {
-    const I = s.pa.id;
-    const J = s.pb.id;
-    if (used.has(I) || used.has(J)) continue;
-    used.add(I);
-    used.add(J);
     const row = {
       a: toCompareProduct(s.pa),
       b: toCompareProduct(s.pb),
