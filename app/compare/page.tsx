@@ -48,6 +48,8 @@ import {
 import { RubricCascadeSelect } from "@/components/RubricCascadeSelect";
 import { toCompareProduct } from "@/lib/product";
 import {
+  buildAlgorithmPairKeys,
+  collectProductsForAiLookup,
   collectSoftDupPairsForOpenAi,
   dupPairKey,
   looksLikeOpenAiApiKey,
@@ -123,9 +125,10 @@ function isCodeCrossKind(kind: string) {
   return kind === "ean_diff_id" || kind === "article";
 }
 
-type DupKindFilter = "all" | "ean" | "nameAttr" | "unlikely";
+type DupKindFilter = "all" | "ean" | "nameAttr" | "unlikely" | "aiDuplicates";
 
 function crossRowMatchesFilter(kind: string, f: DupKindFilter) {
+  if (f === "aiDuplicates") return false;
   if (f === "all") return true;
   if (f === "ean") return isCodeCrossKind(kind);
   if (f === "nameAttr")
@@ -137,6 +140,7 @@ function internalRowMatchesFilter(
   kind: "ean" | "name_photo" | "brand_visual" | "unlikely",
   f: DupKindFilter
 ) {
+  if (f === "aiDuplicates") return false;
   if (f === "all") return true;
   if (f === "ean") return kind === "ean";
   if (f === "nameAttr")
@@ -1791,6 +1795,58 @@ export default function ComparePage() {
     );
   }, [data, aiDupPassesSoftDup]);
 
+  const algorithmPairKeysForReport = useMemo(
+    () => (data ? buildAlgorithmPairKeys(data) : new Set<string>()),
+    [data]
+  );
+
+  const aiExclusiveDupCount = useMemo(() => {
+    let n = 0;
+    for (const [k, v] of Object.entries(aiDupVerdicts)) {
+      if (!v?.duplicate) continue;
+      if (algorithmPairKeysForReport.has(k)) continue;
+      n++;
+    }
+    return n;
+  }, [aiDupVerdicts, algorithmPairKeysForReport]);
+
+  const aiExclusiveRows = useMemo((): {
+    a: CompareProduct;
+    b: CompareProduct;
+    key: string;
+  }[] => {
+    if (!data) {
+      return [];
+    }
+    const byId = collectProductsForAiLookup(data);
+    const rows: { a: CompareProduct; b: CompareProduct; key: string }[] = [];
+    for (const [k, v] of Object.entries(aiDupVerdicts)) {
+      if (!v?.duplicate) continue;
+      if (algorithmPairKeysForReport.has(k)) continue;
+      const parts = k.split("-");
+      if (parts.length !== 2) continue;
+      const ia = Number(parts[0]);
+      const ib = Number(parts[1]);
+      if (!Number.isFinite(ia) || !Number.isFinite(ib)) continue;
+      const a = byId.get(ia);
+      const b = byId.get(ib);
+      if (!a || !b) continue;
+      rows.push({ a, b, key: k });
+    }
+    rows.sort((x, y) => {
+      const ax = Math.min(x.a.id, x.b.id);
+      const ay = Math.min(y.a.id, y.b.id);
+      if (ax !== ay) return ax - ay;
+      return Math.max(x.a.id, x.b.id) - Math.max(y.a.id, y.b.id);
+    });
+    return rows;
+  }, [data, aiDupVerdicts, algorithmPairKeysForReport]);
+
+  const compareIdsOnAForLabels = useMemo(() => {
+    if (!data || "resultKind" in data || isSingleDups(data)) return new Set<number>();
+    return new Set((data.onlyA ?? []).map((c) => c.id));
+  }, [data]);
+
   const unplacedBList = useMemo((): CompareProduct[] => {
     if (!data || "resultKind" in data) return [];
     return (data.unplacedBByIdRaw ?? []).map((p) => toCompareProduct(p));
@@ -1906,13 +1962,22 @@ export default function ComparePage() {
       return;
     }
     const cap = aiDupUseVision ? 40 : 80;
+    const excludePairKeys = new Set(Object.keys(aiDupVerdicts));
     const pairs = collectSoftDupPairsForOpenAi(
       data,
       data.nameLocale,
-      Math.min(cap, Math.max(1, aiDupMaxPairs))
+      Math.min(cap, Math.max(1, aiDupMaxPairs)),
+      {
+        excludePairKeys,
+        excludeAlgorithmPairKeys: algorithmPairKeysForReport,
+      }
     );
     if (!pairs.length) {
-      setAiDupErr("Нет мягких пар для проверки при текущем отчёте.");
+      setAiDupErr(
+        excludePairKeys.size > 0
+          ? "Все доступные кандидаты уже проверены AI. Сбросьте вердикты или смените отчёт."
+          : "Нет кандидатов для AI за пределами пар отчёта (EAN и слои название+фото). Возможно, в выгрузке не осталось подходящих пар с тем же брендом и заметно похожим названием."
+      );
       return;
     }
     setAiDupErr(null);
@@ -1948,7 +2013,7 @@ export default function ComparePage() {
           note: v.note,
         };
       }
-      setAiDupVerdicts(map);
+      setAiDupVerdicts((prev) => ({ ...prev, ...map }));
       try {
         if (rememberOpenAiKey && typeof window !== "undefined") {
           sessionStorage.setItem(SK_OPENAI_KEY, key);
@@ -1965,7 +2030,27 @@ export default function ComparePage() {
     } finally {
       setAiDupBusy(false);
     }
-  }, [data, openAiKey, aiDupMaxPairs, aiDupUseVision, rememberOpenAiKey]);
+  }, [
+    data,
+    openAiKey,
+    aiDupMaxPairs,
+    aiDupUseVision,
+    rememberOpenAiKey,
+    aiDupVerdicts,
+    algorithmPairKeysForReport,
+  ]);
+
+  const aiVerdictKeyCount = Object.keys(aiDupVerdicts).length;
+  const openAiPrimaryLabel =
+    aiDupBusy
+      ? "Запрос к OpenAI…"
+      : aiDupUseVision
+        ? aiVerdictKeyCount > 0
+          ? "Ещё порция (с превью)"
+          : "Проверить пары AI (с превью)"
+        : aiVerdictKeyCount > 0
+          ? "Ещё порция (только текст)"
+          : "Проверить мягкие пары AI";
 
   const downloadOnlyBExcel = useCallback(async () => {
     if (!data || !("rawOnlyB" in data) || !data.rawOnlyB?.length) return;
@@ -4205,18 +4290,34 @@ export default function ComparePage() {
                   >
                     Маловероятные дубли (фото + бренд + тип, название модели слабее ~60%)
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setDupKindFilter("aiDuplicates")}
+                    className={`rounded-xl px-4 py-3 text-sm font-semibold min-h-[3rem] flex-1 sm:flex-none ${
+                      dupKindFilter === "aiDuplicates"
+                        ? "bg-indigo-900 text-white shadow-sm ring-2 ring-indigo-300/80"
+                        : "bg-white border-2 border-indigo-200 text-indigo-950 hover:border-indigo-400"
+                    }`}
+                  >
+                    Дубли AI ({aiExclusiveDupCount}) — вне EAN и названия+фото
+                  </button>
                 </div>
                 <div className="mt-5 pt-4 border-t border-indigo-200/70 space-y-3">
                   <p className="text-sm font-semibold text-slate-900">
                     Уточнение мягких дублей через OpenAI
                   </p>
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    После расчёта отправьте пары слоёв ~90% / ~60% / «маловероятные» на оценку модели по{" "}
-                    <strong className="text-slate-800">названию и бренду</strong>; при включённой опции ниже модель
-                    дополнительно получает <strong className="text-slate-800">первое превью</strong> каждой карточки по
-                    публичному <code className="text-[11px]">https://</code> из фида/API (как видит ваш сайт). Ключ из
-                    поля ниже передаётся только в этот сервер приложения на время запроса и затем в OpenAI — мы его не
-                    сохраняем в базу.
+                    Модель получает <strong className="text-slate-800">кандидатов вне отчёта</strong>: один
+                    бренд и заголовки заметно похожи по словам, но пары{' '}
+                    <strong>ещё не входят</strong> в блоки EAN и «название+фото» (~90%, ~60%, маловероятные). По
+                    желанию включайте превью (vision). Ответы «дубль» смотрите на вкладке{" "}
+                    <strong className="text-slate-800">Дубли AI</strong> — там не показываются автоматические строки
+                    отчёта.
+                  </p>
+                  <p className="text-xs text-indigo-900/85 leading-relaxed">
+                    За один запрос — не больше числа в поле «Макс. пар» (с превью до 40, без превью до 80). Повторное
+                    нажатие берёт <strong className="text-slate-800">следующие</strong> пары в том же порядке; уже
+                    проверенные не отправляются повторно.
                   </p>
                   <div className="flex flex-col sm:flex-row gap-3 sm:items-end flex-wrap">
                     <label className="block flex-1 min-w-[200px]">
@@ -4263,7 +4364,7 @@ export default function ComparePage() {
                           if (v) setAiDupMaxPairs((x) => Math.min(40, x));
                         }}
                       />
-                      Учитывать превью (vision): название + бренд + картинка
+                      Учитывать превью (vision): сравнить упаковку на фото, как человек глазами
                     </label>
                     <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                       <input
@@ -4281,11 +4382,7 @@ export default function ComparePage() {
                       onClick={() => void runOpenAiDupRefine()}
                       className="rounded-xl bg-indigo-800 text-white px-4 py-2.5 text-sm font-semibold hover:bg-indigo-950 disabled:opacity-50"
                     >
-                      {aiDupBusy
-                        ? "Запрос к OpenAI…"
-                        : aiDupUseVision
-                          ? "Проверить пары AI (с превью)"
-                          : "Проверить мягкие пары AI"}
+                      {openAiPrimaryLabel}
                     </button>
                     <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                       <input
@@ -4295,10 +4392,22 @@ export default function ComparePage() {
                       />
                       Скрыть пары, где AI сказал «не дубль»
                     </label>
-                    {Object.keys(aiDupVerdicts).length > 0 && (
-                      <span className="text-xs text-indigo-900 tabular-nums">
-                        Вердиктов в сессии: {Object.keys(aiDupVerdicts).length}
-                      </span>
+                    {aiVerdictKeyCount > 0 && (
+                      <>
+                        <span className="text-xs text-indigo-900 tabular-nums">
+                          Вердиктов в сессии: {aiVerdictKeyCount}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-xs text-slate-600 underline hover:text-slate-900"
+                          onClick={() => {
+                            setAiDupVerdicts({});
+                            setAiDupErr(null);
+                          }}
+                        >
+                          Сбросить вердикты AI
+                        </button>
+                      </>
                     )}
                   </div>
                   {aiDupErr && (
@@ -4697,17 +4806,32 @@ export default function ComparePage() {
               >
                 Маловероятные ({cUnl})
               </button>
+              <button
+                type="button"
+                onClick={() => setDupKindFilter("aiDuplicates")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  dupKindFilter === "aiDuplicates"
+                    ? "bg-indigo-900 text-white shadow-sm"
+                    : "bg-white border border-indigo-200 text-indigo-950 hover:bg-indigo-50"
+                }`}
+              >
+                Дубли AI ({aiExclusiveDupCount})
+              </button>
             </div>
             <div className="mt-5 pt-4 border-t border-indigo-200/70 space-y-3">
               <p className="text-sm font-semibold text-slate-900">
                 Уточнение мягких дублей через OpenAI
               </p>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Отправьте пары слоёв ~90% / ~60% / «маловероятные» на оценку модели по{" "}
-                <strong className="text-slate-800">названию и бренду</strong>; при включённой опции ниже
-                модель дополнительно получает <strong className="text-slate-800">первое превью</strong> по
-                публичному <code className="text-[11px]">https://</code>. Ключ уходит на этот сервер и в
-                OpenAI на время запроса, в базу не пишем.
+                Модель проверяет <strong className="text-slate-800">дополнительных кандидатов вне автоматических
+                  пар</strong> отчёта (EAN и слои название+фото). Отбор по тому же бренду и сходству названия по словам;
+                при включённой опции — ещё и превью. Вердикты «дубль» — на вкладке{" "}
+                <strong className="text-slate-800">Дубли AI</strong>.
+              </p>
+              <p className="text-xs text-indigo-900/85 leading-relaxed">
+                За один запрос — не больше числа в поле «Макс. пар» (с превью до 40, без превью до 80). Повторное нажатие
+                берёт <strong className="text-slate-800">следующие</strong> пары в том же порядке; уже проверенные не
+                отправляются повторно.
               </p>
               <div className="flex flex-col sm:flex-row gap-3 sm:items-end flex-wrap">
                 <label className="block flex-1 min-w-[200px]">
@@ -4752,7 +4876,7 @@ export default function ComparePage() {
                       if (v) setAiDupMaxPairs((x) => Math.min(40, x));
                     }}
                   />
-                  Учитывать превью (vision): название + бренд + картинка
+                  Учитывать превью (vision): сравнить упаковку на фото, как человек глазами
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                   <input
@@ -4770,11 +4894,7 @@ export default function ComparePage() {
                   onClick={() => void runOpenAiDupRefine()}
                   className="rounded-xl bg-indigo-800 text-white px-4 py-2.5 text-sm font-semibold hover:bg-indigo-950 disabled:opacity-50"
                 >
-                  {aiDupBusy
-                    ? "Запрос к OpenAI…"
-                    : aiDupUseVision
-                      ? "Проверить пары AI (с превью)"
-                      : "Проверить мягкие пары AI"}
+                  {openAiPrimaryLabel}
                 </button>
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                   <input
@@ -4784,10 +4904,22 @@ export default function ComparePage() {
                   />
                   Скрыть пары, где AI сказал «не дубль»
                 </label>
-                {Object.keys(aiDupVerdicts).length > 0 && (
-                  <span className="text-xs text-indigo-900 tabular-nums">
-                    Вердиктов в сессии: {Object.keys(aiDupVerdicts).length}
-                  </span>
+                {aiVerdictKeyCount > 0 && (
+                  <>
+                    <span className="text-xs text-indigo-900 tabular-nums">
+                      Вердиктов в сессии: {aiVerdictKeyCount}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-xs text-slate-600 underline hover:text-slate-900"
+                      onClick={() => {
+                        setAiDupVerdicts({});
+                        setAiDupErr(null);
+                      }}
+                    >
+                      Сбросить вердикты AI
+                    </button>
+                  </>
                 )}
               </div>
               {aiDupErr && (
@@ -5029,6 +5161,44 @@ export default function ComparePage() {
             </div>
           </section>
           )}
+
+          {dupKindFilter === "aiDuplicates" && (
+            <section className="mb-10 scroll-mt-24" id="intra-ai-only-dups">
+              <h2 className="text-lg font-semibold text-slate-900 mb-2">
+                Дубли по решению AI{" "}
+                <span className="text-indigo-900 tabular-nums">({aiExclusiveDupCount})</span>
+              </h2>
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                Только пары, где AI ответил «дубль» и которые <strong>не попали</strong> в блоки отчёта по EAN и по
+                названию+фото (~90%, ~60%, маловероятные).
+              </p>
+              {aiExclusiveRows.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  Пока пусто — запустите проверку OpenAI выше. Если вердикты есть, возможно, все совпали с уже
+                  показанными автоматическими строками.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {aiExclusiveRows.map((row) => (
+                    <div
+                      key={row.key}
+                      className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-indigo-200 bg-indigo-50/30"
+                    >
+                      <ProductCell c={row.a} siteLabel={data.siteLabel} />
+                      <ProductCell c={row.b} siteLabel={data.siteLabel} />
+                      <div className="sm:col-span-2">
+                        <AiDupVerdictNote
+                          verdicts={aiDupVerdicts}
+                          idA={row.a.id}
+                          idB={row.b.id}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
         </>
         );
       })()}
@@ -5105,6 +5275,121 @@ export default function ComparePage() {
               <p className="text-xs text-slate-600">модель+фото / название</p>
             </div>
           </div>
+          <div className="mb-6 p-3 rounded-xl border border-slate-200 bg-slate-50/80 flex flex-wrap gap-2 items-center">
+            <span className="text-xs font-medium text-slate-600 shrink-0 mr-1">
+              Показ пар:
+            </span>
+            <button
+              type="button"
+              onClick={() => setDupKindFilter("all")}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
+                dupKindFilter === "all"
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              Все слои ({crossRowKindCounts.total})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDupKindFilter("ean")}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
+                dupKindFilter === "ean"
+                  ? "bg-amber-800 text-white border-amber-900"
+                  : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              EAN / артикул ({crossRowKindCounts.codeLayer})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDupKindFilter("nameAttr")}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
+                dupKindFilter === "nameAttr"
+                  ? "bg-amber-800 text-white border-amber-900"
+                  : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              Название + фото ({crossRowKindCounts.nameAttr})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDupKindFilter("unlikely")}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
+                dupKindFilter === "unlikely"
+                  ? "bg-amber-800 text-white border-amber-900"
+                  : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
+              }`}
+            >
+              Слабые ({crossRowKindCounts.unlikely})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDupKindFilter("aiDuplicates")}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
+                dupKindFilter === "aiDuplicates"
+                  ? "bg-indigo-900 text-white border-indigo-900"
+                  : "bg-white text-indigo-950 border-indigo-200 hover:bg-indigo-50"
+              }`}
+            >
+              Дубли AI ({aiExclusiveDupCount})
+            </button>
+          </div>
+          {dupKindFilter === "aiDuplicates" && (
+            <section className="mb-8 scroll-mt-24 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+              <h2 className="text-lg font-semibold text-slate-900 mb-2">
+                Дубли по решению AI{" "}
+                <span className="text-indigo-900 tabular-nums">
+                  ({aiExclusiveDupCount})
+                </span>
+              </h2>
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                Здесь только пары с ответом «дубль», которых{' '}
+                <strong className="text-slate-800">не было среди строк отчёта</strong>: ни EAN/артикула по
+                правилам сайта, ни слоёв «название+фото» и маловероятных. Отбор кандидатов для модели —
+                общий бренд и заметное сходство заголовков.
+              </p>
+              {aiExclusiveRows.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  Пока нет строк: запустите проверку блоком OpenAI (он работает именно по кандидатам вне
+                  автоматики) или смените вкладку.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {aiExclusiveRows.map((row) => {
+                    const la = compareIdsOnAForLabels.has(row.a.id)
+                      ? data.siteALabel
+                      : data.siteBLabel;
+                    const lb = compareIdsOnAForLabels.has(row.b.id)
+                      ? data.siteALabel
+                      : data.siteBLabel;
+                    return (
+                      <div
+                        key={row.key}
+                        className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-indigo-200/80 bg-white"
+                      >
+                        <div>
+                          <p className="text-[11px] text-slate-500 mb-0.5">{la}</p>
+                          <ProductCell c={row.a} siteLabel={la} />
+                        </div>
+                        <div>
+                          <p className="text-[11px] text-slate-500 mb-0.5">{lb}</p>
+                          <ProductCell c={row.b} siteLabel={lb} />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <AiDupVerdictNote
+                            verdicts={aiDupVerdicts}
+                            idA={row.a.id}
+                            idB={row.b.id}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
           <p className="text-xs text-slate-600 mb-4">
             <strong className="text-slate-800">По id товара:</strong> совпало на обеих витринах —{" "}
             {data.stats.idPlacedCount ?? data.idMatches?.length ?? 0}; на {data.siteBLabel}{" "}
@@ -5160,59 +5445,14 @@ export default function ComparePage() {
               </h3>
               <p className="text-xs text-slate-600 mb-3">
                 Всего найденных пар второго контура:{" "}
-                <strong className="tabular-nums">{crossRowKindCounts.total}</strong>. Переключатель
-                ниже влияет на то, какие строки показаны на вкладке E и в Excel пар.
+                <strong className="tabular-nums">{crossRowKindCounts.total}</strong>. Слои включают EAN/артикул,
+                название+фото и слабых кандидатов — переключатель в блоке статистики выше; отдельно вкладка{" "}
+                <strong>Дубли AI</strong> для пар вне автоматики.
               </p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDupKindFilter("ean")}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
-                    dupKindFilter === "ean"
-                      ? "bg-amber-800 text-white border-amber-900"
-                      : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  По EAN и артикулу ({crossRowKindCounts.codeLayer})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDupKindFilter("nameAttr")}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
-                    dupKindFilter === "nameAttr"
-                      ? "bg-amber-800 text-white border-amber-900"
-                      : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  По названию и фото ({crossRowKindCounts.nameAttr})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDupKindFilter("unlikely")}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
-                    dupKindFilter === "unlikely"
-                      ? "bg-amber-800 text-white border-amber-900"
-                      : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  Слабые кандидаты ({crossRowKindCounts.unlikely})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDupKindFilter("all")}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold border ${
-                    dupKindFilter === "all"
-                      ? "bg-slate-900 text-white border-slate-900"
-                      : "bg-white text-slate-800 border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  Все слои ({crossRowKindCounts.total})
-                </button>
-              </div>
               <button
                 type="button"
                 onClick={() => selectReportView("crossBvsA")}
-                className="mt-3 rounded-lg border border-emerald-800 text-emerald-950 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-50"
+                className="rounded-lg border border-emerald-800 text-emerald-950 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-50"
               >
                 Открыть вкладку с парами A ↔ B
               </button>
