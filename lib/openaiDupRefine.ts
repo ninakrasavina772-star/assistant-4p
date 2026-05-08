@@ -671,8 +671,91 @@ const SYSTEM_PROMPT_VISION = `Ты опытный мерчандайзер ин�
 {"verdicts":[{"idA":number,"idB":number,"duplicate":boolean,"confidence":number,"note":string}]}
 Один элемент на каждую пару из запроса с теми же idA и idB. confidence от 0 до 1. note — по-русски до 120 символов; где уместно, укажи **что заметила на превью или в тексте**.`;
 
+/** Загрузка превью на нашем сервере: OpenAI часто даёт timeout на CDN витрины. */
+const VISION_IMAGE_FETCH_TIMEOUT_MS = 25_000;
+const VISION_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+function mimeFromImageMagic(bytes: Uint8Array): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return null;
+}
+
 /**
- * Мультимодальный запрос: превью по публичным URL (CDN витрины должен быть доступен с серверов OpenAI).
+ * Скачивает изображение по HTTPS/HTTP и возвращает data URL для vision (OpenAI не ходит за URL сами).
+ */
+async function fetchImageAsDataUrlForVision(remoteUrl: string): Promise<string | null> {
+  const u = remoteUrl.trim().slice(0, 2000);
+  if (!/^https?:\/\//i.test(u)) return null;
+
+  let res: Response;
+  try {
+    res = await fetch(u, {
+      redirect: "follow",
+      headers: { Accept: "image/*,*/*;q=0.8" },
+      signal: AbortSignal.timeout(VISION_IMAGE_FETCH_TIMEOUT_MS)
+    });
+  } catch {
+    return null;
+  }
+
+  if (!res.ok) return null;
+
+  const cl = res.headers.get("content-length");
+  if (cl) {
+    const n = Number(cl);
+    if (Number.isFinite(n) && n > VISION_IMAGE_MAX_BYTES) return null;
+  }
+
+  let buf: ArrayBuffer;
+  try {
+    buf = await res.arrayBuffer();
+  } catch {
+    return null;
+  }
+
+  if (!buf.byteLength || buf.byteLength > VISION_IMAGE_MAX_BYTES) return null;
+
+  const bytes = new Uint8Array(buf);
+  const headerCt = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const mime =
+    headerCt.startsWith("image/") && headerCt.length > 8
+      ? headerCt
+      : mimeFromImageMagic(bytes) || "image/jpeg";
+
+  const b64 = Buffer.from(buf).toString("base64");
+  return `data:${mime};base64,${b64}`;
+}
+
+/**
+ * Мультимодальный запрос: превью подтягиваются **на сервере приложения** и уходят в OpenAI как data URL,
+ * чтобы не зависеть от доступности CDN с инфраструктуры OpenAI.
  * Небольшие чанки на вызов — из‑за лимита изображений и токенов.
  */
 export async function refineDupPairsOpenAiVisionBatch(
@@ -681,6 +764,22 @@ export async function refineDupPairsOpenAiVisionBatch(
   model = "gpt-4o-mini"
 ): Promise<DupPairVerdict[]> {
   if (!pairs.length) return [];
+
+  const resolved = await Promise.all(
+    pairs.map(async (p) => {
+      const ua = p.imageUrlA?.trim();
+      const ub = p.imageUrlB?.trim();
+      const [dataA, dataB] = await Promise.all([
+        ua && /^https?:\/\//i.test(ua)
+          ? fetchImageAsDataUrlForVision(ua)
+          : Promise.resolve(null),
+        ub && /^https?:\/\//i.test(ub)
+          ? fetchImageAsDataUrlForVision(ub)
+          : Promise.resolve(null)
+      ]);
+      return { p, dataA, dataB };
+    })
+  );
 
   const content: Array<
     | { type: "text"; text: string }
@@ -694,25 +793,33 @@ export async function refineDupPairsOpenAiVisionBatch(
     }
   ];
 
-  for (const p of pairs) {
+  for (const { p, dataA, dataB } of resolved) {
     content.push({
       type: "text",
       text: `\n---\nПара: idA=${p.idA}, idB=${p.idB}\nlayer: ${p.layer}\nA: ${p.brandA} — ${p.titleA}\nB: ${p.brandB} — ${p.titleB}`
     });
-    const ua = p.imageUrlA?.trim();
-    const ub = p.imageUrlB?.trim();
-    if (ua && /^https?:\/\//i.test(ua)) {
+    if (dataA) {
       content.push({
         type: "image_url",
-        image_url: { url: ua.slice(0, 2000), detail: "high" }
+        image_url: { url: dataA, detail: "high" }
+      });
+    } else if (p.imageUrlA?.trim() && /^https?:\/\//i.test(p.imageUrlA.trim())) {
+      content.push({
+        type: "text",
+        text: "(Превью A не загрузилось на сервере — оцени только по тексту.)"
       });
     } else {
       content.push({ type: "text", text: "(Превью A нет.)" });
     }
-    if (ub && /^https?:\/\//i.test(ub)) {
+    if (dataB) {
       content.push({
         type: "image_url",
-        image_url: { url: ub.slice(0, 2000), detail: "high" }
+        image_url: { url: dataB, detail: "high" }
+      });
+    } else if (p.imageUrlB?.trim() && /^https?:\/\//i.test(p.imageUrlB.trim())) {
+      content.push({
+        type: "text",
+        text: "(Превью B не загрузилось на сервере — оцени только по тексту.)"
       });
     } else {
       content.push({ type: "text", text: "(Превью B нет.)" });

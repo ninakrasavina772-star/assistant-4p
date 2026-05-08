@@ -200,17 +200,34 @@ type ResolvedTier =
   | { kind: "60"; reasons: string[]; score: number }
   | { kind: "un"; reasons: string[]; score: number };
 
+/** Параметры мягкой кросс-пары ({@link classifyCrossSoftPair}). */
+export type CrossSoftDupOptions = {
+  /**
+   * Не блокировать пару только из‑за непересекающихся EAN (~8+ цифр на обеих карточках).
+   * Нужно для второго контура: «новинки по артикулу» против полного каталога — артикулы уже разошлись,
+   * но фиды могли дать разные штрихкоды при той же позиции; иначе ~90/~60/~45 почти всегда пустые
+   * на косметике с заполненными баркодами.
+   */
+  skipDisjointEanGuard?: boolean;
+};
+
 function resolveTierForPair(
   cI: CompareProduct,
   cJ: CompareProduct,
   nameLocale: NameLocale,
   attrOpts: AttrMatchOptions | undefined,
-  cache: PhashCache
+  cache: PhashCache,
+  crossOpts?: CrossSoftDupOptions
 ): ResolvedTier | null {
   const na = pickComparableName(cI, nameLocale);
   const nb = pickComparableName(cJ, nameLocale);
   if (wordFollowedByConflictingDigit(na, nb)) return null;
-  if (softDupBlockedByDisjointEans(cI, cJ)) return null;
+  if (
+    !crossOpts?.skipDisjointEanGuard &&
+    softDupBlockedByDisjointEans(cI, cJ)
+  ) {
+    return null;
+  }
   if (incompatibleBeautyTitles(na, nb)) return null;
 
   const { full, model: modelSim, modelA: mA, modelB: mB } = nameAndModelScore(
@@ -415,14 +432,15 @@ export async function classifyCrossSoftPair(
   cB: CompareProduct,
   nameLocale: NameLocale,
   attrOpts: AttrMatchOptions | undefined,
-  cache: PhashCache
+  cache: PhashCache,
+  crossOpts?: CrossSoftDupOptions
 ): Promise<
   | { kind: "name_photo"; score: number; matchReasons: string[] }
   | { kind: "brand_visual"; score: number; matchReasons: string[] }
   | { kind: "unlikely"; score: number; matchReasons: string[] }
   | null
 > {
-  const r = resolveTierForPair(cA, cB, nameLocale, attrOpts, cache);
+  const r = resolveTierForPair(cA, cB, nameLocale, attrOpts, cache, crossOpts);
   if (!r) return null;
   if (r.kind === "90")
     return { kind: "name_photo", score: r.score, matchReasons: r.reasons };
@@ -435,7 +453,8 @@ export async function classifyCrossSoftPair(
 export function collectCrossPhashUrls(
   listA: FpProduct[],
   listB: FpProduct[],
-  nameLocale: NameLocale
+  nameLocale: NameLocale,
+  crossOpts?: CrossSoftDupOptions
 ): string[] {
   const urls: string[] = [];
   for (const pA of listA) {
@@ -447,7 +466,12 @@ export function collectCrossPhashUrls(
       const na = pickComparableName(cA, nameLocale);
       const nb = pickComparableName(cB, nameLocale);
       if (wordFollowedByConflictingDigit(na, nb)) continue;
-      if (softDupBlockedByDisjointEans(cA, cB)) continue;
+      if (
+        !crossOpts?.skipDisjointEanGuard &&
+        softDupBlockedByDisjointEans(cA, cB)
+      ) {
+        continue;
+      }
       const { full, model } = nameAndModelScore(
         na,
         nb,
@@ -481,13 +505,14 @@ export async function prefetchOnlyBCrossPhashes(
   rawOnlyB: FpProduct[],
   byBrandA: Map<string, FpProduct[]>,
   nameLocale: NameLocale,
-  cache: PhashCache
+  cache: PhashCache,
+  crossOpts?: CrossSoftDupOptions
 ): Promise<void> {
   const urls: string[] = [];
   for (const pB of rawOnlyB) {
     const keyB = normBrandKey(pB);
     const listA = byBrandA.get(keyB) || [];
-    urls.push(...collectCrossPhashUrls(listA, [pB], nameLocale));
+    urls.push(...collectCrossPhashUrls(listA, [pB], nameLocale, crossOpts));
   }
   await prefetchPhashes(urls, cache);
 }
@@ -496,13 +521,14 @@ export async function prefetchOnlyACrossPhashes(
   rawOnlyA: FpProduct[],
   byBrandB: Map<string, FpProduct[]>,
   nameLocale: NameLocale,
-  cache: PhashCache
+  cache: PhashCache,
+  crossOpts?: CrossSoftDupOptions
 ): Promise<void> {
   const urls: string[] = [];
   for (const pA of rawOnlyA) {
     const keyA = normBrandKey(pA);
     const listB = byBrandB.get(keyA) || [];
-    urls.push(...collectCrossPhashUrls([pA], listB, nameLocale));
+    urls.push(...collectCrossPhashUrls([pA], listB, nameLocale, crossOpts));
   }
   await prefetchPhashes(urls, cache);
 }

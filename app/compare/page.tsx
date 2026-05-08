@@ -363,10 +363,21 @@ export default function ComparePage() {
         | "notOnA"
         | "dupsA"
         | "dupsB"
-        | "crossBvsA"
+        | "crossBvsA",
+      opts?: { scrollToId?: string }
     ) => {
       setError(null);
       setReportView(v);
+      const sid = opts?.scrollToId;
+      if (!sid || typeof document === "undefined") return;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document.getElementById(sid)?.scrollIntoView({
+            behavior: "smooth",
+            block: "start"
+          });
+        });
+      });
     },
     []
   );
@@ -628,7 +639,15 @@ export default function ComparePage() {
         compareMode === "twoSite" &&
         !("resultKind" in cmp && cmp.resultKind === "singleSiteDups")
       ) {
-        selectReportView(twoSiteGoal === "noveltiesById" ? "notOnA" : "crossBvsA");
+        selectReportView(
+          twoSiteGoal === "noveltiesById" ? "notOnA" : "crossBvsA",
+          {
+            scrollToId:
+              twoSiteGoal === "noveltiesById"
+                ? "rep-not-on-a"
+                : "rep-cross-b-vs-a"
+          }
+        );
       }
     } catch (e) {
       const isAbort = e instanceof Error && e.name === "AbortError";
@@ -1316,7 +1335,7 @@ export default function ComparePage() {
       setData(cmp as CompareResult);
       setTwoSiteGoal("dupContourAgainstA");
       setUseNoveltyIdsForSiteB(true);
-      selectReportView("crossBvsA");
+      selectReportView("crossBvsA", { scrollToId: "rep-cross-b-vs-a" });
       setDupKindFilter("all");
     } catch (e) {
       const isAbort = e instanceof Error && e.name === "AbortError";
@@ -4136,7 +4155,11 @@ export default function ComparePage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => selectReportView("noveltiesArticle")}
+                onClick={() =>
+                  selectReportView("noveltiesArticle", {
+                    scrollToId: "novelties-article-detail"
+                  })
+                }
                 className={`rounded-2xl border-2 px-4 py-4 text-left transition ${
                   reportView === "noveltiesArticle"
                     ? "border-emerald-600 bg-white shadow-md"
@@ -4153,7 +4176,9 @@ export default function ComparePage() {
               </button>
               <button
                 type="button"
-                onClick={() => selectReportView("notOnA")}
+                onClick={() =>
+                  selectReportView("notOnA", { scrollToId: "rep-not-on-a" })
+                }
                 className={`rounded-2xl border-2 px-4 py-4 text-left transition ${
                   reportView === "notOnA"
                     ? "border-emerald-600 bg-white shadow-md"
@@ -4170,7 +4195,9 @@ export default function ComparePage() {
               </button>
               <button
                 type="button"
-                onClick={() => selectReportView("crossBvsA")}
+                onClick={() =>
+                  selectReportView("crossBvsA", { scrollToId: "rep-cross-b-vs-a" })
+                }
                 className={`rounded-2xl border-2 px-4 py-4 text-left transition ${
                   reportView === "crossBvsA"
                     ? "border-emerald-600 bg-white shadow-md"
@@ -4186,7 +4213,9 @@ export default function ComparePage() {
               </button>
               <button
                 type="button"
-                onClick={() => selectReportView("dupsA")}
+                onClick={() =>
+                  selectReportView("dupsA", { scrollToId: "rep-dups-a" })
+                }
                 className={`rounded-2xl border-2 px-4 py-4 text-left transition ${
                   reportView === "dupsA"
                     ? "border-emerald-600 bg-white shadow-md"
@@ -4202,7 +4231,9 @@ export default function ComparePage() {
               </button>
               <button
                 type="button"
-                onClick={() => selectReportView("dupsB")}
+                onClick={() =>
+                  selectReportView("dupsB", { scrollToId: "rep-dups-b" })
+                }
                 className={`rounded-2xl border-2 px-4 py-4 text-left transition ${
                   reportView === "dupsB"
                     ? "border-emerald-600 bg-white shadow-md"
@@ -5430,7 +5461,9 @@ export default function ComparePage() {
               </p>
               <button
                 type="button"
-                onClick={() => selectReportView("notOnA")}
+                onClick={() =>
+                  selectReportView("notOnA", { scrollToId: "rep-not-on-a" })
+                }
                 className="rounded-lg bg-emerald-900 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-950"
               >
                 Перейти к списку и выгрузке Excel
@@ -5451,7 +5484,11 @@ export default function ComparePage() {
               </p>
               <button
                 type="button"
-                onClick={() => selectReportView("crossBvsA")}
+                onClick={() =>
+                  selectReportView("crossBvsA", {
+                    scrollToId: "rep-cross-b-vs-a"
+                  })
+                }
                 className="rounded-lg border border-emerald-800 text-emerald-950 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-50"
               >
                 Открыть вкладку с парами A ↔ B
@@ -6107,7 +6144,7 @@ export default function ComparePage() {
           })()}
 
           {reportView === "crossBvsA" && (
-            <section className="mb-10" id="rep-cross-b-vs-a">
+            <section className="mb-10 scroll-mt-24" id="rep-cross-b-vs-a">
               <h2 className="text-lg font-semibold text-slate-900 mb-1">
                 E · Второй контур: новинки {data.siteBLabel} против каталога {data.siteALabel}
               </h2>
