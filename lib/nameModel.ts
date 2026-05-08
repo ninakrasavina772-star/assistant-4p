@@ -76,12 +76,44 @@ export function modelLineStrictPrefixExtensionConflict(modelA: string, modelB: s
   return substantive.length > 0;
 }
 
+/**
+ * Общее начало названия («Natürliches Roll-on-Deodorant - …», «Natural Roll-On Deodorant - …»).
+ * Если его не убрать, разные ароматы (Vetiver & Citrus vs Unscented) дают высокое сходство
+ * только из‑за повторяющейся канцеляритской части и попадают в ~60%.
+ */
+function stripLeadingRollOnDeodorantBlurb(raw: string): string {
+  const m = raw.trim().match(/^(.+?)\s*[-–—]\s+(.+)$/u);
+  if (!m) return raw;
+  const left = normalizeComparableName(m[1]!.trim());
+  const rest = m[2]!.trim();
+  const isRollOnDeo =
+    /roll\s+on|rollon/.test(left.replace(/\s+/g, " ")) &&
+    /deodorant|deo\b/.test(left);
+  const isGenericCategoryLead =
+    isRollOnDeo &&
+    /\b(?:natür|naturlich|natural|organic)\b/u.test(left) &&
+    left.length <= 72;
+  if (isGenericCategoryLead) return rest;
+  return raw;
+}
+
+/** Общий хвост «Natural Roll-On Deo Refill» при разных ароматах перед ним — убираем для модельной строки. */
+function stripTrailingRollOnDeoTail(raw: string): string {
+  return raw
+    .replace(/\bnatural\s+roll[\s.-]*on\s+deo\s+refill\b/giu, "")
+    .replace(/\broll[\s.-]*on\s+deo\s+refill\b/giu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function extractModelLine(name: string, brand: string): string {
   let s = name.replace(/ё/g, "е");
   const br = (brand || "").trim();
   if (br) {
     s = s.replace(new RegExp(escapeReg(br), "gi"), " ");
   }
+  s = stripLeadingRollOnDeodorantBlurb(s);
+  s = stripTrailingRollOnDeoTail(s);
   s = stripTrailingProductTypes(s);
   s = s.replace(LEADING_PRODUCT_TYPE, " ");
   s = s.replace(/\b(?:spray|спрей|тестер|tester|в\\s*спрее|vapo)\b/gi, " ");

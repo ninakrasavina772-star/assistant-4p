@@ -3854,12 +3854,14 @@ export default function ComparePage() {
               <input
                 id="id-list-dup-file"
                 type="file"
-                accept=".xlsx,.xls,.xlsm,.csv,.txt"
+                accept=".xlsx,.xls,.xlsm,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain"
                 onChange={onIdListDupFile}
                 className="text-slate-700 text-xs max-w-full"
               />
               <span className="text-xs text-slate-500">
-                В Excel id — в <strong>первом столбце</strong>. Загрузка <strong>добавляет</strong> к полю, без дублей.
+                <strong>Excel</strong> (.xlsx, .xls, .xlsm) или CSV/TXT. Если первая строка — заголовок, ищем колонку
+                вроде «Id товара» / «Product id»; иначе берём <strong>первый столбец</strong>. Лист «Новинки», если есть.
+                Загрузка <strong>добавляет</strong> id в поле без дублей.
               </span>
             </div>
             <p className="text-xs text-slate-600">
@@ -4695,6 +4697,104 @@ export default function ComparePage() {
               >
                 Маловероятные ({cUnl})
               </button>
+            </div>
+            <div className="mt-5 pt-4 border-t border-indigo-200/70 space-y-3">
+              <p className="text-sm font-semibold text-slate-900">
+                Уточнение мягких дублей через OpenAI
+              </p>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Отправьте пары слоёв ~90% / ~60% / «маловероятные» на оценку модели по{" "}
+                <strong className="text-slate-800">названию и бренду</strong>; при включённой опции ниже
+                модель дополнительно получает <strong className="text-slate-800">первое превью</strong> по
+                публичному <code className="text-[11px]">https://</code>. Ключ уходит на этот сервер и в
+                OpenAI на время запроса, в базу не пишем.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-3 sm:items-end flex-wrap">
+                <label className="block flex-1 min-w-[200px]">
+                  <span className="text-xs font-medium text-slate-600">API-ключ OpenAI</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    className={homeInput + " mt-1 font-mono text-sm"}
+                    value={openAiKey}
+                    placeholder="sk-… или sk-proj-…"
+                    onChange={(e) => setOpenAiKey(e.target.value)}
+                  />
+                </label>
+                <label className="block w-full sm:w-28">
+                  <span className="text-xs font-medium text-slate-600">Макс. пар</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={aiDupUseVision ? 40 : 80}
+                    className={homeInput + " mt-1 tabular-nums"}
+                    value={aiDupMaxPairs}
+                    onChange={(e) =>
+                      setAiDupMaxPairs(
+                        Math.min(
+                          aiDupUseVision ? 40 : 80,
+                          Math.max(1, Number(e.target.value) || 40)
+                        )
+                      )
+                    }
+                  />
+                  <span className="block text-[11px] text-slate-500 mt-1">
+                    {aiDupUseVision ? "до 40 с превью" : "до 80 только текст"}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-md">
+                  <input
+                    type="checkbox"
+                    checked={aiDupUseVision}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setAiDupUseVision(v);
+                      if (v) setAiDupMaxPairs((x) => Math.min(40, x));
+                    }}
+                  />
+                  Учитывать превью (vision): название + бренд + картинка
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rememberOpenAiKey}
+                    onChange={(e) => setRememberOpenAiKey(e.target.checked)}
+                  />
+                  Помнить ключ в браузере (sessionStorage)
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <button
+                  type="button"
+                  disabled={aiDupBusy}
+                  onClick={() => void runOpenAiDupRefine()}
+                  className="rounded-xl bg-indigo-800 text-white px-4 py-2.5 text-sm font-semibold hover:bg-indigo-950 disabled:opacity-50"
+                >
+                  {aiDupBusy
+                    ? "Запрос к OpenAI…"
+                    : aiDupUseVision
+                      ? "Проверить пары AI (с превью)"
+                      : "Проверить мягкие пары AI"}
+                </button>
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={aiDupHideRejected}
+                    onChange={(e) => setAiDupHideRejected(e.target.checked)}
+                  />
+                  Скрыть пары, где AI сказал «не дубль»
+                </label>
+                {Object.keys(aiDupVerdicts).length > 0 && (
+                  <span className="text-xs text-indigo-900 tabular-nums">
+                    Вердиктов в сессии: {Object.keys(aiDupVerdicts).length}
+                  </span>
+                )}
+              </div>
+              {aiDupErr && (
+                <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                  {aiDupErr}
+                </p>
+              )}
             </div>
           </div>
 
