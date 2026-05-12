@@ -405,12 +405,14 @@ export async function runCompare(
     unplacedAByIdRaw,
     intraSiteADups: {
       eanGroups: intraSiteADups.eanGroups,
+      eanGroupsSummary: intraSiteADups.eanGroupsSummary,
       namePhotoPairs: intraSiteADups.namePhotoPairs,
       brandVisualPairs: intraSiteADups.brandVisualPairs,
       unlikelyPairs: intraSiteADups.unlikelyPairs
     },
     intraSiteBDups: {
       eanGroups: intraSiteBDups.eanGroups,
+      eanGroupsSummary: intraSiteBDups.eanGroupsSummary,
       namePhotoPairs: intraSiteBDups.namePhotoPairs,
       brandVisualPairs: intraSiteBDups.brandVisualPairs,
       unlikelyPairs: intraSiteBDups.unlikelyPairs

@@ -147,6 +147,15 @@ export type IntraEanGroupRow = {
   products: CompareProduct[];
 };
 
+/** Сводка по блоку «один EAN — несколько id» (одна карточка может попасть в две группы при двух разных конфликтных штрихкодах). */
+export type EanGroupsSummary = {
+  groupCount: number;
+  /** Уникальные id карточек в любой из групп */
+  uniqueProductCount: number;
+  /** Сумма размеров групп — столько строк в развёрнутой таблице «группа × карточки» */
+  rowSlotsInGroups: number;
+};
+
 export type IntraNamePhotoPairRow = {
   a: CompareProduct;
   b: CompareProduct;
@@ -262,6 +271,8 @@ export type SingleSiteDupsResult = {
   excludeIdsA?: CompareExcludeIdsAInfo;
   /** Один EAN — несколько разных id */
   eanGroups: IntraEanGroupRow[];
+  /** Группы / уникальные карточки / сумма строк по группам */
+  eanGroupsSummary: EanGroupsSummary;
   /** ~90%: частичное название + эквивалентный URL фото (не в EAN-группах) */
   namePhotoPairs: IntraNamePhotoPairRow[];
   /** ~60%: точный бренд + частичное название + визуально похожее фото */
@@ -369,6 +380,7 @@ export type CompareResult = {
    */
   intraSiteADups: {
     eanGroups: IntraEanGroupRow[];
+    eanGroupsSummary: EanGroupsSummary;
     namePhotoPairs: IntraNamePhotoPairRow[];
     brandVisualPairs: IntraNamePhotoPairRow[];
     unlikelyPairs: IntraUnlikelyPairRow[];
@@ -376,6 +388,7 @@ export type CompareResult = {
   /** Дубли внутри рубрики B (аналог intraSiteADups) */
   intraSiteBDups: {
     eanGroups: IntraEanGroupRow[];
+    eanGroupsSummary: EanGroupsSummary;
     namePhotoPairs: IntraNamePhotoPairRow[];
     brandVisualPairs: IntraNamePhotoPairRow[];
     unlikelyPairs: IntraUnlikelyPairRow[];

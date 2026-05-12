@@ -2,6 +2,12 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import {
+  AI_DUP_CHUNK_TEXT,
+  AI_DUP_CHUNK_VISION,
+  AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST,
+  AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+} from "@/lib/aiDupLimits";
+import {
   looksLikeOpenAiApiKey,
   refineDupPairsOpenAiBatch,
   refineDupPairsOpenAiVisionBatch,
@@ -14,11 +20,6 @@ export const maxDuration = 300;
 function devSkipAuth(): boolean {
   return process.env.NODE_ENV === "development" && process.env.COMPARE_SKIP_AUTH === "1";
 }
-
-const MAX_PAIRS_TEXT = 80;
-const MAX_PAIRS_VISION = 40;
-const CHUNK_TEXT = 12;
-const CHUNK_VISION = 4;
 
 function safeHttpsUrl(raw: unknown, maxLen: number): string | undefined {
   if (typeof raw !== "string") return undefined;
@@ -92,10 +93,16 @@ export async function POST(req: NextRequest) {
     body.vision === true ||
     body.mode === "vision";
 
-  const maxPairs = useVision ? MAX_PAIRS_VISION : MAX_PAIRS_TEXT;
+  const maxPairs = useVision
+    ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+    : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST;
   if (pairs.length > maxPairs) {
     return NextResponse.json(
-      { error: useVision ? `В режиме с фото не более ${MAX_PAIRS_VISION} пар за запрос` : `Не более ${MAX_PAIRS_TEXT} пар за один запрос` },
+      {
+        error: useVision
+          ? `В режиме с фото не более ${AI_DUP_MAX_PAIRS_VISION_PER_REQUEST} пар за запрос`
+          : `Не более ${AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST} пар за один запрос`
+      },
       { status: 400 }
     );
   }
@@ -108,7 +115,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const verdicts: DupPairVerdict[] = [];
-    const chunkSize = useVision ? CHUNK_VISION : CHUNK_TEXT;
+    const chunkSize = useVision ? AI_DUP_CHUNK_VISION : AI_DUP_CHUNK_TEXT;
     const refine = useVision ? refineDupPairsOpenAiVisionBatch : refineDupPairsOpenAiBatch;
     for (let i = 0; i < pairs.length; i += chunkSize) {
       const chunk = pairs.slice(i, i + chunkSize);

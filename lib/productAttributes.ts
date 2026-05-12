@@ -1,5 +1,5 @@
 import type { FpProduct } from "./types";
-import { extractVolumePhraseFromText } from "./volumeFromText";
+import { extractVolumePhraseFromText, parseVolumeString } from "./volumeFromText";
 
 /**
  * Поддержка: объём / цвет / оттенок из вложенных полей товара 4Partners
@@ -11,21 +11,54 @@ function norm(s: string): string {
 
 type AttrOut = { vol?: string; col?: string; sh?: string };
 
+/** Объём в значении «50 ml», даже если ключ не volume (capacity, net wt и т.д.). */
+function considerVolumeFromRawValue(val: string, out: AttrOut): void {
+  if (out.vol) return;
+  const t = val.trim();
+  if (!t || t.length > 180) return;
+  if (parseVolumeString(t)) out.vol = t;
+}
+
 function considerKeyName(key: string, val: string, out: AttrOut) {
   const k = key.toLowerCase();
-  if (
-    /объем|обьем|volume|volum|объё|size|ml|мл|мл\.|e\.?\s*g\.?/i.test(k) &&
-    !/photo|image|фото|картин/i.test(k)
-  ) {
+  const noPhoto = !/photo|image|фото|картин/i.test(k);
+  const volumeKeyStrict =
+    noPhoto &&
+    /объем|обьем|volume|volum|объё|capacity|емкост|volumetric|nett?o|нетто|мл|\bml\b|fl\.?\s*oz|fl\s*oz|\boz\b|унц/i.test(
+      k
+    );
+  const volumeKeyLoose =
+    noPhoto &&
+    /размер|size|масса|weight/i.test(k) &&
+    parseVolumeString(val);
+  if (volumeKeyStrict) {
     if (!out.vol) out.vol = val;
     return;
   }
-  if (/цвет|color|colour|колер/i.test(k) && !/фото|photo/i.test(k)) {
-    if (!out.col) out.col = val;
+  if (volumeKeyLoose) {
+    if (!out.vol) out.vol = val;
     return;
   }
-  if (/оттенок|shade|nuance|тон(?!\w)|tone\b/i.test(k)) {
+  /**
+   * Оттенок раньше цвета: `color (shade)`, `цвет (оттенок)`, makeup shade…
+   * PIM / поставщики дают десятки имён — синонимы под родителя «Оттенок».
+   */
+  if (
+    /оттенок|shade|nuance|farbton|odcień|odcien|tonacja|makeup\s+shade|choose\s+shade|hair\s+colou?r\s+shade|\bcolou?r\s+shade\b|color\s*\(\s*shade\s*\)|цвет\s*\(\s*оттенок\s*\)/i.test(
+      k
+    ) &&
+    !/фото|photo/i.test(k)
+  ) {
     if (!out.sh) out.sh = val;
+    return;
+  }
+  if (
+    /цвет|color|colour|колер|renk|kleur|couleur|colore|\bkolor\b|main\s+col|product\s+main\s+colou?r|\bcolors?\b|colout/i.test(
+      k
+    ) &&
+    !/фото|photo/i.test(k)
+  ) {
+    if (!out.col) out.col = val;
   }
 }
 
@@ -48,6 +81,7 @@ function walk(
           | undefined;
         if (name && val && typeof name === "string" && typeof val === "string") {
           considerKeyName(String(name), String(val), out);
+          considerVolumeFromRawValue(String(val), out);
         }
       }
       walk(x, depth + 1, out);
@@ -58,6 +92,7 @@ function walk(
     for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
       if (typeof v === "string" && v.trim() && v.length < 200) {
         considerKeyName(k, v, out);
+        considerVolumeFromRawValue(v, out);
       }
       walk(v, depth + 1, out);
     }

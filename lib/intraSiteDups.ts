@@ -5,12 +5,30 @@ import { normBrand } from "./pairScoring";
 import type {
   AttrMatchOptions,
   CompareProduct,
+  EanGroupsSummary,
   FpProduct,
   NameLocale
 } from "./types";
 
+export function summarizeIntraEanGroups(
+  eanGroups: { products: { id: number }[] }[]
+): EanGroupsSummary {
+  const ids = new Set<number>();
+  let rowSlotsInGroups = 0;
+  for (const g of eanGroups) {
+    rowSlotsInGroups += g.products.length;
+    for (const c of g.products) ids.add(c.id);
+  }
+  return {
+    groupCount: eanGroups.length,
+    uniqueProductCount: ids.size,
+    rowSlotsInGroups
+  };
+}
+
 export type IntraSiteDupResult = {
   eanGroups: { ean: string; products: CompareProduct[] }[];
+  eanGroupsSummary: EanGroupsSummary;
   /** ~90%: частичное название + эквивалентный URL фото */
   namePhotoPairs: {
     a: CompareProduct;
@@ -86,6 +104,7 @@ export async function findIntraSiteDuplicates(
 
   return {
     eanGroups,
+    eanGroupsSummary: summarizeIntraEanGroups(eanGroups),
     namePhotoPairs: soft.namePhotoPairs,
     brandVisualPairs: soft.brandVisualPairs,
     unlikelyPairs: soft.unlikelyPairs

@@ -63,6 +63,7 @@ export const MIN_EAN_INDEX_DIGITS = 6;
 /**
  * Ключ для индексов/групп EAN: только цифры; убираем пробелы и дефисы из фида.
  * Иначе одна и та же позиция с «460053…» и «460 053 …» не сходилась.
+ * Для полного набора вариантов (нули, 12/13/14) см. {@link expandEanDigitsForIndex}.
  */
 export function eanKeyForIndex(raw: string | null | undefined): string | null {
   if (raw == null || raw === "") return null;
@@ -71,12 +72,40 @@ export function eanKeyForIndex(raw: string | null | undefined): string | null {
   return d;
 }
 
-/** Уникальные канонические штрихкода карточки для сопоставления. */
+/**
+ * Варианты одной записи штрихкода для склейки дублей: ведущие нули, типичные длины 12/13/14,
+ * у 14-значного кода — ещё правые 13 и 12 цифр (приставка упаковки).
+ */
+export function expandEanDigitsForIndex(digits: string): string[] {
+  const d = String(digits).replace(/\D/g, "");
+  if (d.length < MIN_EAN_INDEX_DIGITS) return [];
+  const out = new Set<string>();
+  const add = (s: string) => {
+    if (s.length >= MIN_EAN_INDEX_DIGITS) out.add(s);
+  };
+  add(d);
+  const trimmed = d.replace(/^0+/, "") || "0";
+  add(trimmed);
+  for (const len of [12, 13, 14] as const) {
+    if (trimmed.length <= len) add(trimmed.padStart(len, "0"));
+  }
+  if (d.length <= 14) add(d.padStart(14, "0"));
+  if (d.length >= 14) {
+    add(d.slice(-13));
+    add(d.slice(-12));
+  }
+  return [...out];
+}
+
+/** Уникальные ключи штрихкодов карточки для индекса (несколько форм одного GTIN/EAN). */
 export function collectEanIndexKeys(p: FpProduct): string[] {
   const keys = new Set<string>();
   for (const raw of collectEans(p)) {
-    const k = eanKeyForIndex(raw);
-    if (k) keys.add(k);
+    const d = String(raw ?? "").replace(/\D/g, "");
+    if (d.length < MIN_EAN_INDEX_DIGITS) continue;
+    for (const k of expandEanDigitsForIndex(d)) {
+      keys.add(k);
+    }
   }
   return [...keys];
 }

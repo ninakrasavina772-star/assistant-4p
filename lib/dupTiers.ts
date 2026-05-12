@@ -10,7 +10,11 @@ import {
 import { modelLineStrictPrefixExtensionConflict, nameAndModelScore } from "./nameModel";
 import { nameSimilarity, normalizeComparableName } from "./nameSimilarity";
 import { applyAttrGate, normBrand, sameBrandForFuzzy } from "./pairScoring";
-import { pickComparableName, toCompareProduct } from "./product";
+import {
+  expandEanDigitsForIndex,
+  pickComparableName,
+  toCompareProduct
+} from "./product";
 import type {
   AttrMatchOptions,
   CompareProduct,
@@ -20,6 +24,13 @@ import type {
   NameLocale
 } from "./types";
 import { wordFollowedByConflictingDigit } from "./variantNameGuard";
+
+/** Внутри одной рубрики: мягче aHash — разные ракурсы/превью одного товара. */
+const INTRA_SOFT_VISUAL_HAMMING_MAX = 16;
+const INTRA_UNLIKELY_VISUAL_HAMMING_MAX = 11;
+/** Порог схожести названия для ~90% без эквивалентного URL фото (только intra, тот же бренд). */
+const INTRA_NAME_STRONG_NO_URL_MIN = 0.55;
+const MIN_EAN_DISJOINT_GUARD_DIGITS = 8;
 
 /** ~90%: частичное совпадение названия + эквивалентная ссылка на фото */
 export const PARTIAL_NAME_MIN_90 = 0.42;
@@ -109,8 +120,16 @@ export function softVisualBlockedByDistinctModelLine(
   return false;
 }
 
-function normEanKey(s: string): string {
-  return String(s).replace(/\D/g, "");
+function eanKeySetForDisjointGuard(c: CompareProduct): Set<string> {
+  const s = new Set<string>();
+  for (const raw of c.eans || []) {
+    const d = String(raw).replace(/\D/g, "");
+    if (d.length < MIN_EAN_DISJOINT_GUARD_DIGITS) continue;
+    for (const k of expandEanDigitsForIndex(d)) {
+      if (k.length >= MIN_EAN_DISJOINT_GUARD_DIGITS) s.add(k);
+    }
+  }
+  return s;
 }
 
 /** Оба товара имеют валидные штрихкоды, но множества не пересекаются → не может быть «мягкого» дубля. */
@@ -118,16 +137,8 @@ export function softDupBlockedByDisjointEans(
   a: CompareProduct,
   b: CompareProduct
 ): boolean {
-  const ea = new Set(
-    (a.eans || [])
-      .map(normEanKey)
-      .filter((x) => x.length >= 8)
-  );
-  const eb = new Set(
-    (b.eans || [])
-      .map(normEanKey)
-      .filter((x) => x.length >= 8)
-  );
+  const ea = eanKeySetForDisjointGuard(a);
+  const eb = eanKeySetForDisjointGuard(b);
   if (ea.size === 0 || eb.size === 0) return false;
   for (const x of ea) {
     if (eb.has(x)) return false;
@@ -240,11 +251,27 @@ function resolveTierForPair(
   const imgJ = cJ.firstImage || "";
   const urlEq = firstImageRefEquivalent(imgI, imgJ);
 
+  const intraRelaxed = crossOpts?.skipDisjointEanGuard === true;
+  const visualMaxMain = intraRelaxed
+    ? INTRA_SOFT_VISUAL_HAMMING_MAX
+    : DEFAULT_VISUAL_HAMMING_MAX;
+  const visualMaxUnlikely = intraRelaxed
+    ? INTRA_UNLIKELY_VISUAL_HAMMING_MAX
+    : UNLIKELY_VISUAL_HAMMING_MAX;
+
+  const nameStrongIntra =
+    intraRelaxed &&
+    !urlEq &&
+    brandsExactForDup(cI, cJ) &&
+    comb >= INTRA_NAME_STRONG_NO_URL_MIN;
+
   if (modelLineStrictPrefixExtensionConflict(mA, mB) && !urlEq) return null;
 
-  if (urlEq && comb >= PARTIAL_NAME_MIN_90) {
+  if ((urlEq && comb >= PARTIAL_NAME_MIN_90) || nameStrongIntra) {
     const g = applyAttrGate(cI, cJ, attrOpts, 0.9, [
-      "~90% дубль: частичное название + эквивалентное фото (URL)"
+      urlEq
+        ? "~90% дубль: частичное название + эквивалентное фото (URL)"
+        : "~90% дубль: сильное название (внутри рубрики), разные превью фото"
     ]);
     if (g.score >= 0.89 && g.reasons.length) {
       return { kind: "90", reasons: g.reasons, score: 0.9 };
@@ -258,7 +285,7 @@ function resolveTierForPair(
     imgI &&
     imgJ
   ) {
-    if (visualFromCache(imgI, imgJ, cache)) {
+    if (visualFromCache(imgI, imgJ, cache, visualMaxMain)) {
       const g = applyAttrGate(cI, cJ, attrOpts, 0.6, [
         "~60% дубль: бренд (точно) + модельная линия + похожее фото (визуально)",
         `модель~${Math.round(modelSim * 100)}%${full >= PARTIAL_NAME_MIN_60 ? ` · полное название~${Math.round(full * 100)}%` : ""}`
@@ -272,7 +299,7 @@ function resolveTierForPair(
   if (sameBrandForFuzzy(cI, cJ) && comb >= SLIGHT_NAME_UNLIKELY && imgI && imgJ) {
     if (substantialModelConflict(mA, mB, modelSim)) return null;
     if (softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)) return null;
-    if (visualFromCache(imgI, imgJ, cache, UNLIKELY_VISUAL_HAMMING_MAX)) {
+    if (visualFromCache(imgI, imgJ, cache, visualMaxUnlikely)) {
       return {
         kind: "un",
         reasons: [

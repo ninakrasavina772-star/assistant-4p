@@ -12,10 +12,17 @@ const NAME_ALONE_MIN = 0.66;
 /** С одной витринной карточкой (-aID в URL) и обоим объёмам — допускаем разные URL фото */
 const LINK_FAMILY_MODEL_MIN = 0.48;
 
+function toneOrColorLabel(c: CompareProduct): string | undefined {
+  const s = c.attrShade?.trim() || c.attrColor?.trim();
+  return s || undefined;
+}
+
 /**
  * При включённых опциях: если на обоих товарах задана характеристика и
  * значения различаются — пара не подходит. Фото остаётся важной частью: при
  * неэквивалентных ссылках на первое фото (после нормализации URL) ветка «то же фото» не срабатывает.
+ *
+ * Цвет и оттенок объединены: поставщик может положить тон в `colour` или в `shade` — сравниваем по «что есть».
  */
 export function applyAttrGate(
   a: CompareProduct,
@@ -42,21 +49,17 @@ export function applyAttrGate(
     }
     if (av && bv) extra.push("объём");
   }
-  if (attrOpts.shade) {
-    const av = a.attrShade?.trim();
-    const bv = b.attrShade?.trim();
+  if (attrOpts.shade || attrOpts.color) {
+    const av = toneOrColorLabel(a);
+    const bv = toneOrColorLabel(b);
     if (av && bv && normAttrValue(av) !== normAttrValue(bv)) {
       return { score: 0, reasons: [] };
     }
-    if (av && bv) extra.push("оттенок");
-  }
-  if (attrOpts.color) {
-    const av = a.attrColor?.trim();
-    const bv = b.attrColor?.trim();
-    if (av && bv && normAttrValue(av) !== normAttrValue(bv)) {
-      return { score: 0, reasons: [] };
+    if (av && bv) {
+      if (attrOpts.shade && attrOpts.color) extra.push("оттенок/цвет");
+      else if (attrOpts.shade) extra.push("оттенок");
+      else extra.push("цвет");
     }
-    if (av && bv) extra.push("цвет");
   }
   const reasons = [...new Set([...baseReasons, ...extra])];
   return { score: baseScore, reasons };
@@ -182,24 +185,20 @@ export function scoreUnlikelyPhotoAndModel(
       reasons.push("объём: не в обеих карточках");
     }
   }
-  if (attrOpts?.shade) {
-    const h = attrPairHint(a.attrShade, b.attrShade);
+  if (attrOpts?.shade || attrOpts?.color) {
+    const h = attrPairHint(toneOrColorLabel(a), toneOrColorLabel(b));
+    const lab =
+      attrOpts?.shade && attrOpts?.color
+        ? "оттенок/цвет"
+        : attrOpts?.shade
+          ? "оттенок"
+          : "цвет";
     if (h === "equal") {
-      reasons.push("оттенок (совп.)");
+      reasons.push(`${lab} (совп.)`);
     } else if (h === "different") {
-      reasons.push("оттенок: разн.");
+      reasons.push(`${lab}: разн.`);
     } else {
-      reasons.push("оттенок: не везде");
-    }
-  }
-  if (attrOpts?.color) {
-    const h = attrPairHint(a.attrColor, b.attrColor);
-    if (h === "equal") {
-      reasons.push("цвет (совп.)");
-    } else if (h === "different") {
-      reasons.push("цвет: разн.");
-    } else {
-      reasons.push("цвет: не везде");
+      reasons.push(`${lab}: не везде`);
     }
   }
   return { score, reasons };

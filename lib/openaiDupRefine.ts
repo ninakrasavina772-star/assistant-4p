@@ -192,7 +192,7 @@ function collectIntraDiscoveryPairs(
     imageUrlB?: string | null
   ) => void
 ) {
-  const MAX_BUCKET = 52;
+  const MAX_BUCKET = 120;
   const byBrand = new Map<string, CompareProduct[]>();
   for (const c of productsById.values()) {
     const bk = normBrand(c.brand) || "__nobrand__";

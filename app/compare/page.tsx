@@ -22,6 +22,10 @@ import {
   COL_PRODUCT_NAME,
   type NoveltiesSheetForEanDup
 } from "@/lib/noveltiesEanDupSheet";
+import {
+  AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST,
+  AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+} from "@/lib/aiDupLimits";
 import type {
   CompareProduct,
   CompareResult,
@@ -293,7 +297,9 @@ export default function ComparePage() {
   const [dupKindFilter, setDupKindFilter] = useState<DupKindFilter>("all");
   const [openAiKey, setOpenAiKey] = useState("");
   const [rememberOpenAiKey, setRememberOpenAiKey] = useState(true);
-  const [aiDupMaxPairs, setAiDupMaxPairs] = useState(40);
+  const [aiDupMaxPairs, setAiDupMaxPairs] = useState(
+    AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST
+  );
   const [aiDupUseVision, setAiDupUseVision] = useState(false);
   const [aiDupVerdicts, setAiDupVerdicts] = useState<
     Record<string, { duplicate: boolean; confidence?: number; note?: string }>
@@ -1980,7 +1986,9 @@ export default function ComparePage() {
       setAiDupErr("Нужен ключ OpenAI API (sk-… или sk-proj-…)");
       return;
     }
-    const cap = aiDupUseVision ? 40 : 80;
+    const cap = aiDupUseVision
+      ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+      : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST;
     const excludePairKeys = new Set(Object.keys(aiDupVerdicts));
     const pairs = collectSoftDupPairsForOpenAi(
       data,
@@ -4346,7 +4354,9 @@ export default function ComparePage() {
                     отчёта.
                   </p>
                   <p className="text-xs text-indigo-900/85 leading-relaxed">
-                    За один запрос — не больше числа в поле «Макс. пар» (с превью до 40, без превью до 80). Повторное
+                    За один запрос — не больше числа в поле «Макс. пар» (с превью до{" "}
+                    {AI_DUP_MAX_PAIRS_VISION_PER_REQUEST}, без превью до {AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST}).
+                    Повторное
                     нажатие берёт <strong className="text-slate-800">следующие</strong> пары в том же порядке; уже
                     проверенные не отправляются повторно.
                   </p>
@@ -4369,20 +4379,28 @@ export default function ComparePage() {
                       <input
                         type="number"
                         min={1}
-                        max={aiDupUseVision ? 40 : 80}
+                        max={aiDupUseVision ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST}
                         className={homeInput + " mt-1 tabular-nums"}
                         value={aiDupMaxPairs}
                         onChange={(e) =>
                           setAiDupMaxPairs(
                             Math.min(
-                              aiDupUseVision ? 40 : 80,
-                              Math.max(1, Number(e.target.value) || 40)
+                              aiDupUseVision
+                                ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+                                : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST,
+                              Math.max(
+                                1,
+                                Number(e.target.value) ||
+                                  AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST
+                              )
                             )
                           )
                         }
                       />
                       <span className="block text-[11px] text-slate-500 mt-1">
-                        {aiDupUseVision ? "до 40 с превью" : "до 80 только текст"}
+                        до {AI_DUP_MAX_PAIRS_VISION_PER_REQUEST} с превью / до{" "}
+                        {AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST} только текст за один запрос; порции можно
+                        повторять
                       </span>
                     </label>
                     <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-md">
@@ -4392,7 +4410,7 @@ export default function ComparePage() {
                         onChange={(e) => {
                           const v = e.target.checked;
                           setAiDupUseVision(v);
-                          if (v) setAiDupMaxPairs((x) => Math.min(40, x));
+                          if (v) setAiDupMaxPairs((x) => Math.min(AI_DUP_MAX_PAIRS_VISION_PER_REQUEST, x));
                         }}
                       />
                       Учитывать превью (vision): сравнить упаковку на фото, как человек глазами
@@ -4723,6 +4741,15 @@ export default function ComparePage() {
       </div>
 
       {data && isSingleDups(data) && (() => {
+        const eanDupIdSet = new Set<number>();
+        let rowSlotsFallback = 0;
+        for (const g of data.eanGroups) {
+          rowSlotsFallback += g.products.length;
+          for (const c of g.products) eanDupIdSet.add(c.id);
+        }
+        const eg = data.eanGroupsSummary;
+        const cEanRows = eg?.rowSlotsInGroups ?? rowSlotsFallback;
+        const cEanCards = eg?.uniqueProductCount ?? eanDupIdSet.size;
         const cEan = data.eanGroups.length;
         const cName = data.namePhotoPairs.length;
         const cVis = data.brandVisualPairs?.length ?? 0;
@@ -4758,8 +4785,13 @@ export default function ComparePage() {
                 </>
               )}
             </span>
-            <span className="text-amber-800">
-              Групп EAN-дублей: {cEan}
+            <span
+              className="text-amber-800"
+              title="Группа = один штрихкод ведёт на несколько разных id. «Строк в таблице» = сумма карточек по всем группам (часто это были ваши «позиции»). Меньше групп — если разные записи одного EAN из фида слились после нормализации (только цифры)."
+            >
+              EAN → несколько id: <strong className="tabular-nums">{cEan}</strong> групп ·{" "}
+              <strong className="tabular-nums">{cEanRows}</strong> строк в группах ·{" "}
+              <strong className="tabular-nums">{cEanCards}</strong> уник. карточек
             </span>
             <span className="text-amber-800">
               ~90% (имя+URL фото): {cName}
@@ -4785,8 +4817,9 @@ export default function ComparePage() {
               <strong>по названию + фото</strong>
               <span className="text-slate-500">
                 {" "}
-                — счётчики: EAN{" "}
-                <strong className="tabular-nums text-slate-700">{cEan}</strong>, ~90%{" "}
+                — счётчики: EAN — <strong className="tabular-nums text-slate-700">{cEan}</strong>{" "}
+                групп / <strong className="tabular-nums text-slate-700">{cEanRows}</strong> строк /{" "}
+                <strong className="tabular-nums text-slate-700">{cEanCards}</strong> уник. карточек, ~90%{" "}
                 <strong className="tabular-nums text-slate-700">{cName}</strong>, ~60%{" "}
                 <strong className="tabular-nums text-slate-700">{cVis}</strong>, маловероятн.{" "}
                 <strong className="tabular-nums text-slate-700">{cUnl}</strong>
@@ -4860,7 +4893,9 @@ export default function ComparePage() {
                 <strong className="text-slate-800">Дубли AI</strong>.
               </p>
               <p className="text-xs text-indigo-900/85 leading-relaxed">
-                За один запрос — не больше числа в поле «Макс. пар» (с превью до 40, без превью до 80). Повторное нажатие
+                За один запрос — не больше числа в поле «Макс. пар» (с превью до{" "}
+                {AI_DUP_MAX_PAIRS_VISION_PER_REQUEST}, без превью до {AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST}).
+                Повторное нажатие
                 берёт <strong className="text-slate-800">следующие</strong> пары в том же порядке; уже проверенные не
                 отправляются повторно.
               </p>
@@ -4881,20 +4916,27 @@ export default function ComparePage() {
                   <input
                     type="number"
                     min={1}
-                    max={aiDupUseVision ? 40 : 80}
+                    max={aiDupUseVision ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST}
                     className={homeInput + " mt-1 tabular-nums"}
                     value={aiDupMaxPairs}
                     onChange={(e) =>
                       setAiDupMaxPairs(
                         Math.min(
-                          aiDupUseVision ? 40 : 80,
-                          Math.max(1, Number(e.target.value) || 40)
+                          aiDupUseVision
+                            ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+                            : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST,
+                          Math.max(
+                            1,
+                            Number(e.target.value) ||
+                              AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST
+                          )
                         )
                       )
                     }
                   />
                   <span className="block text-[11px] text-slate-500 mt-1">
-                    {aiDupUseVision ? "до 40 с превью" : "до 80 только текст"}
+                    до {AI_DUP_MAX_PAIRS_VISION_PER_REQUEST} с превью / до{" "}
+                    {AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST} текст; порции повторяйте
                   </span>
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-md">
@@ -4904,7 +4946,7 @@ export default function ComparePage() {
                     onChange={(e) => {
                       const v = e.target.checked;
                       setAiDupUseVision(v);
-                      if (v) setAiDupMaxPairs((x) => Math.min(40, x));
+                      if (v) setAiDupMaxPairs((x) => Math.min(AI_DUP_MAX_PAIRS_VISION_PER_REQUEST, x));
                     }}
                   />
                   Учитывать превью (vision): сравнить упаковку на фото, как человек глазами
@@ -5720,6 +5762,15 @@ export default function ComparePage() {
             const intraUnDisp = (intra.unlikelyPairs ?? []).filter((row) =>
               aiDupPassesSoftDup("unlikely", row.a.id, row.b.id)
             );
+            const intraEanIdSet = new Set<number>();
+            let intraRowFallback = 0;
+            for (const g of intra.eanGroups) {
+              intraRowFallback += g.products.length;
+              for (const c of g.products) intraEanIdSet.add(c.id);
+            }
+            const intraEgs = intra.eanGroupsSummary;
+            const intraEanRows = intraEgs?.rowSlotsInGroups ?? intraRowFallback;
+            const intraEanCardN = intraEgs?.uniqueProductCount ?? intraEanIdSet.size;
             const scopeIntra = isA ? dupScopeA === "intraA" : dupScopeB === "intraB";
             return (
             <section
@@ -5754,7 +5805,14 @@ export default function ComparePage() {
                         EAN — несколько id на {dupSiteLabel}
                       </h3>
                       <p className="text-xs text-amber-900/80 mb-3">
-                        Один EAN, разные карточки. «Карточка» — витрина или шаблон{" "}
+                        Один EAN, разные карточки (разные id). В этой выгрузке:{" "}
+                        <strong className="tabular-nums">{intra.eanGroups.length}</strong> групп ·{" "}
+                        <strong className="tabular-nums">{intraEanRows}</strong> строк в группах ·
+                        уник. карточек:{" "}
+                        <strong className="tabular-nums">{intraEanCardN}</strong>.
+                        Число групп обычно меньше числа «позиций»: один штрихкод может быть записан в фиде в
+                        нескольких форматах — после приведения к цифрам они попадают в одну группу. «Карточка» —
+                        витрина или шаблон{" "}
                         <code className="text-[11px] bg-amber-100 px-0.5 rounded">
                           NEXT_PUBLIC_4P_ADMIN_URL_TEMPLATE
                         </code>{" "}
