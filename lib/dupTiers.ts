@@ -30,6 +30,11 @@ const INTRA_SOFT_VISUAL_HAMMING_MAX = 16;
 const INTRA_UNLIKELY_VISUAL_HAMMING_MAX = 11;
 /** Порог схожести названия для ~90% без эквивалентного URL фото (только intra, тот же бренд). */
 const INTRA_NAME_STRONG_NO_URL_MIN = 0.55;
+/**
+ * Для этой же ветки: сходство **модельной** строки ({@link nameAndModelScore} после снятия бренда и типа),
+ * иначе «Guess Iconic Sublime … EDP» vs «Guess Iconic Blue … EDP» получают высокий балл только за хвост «Eau de Parfum Spray».
+ */
+const INTRA_NAME_STRONG_MODEL_MIN = 0.64;
 const MIN_EAN_DISJOINT_GUARD_DIGITS = 8;
 
 /** ~90%: частичное совпадение названия + эквивалентная ссылка на фото */
@@ -259,11 +264,17 @@ function resolveTierForPair(
     ? INTRA_UNLIKELY_VISUAL_HAMMING_MAX
     : UNLIKELY_VISUAL_HAMMING_MAX;
 
+  const modelSubstantial =
+    mA.trim().length >= MIN_MODEL_CHARS_FOR_VISUAL &&
+    mB.trim().length >= MIN_MODEL_CHARS_FOR_VISUAL;
   const nameStrongIntra =
     intraRelaxed &&
     !urlEq &&
     brandsExactForDup(cI, cJ) &&
-    comb >= INTRA_NAME_STRONG_NO_URL_MIN;
+    comb >= INTRA_NAME_STRONG_NO_URL_MIN &&
+    (!modelSubstantial || modelSim >= INTRA_NAME_STRONG_MODEL_MIN) &&
+    !softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq) &&
+    !softDupBlockedByDisjointEans(cI, cJ);
 
   if (modelLineStrictPrefixExtensionConflict(mA, mB) && !urlEq) return null;
 

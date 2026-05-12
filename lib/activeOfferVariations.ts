@@ -24,15 +24,15 @@ export function filterFpProductKeepActiveOfferVariations(p: FpProduct): FpProduc
   }
   if (Object.keys(next).length === 0) return null;
 
+  /** Не обнуляем `eans`: в /product/list штрихкод часто только в корне, а в вариациях — без `ean` или неактивный оффер. */
   const trimmed: FpProduct = {
     ...p,
-    product_variation: next,
-    eans: [],
+    product_variation: next
   };
   const eans = collectEans(trimmed);
   return {
     ...trimmed,
-    ...(eans.length ? { eans } : { eans: undefined }),
+    ...(eans.length ? { eans } : { eans: undefined })
   };
 }
 

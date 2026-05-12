@@ -634,6 +634,19 @@ function verdictsFromOpenAiHttpBody(rawText: string): DupPairVerdict[] {
     throw new Error("OpenAI: нет поля verdicts");
   }
 
+  /** Иначе строка "false" от модели даёт Boolean("false") === true */
+  const duplicateFromModel = (v: unknown): boolean => {
+    if (v === true || v === 1) return true;
+    if (v === false || v === 0 || v == null) return false;
+    if (typeof v === "string") {
+      const s = v.trim().toLowerCase();
+      if (s === "true" || s === "1" || s === "yes" || s === "да") return true;
+      if (s === "false" || s === "0" || s === "no" || s === "нет" || s === "")
+        return false;
+    }
+    return false;
+  };
+
   const out: DupPairVerdict[] = [];
   for (const row of verdictsRaw) {
     if (!row || typeof row !== "object") continue;
@@ -641,7 +654,7 @@ function verdictsFromOpenAiHttpBody(rawText: string): DupPairVerdict[] {
     const idA = typeof o.idA === "number" ? o.idA : Number(o.idA);
     const idB = typeof o.idB === "number" ? o.idB : Number(o.idB);
     if (!Number.isFinite(idA) || !Number.isFinite(idB)) continue;
-    const duplicate = Boolean(o.duplicate);
+    const duplicate = duplicateFromModel(o.duplicate);
     let confidence = Number(o.confidence);
     if (!Number.isFinite(confidence)) confidence = duplicate ? 0.7 : 0.7;
     confidence = Math.min(1, Math.max(0, confidence));

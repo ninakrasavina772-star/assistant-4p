@@ -301,6 +301,8 @@ export default function ComparePage() {
     AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST
   );
   const [aiDupUseVision, setAiDupUseVision] = useState(false);
+  /** false — в OpenAI попадают и пары из отчёта (~90/~60/маловероятные), порциями, без повторов по вердиктам */
+  const [aiDupOutsideReportOnly, setAiDupOutsideReportOnly] = useState(true);
   const [aiDupVerdicts, setAiDupVerdicts] = useState<
     Record<string, { duplicate: boolean; confidence?: number; note?: string }>
   >({});
@@ -1825,29 +1827,36 @@ export default function ComparePage() {
     [data]
   );
 
-  const aiExclusiveDupCount = useMemo(() => {
-    let n = 0;
-    for (const [k, v] of Object.entries(aiDupVerdicts)) {
-      if (!v?.duplicate) continue;
-      if (algorithmPairKeysForReport.has(k)) continue;
-      n++;
+  const aiSessionVerdictStats = useMemo(() => {
+    let dupYes = 0;
+    let dupNo = 0;
+    for (const v of Object.values(aiDupVerdicts)) {
+      if (!v) continue;
+      if (v.duplicate) dupYes += 1;
+      else dupNo += 1;
     }
-    return n;
-  }, [aiDupVerdicts, algorithmPairKeysForReport]);
+    return { dupYes, dupNo, total: dupYes + dupNo };
+  }, [aiDupVerdicts]);
 
-  const aiExclusiveRows = useMemo((): {
+  /** Все пары, где AI ответил «дубль» (карточки подтягиваются из отчёта). */
+  const aiConfirmedDupRows = useMemo((): {
     a: CompareProduct;
     b: CompareProduct;
     key: string;
+    inReport: boolean;
   }[] => {
     if (!data) {
       return [];
     }
     const byId = collectProductsForAiLookup(data);
-    const rows: { a: CompareProduct; b: CompareProduct; key: string }[] = [];
+    const rows: {
+      a: CompareProduct;
+      b: CompareProduct;
+      key: string;
+      inReport: boolean;
+    }[] = [];
     for (const [k, v] of Object.entries(aiDupVerdicts)) {
       if (!v?.duplicate) continue;
-      if (algorithmPairKeysForReport.has(k)) continue;
       const parts = k.split("-");
       if (parts.length !== 2) continue;
       const ia = Number(parts[0]);
@@ -1856,7 +1865,12 @@ export default function ComparePage() {
       const a = byId.get(ia);
       const b = byId.get(ib);
       if (!a || !b) continue;
-      rows.push({ a, b, key: k });
+      rows.push({
+        a,
+        b,
+        key: k,
+        inReport: algorithmPairKeysForReport.has(k)
+      });
     }
     rows.sort((x, y) => {
       const ax = Math.min(x.a.id, x.b.id);
@@ -1866,6 +1880,12 @@ export default function ComparePage() {
     });
     return rows;
   }, [data, aiDupVerdicts, algorithmPairKeysForReport]);
+
+  const aiConfirmedDupCount = aiConfirmedDupRows.length;
+  const aiExclusiveDupCount = useMemo(
+    () => aiConfirmedDupRows.filter((r) => !r.inReport).length,
+    [aiConfirmedDupRows]
+  );
 
   const compareIdsOnAForLabels = useMemo(() => {
     if (!data || "resultKind" in data || isSingleDups(data)) return new Set<number>();
@@ -1996,14 +2016,18 @@ export default function ComparePage() {
       Math.min(cap, Math.max(1, aiDupMaxPairs)),
       {
         excludePairKeys,
-        excludeAlgorithmPairKeys: algorithmPairKeysForReport,
+        excludeAlgorithmPairKeys: aiDupOutsideReportOnly
+          ? algorithmPairKeysForReport
+          : undefined
       }
     );
     if (!pairs.length) {
       setAiDupErr(
         excludePairKeys.size > 0
-          ? "Все доступные кандидаты уже проверены AI. Сбросьте вердикты или смените отчёт."
-          : "Нет кандидатов для AI за пределами пар отчёта (EAN и слои название+фото). Возможно, в выгрузке не осталось подходящих пар с тем же брендом и заметно похожим названием."
+          ? "Все пары в этой очереди уже проверены. Сбросьте вердикты, снимите «только вне отчёта» или смените выгрузку."
+          : aiDupOutsideReportOnly
+            ? "Нет кандидатов для AI вне пар отчёта. Снимите галочку «Только вне автоматики», чтобы проверять порциями пары из вкладки «название+фото» (~90%, ~60%, маловероятные)."
+            : "Нет кандидатов для AI по текущим настройкам."
       );
       return;
     }
@@ -2065,6 +2089,7 @@ export default function ComparePage() {
     rememberOpenAiKey,
     aiDupVerdicts,
     algorithmPairKeysForReport,
+    aiDupOutsideReportOnly,
   ]);
 
   const aiVerdictKeyCount = Object.keys(aiDupVerdicts).length;
@@ -4338,7 +4363,11 @@ export default function ComparePage() {
                         : "bg-white border-2 border-indigo-200 text-indigo-950 hover:border-indigo-400"
                     }`}
                   >
-                    Дубли AI ({aiExclusiveDupCount}) — вне EAN и названия+фото
+                    Дубли AI ({aiConfirmedDupCount}
+                    {aiExclusiveDupCount > 0
+                      ? ` · вн.отч.${aiExclusiveDupCount}`
+                      : ""}
+                    )
                   </button>
                 </div>
                 <div className="mt-5 pt-4 border-t border-indigo-200/70 space-y-3">
@@ -4346,12 +4375,12 @@ export default function ComparePage() {
                     Уточнение мягких дублей через OpenAI
                   </p>
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Модель получает <strong className="text-slate-800">кандидатов вне отчёта</strong>: один
-                    бренд и заголовки заметно похожи по словам, но пары{' '}
-                    <strong>ещё не входят</strong> в блоки EAN и «название+фото» (~90%, ~60%, маловероятные). По
-                    желанию включайте превью (vision). Ответы «дубль» смотрите на вкладке{" "}
-                    <strong className="text-slate-800">Дубли AI</strong> — там не показываются автоматические строки
-                    отчёта.
+                    Отправляйте в OpenAI <strong className="text-slate-800">новые порции пар</strong>: уже
+                    проверенные пары не повторяются, но один и тот же товар может встречаться в других парах. По
+                    умолчанию — только кандидаты <strong>вне</strong> блоков EAN и «название+фото» (~90%, ~60%,
+                    маловероятные); снимите галочку ниже, чтобы проверять порциями и сами строки отчёта. Ответы «дубль»
+                    — на вкладке <strong className="text-slate-800">Дубли AI</strong> (включая подтверждение пар из
+                    отчёта).
                   </p>
                   <p className="text-xs text-indigo-900/85 leading-relaxed">
                     За один запрос — не больше числа в поле «Макс. пар» (с превью до{" "}
@@ -4403,6 +4432,14 @@ export default function ComparePage() {
                         повторять
                       </span>
                     </label>
+                    <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-xl">
+                      <input
+                        type="checkbox"
+                        checked={aiDupOutsideReportOnly}
+                        onChange={(e) => setAiDupOutsideReportOnly(e.target.checked)}
+                      />
+                      Только вне автоматики (не слать в AI пары уже в EAN и слоях «название+фото»)
+                    </label>
                     <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-md">
                       <input
                         type="checkbox"
@@ -4444,7 +4481,10 @@ export default function ComparePage() {
                     {aiVerdictKeyCount > 0 && (
                       <>
                         <span className="text-xs text-indigo-900 tabular-nums">
-                          Вердиктов в сессии: {aiVerdictKeyCount}
+                          В сессии: {aiSessionVerdictStats.total} вердикт.
+                          {aiSessionVerdictStats.total > 0
+                            ? ` «дубль» ${aiSessionVerdictStats.dupYes} · «не дубль» ${aiSessionVerdictStats.dupNo}`
+                            : ""}
                         </span>
                         <button
                           type="button"
@@ -4879,7 +4919,9 @@ export default function ComparePage() {
                     : "bg-white border border-indigo-200 text-indigo-950 hover:bg-indigo-50"
                 }`}
               >
-                Дубли AI ({aiExclusiveDupCount})
+                Дубли AI ({aiConfirmedDupCount}
+                {aiExclusiveDupCount > 0 ? ` · вн.отч.${aiExclusiveDupCount}` : ""}
+                )
               </button>
             </div>
             <div className="mt-5 pt-4 border-t border-indigo-200/70 space-y-3">
@@ -4887,10 +4929,10 @@ export default function ComparePage() {
                 Уточнение мягких дублей через OpenAI
               </p>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Модель проверяет <strong className="text-slate-800">дополнительных кандидатов вне автоматических
-                  пар</strong> отчёта (EAN и слои название+фото). Отбор по тому же бренду и сходству названия по словам;
-                при включённой опции — ещё и превью. Вердикты «дубль» — на вкладке{" "}
-                <strong className="text-slate-800">Дубли AI</strong>.
+                <strong className="text-slate-800">Порции без повторов одной и той же пары</strong> — один товар может
+                снова попасть в AI в паре с другим id. По умолчанию в модель идут только кандидаты вне EAN и слоёв
+                «название+фото»; снимите галочку «только вне автоматики», чтобы проверять и строки отчёта. Превью
+                (vision) — по желанию. Вкладка <strong className="text-slate-800">Дубли AI</strong> — все ответы «дубль».
               </p>
               <p className="text-xs text-indigo-900/85 leading-relaxed">
                 За один запрос — не больше числа в поле «Макс. пар» (с превью до{" "}
@@ -4939,6 +4981,14 @@ export default function ComparePage() {
                     {AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST} текст; порции повторяйте
                   </span>
                 </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-xl">
+                  <input
+                    type="checkbox"
+                    checked={aiDupOutsideReportOnly}
+                    onChange={(e) => setAiDupOutsideReportOnly(e.target.checked)}
+                  />
+                  Только вне автоматики (не слать пары уже в EAN и слоях «название+фото»)
+                </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer max-w-md">
                   <input
                     type="checkbox"
@@ -4980,7 +5030,10 @@ export default function ComparePage() {
                 {aiVerdictKeyCount > 0 && (
                   <>
                     <span className="text-xs text-indigo-900 tabular-nums">
-                      Вердиктов в сессии: {aiVerdictKeyCount}
+                      В сессии: {aiSessionVerdictStats.total} вердикт.
+                      {aiSessionVerdictStats.total > 0
+                        ? ` «дубль» ${aiSessionVerdictStats.dupYes} · «не дубль» ${aiSessionVerdictStats.dupNo}`
+                        : ""}
                     </span>
                     <button
                       type="button"
@@ -5239,26 +5292,46 @@ export default function ComparePage() {
             <section className="mb-10 scroll-mt-24" id="intra-ai-only-dups">
               <h2 className="text-lg font-semibold text-slate-900 mb-2">
                 Дубли по решению AI{" "}
-                <span className="text-indigo-900 tabular-nums">({aiExclusiveDupCount})</span>
+                <span className="text-indigo-900 tabular-nums">
+                  ({aiConfirmedDupCount}
+                  {aiExclusiveDupCount > 0 ? ` · только вне отчёта ${aiExclusiveDupCount}` : ""})
+                </span>
               </h2>
               <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                Только пары, где AI ответил «дубль» и которые <strong>не попали</strong> в блоки отчёта по EAN и по
-                названию+фото (~90%, ~60%, маловероятные).
+                Все пары, где AI ответил <strong>«дубль»</strong>. Если строка уже была в отчёте (EAN / название+фото),
+                подпись <strong>«также в отчёте»</strong> — это подтверждение моделью. Чтобы прогнать через AI сами
+                строки «название+фото», снимите галочку «только вне автоматики» у блока OpenAI.
               </p>
-              {aiExclusiveRows.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  Пока пусто — запустите проверку OpenAI выше. Если вердикты есть, возможно, все совпали с уже
-                  показанными автоматическими строками.
-                </p>
+              {aiConfirmedDupRows.length === 0 ? (
+                <div className="text-sm text-slate-500 space-y-2">
+                  <p>
+                    {aiSessionVerdictStats.total === 0
+                      ? "Пока пусто — нажмите «Ещё порция…» в блоке OpenAI выше."
+                      : aiSessionVerdictStats.dupYes === 0
+                        ? `По сессии уже ${aiSessionVerdictStats.total} вердикт., но ни разу не было ответа «дубль». Попробуйте снять «только вне автоматики» и проверить пары из отчёта, либо включить превью (vision).`
+                        : aiSessionVerdictStats.dupYes > 0
+                          ? `AI отметил «дубль» в ${aiSessionVerdictStats.dupYes} вердикт., но не удалось сопоставить карточки в отчёте — обновите сравнение или сбросьте вердикты.`
+                          : "Нет строк для отображения."}
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-3">
-                  {aiExclusiveRows.map((row) => (
+                  {aiConfirmedDupRows.map((row) => (
                     <div
                       key={row.key}
                       className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-indigo-200 bg-indigo-50/30"
                     >
                       <ProductCell c={row.a} siteLabel={data.siteLabel} />
                       <ProductCell c={row.b} siteLabel={data.siteLabel} />
+                      {row.inReport ? (
+                        <p className="sm:col-span-2 text-xs text-slate-600">
+                          Также в <strong>автоматическом отчёте</strong> (та же пара id) — AI подтвердил дубль.
+                        </p>
+                      ) : (
+                        <p className="sm:col-span-2 text-xs text-indigo-900/90">
+                          Пара <strong>вне</strong> слоёв EAN и «название+фото» отчёта — найдена отбором для AI.
+                        </p>
+                      )}
                       <div className="sm:col-span-2">
                         <AiDupVerdictNote
                           verdicts={aiDupVerdicts}
@@ -5405,7 +5478,9 @@ export default function ComparePage() {
                   : "bg-white text-indigo-950 border-indigo-200 hover:bg-indigo-50"
               }`}
             >
-              Дубли AI ({aiExclusiveDupCount})
+              Дубли AI ({aiConfirmedDupCount}
+              {aiExclusiveDupCount > 0 ? ` · вн.отч.${aiExclusiveDupCount}` : ""}
+              )
             </button>
           </div>
           {dupKindFilter === "aiDuplicates" && (
@@ -5413,23 +5488,28 @@ export default function ComparePage() {
               <h2 className="text-lg font-semibold text-slate-900 mb-2">
                 Дубли по решению AI{" "}
                 <span className="text-indigo-900 tabular-nums">
-                  ({aiExclusiveDupCount})
+                  ({aiConfirmedDupCount}
+                  {aiExclusiveDupCount > 0 ? ` · вне отчёта ${aiExclusiveDupCount}` : ""})
                 </span>
               </h2>
               <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                Здесь только пары с ответом «дубль», которых{' '}
-                <strong className="text-slate-800">не было среди строк отчёта</strong>: ни EAN/артикула по
-                правилам сайта, ни слоёв «название+фото» и маловероятных. Отбор кандидатов для модели —
-                общий бренд и заметное сходство заголовков.
+                Пары с ответом AI <strong>«дубль»</strong>. Подпись «также в отчёте» — та же пара уже в блоках
+                отчёта; «вне отчёта» — кандидат только для AI. Снимите «только вне автоматики» в блоке OpenAI, чтобы
+                проверять порциями строки «название+фото».
               </p>
-              {aiExclusiveRows.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  Пока нет строк: запустите проверку блоком OpenAI (он работает именно по кандидатам вне
-                  автоматики) или смените вкладку.
-                </p>
+              {aiConfirmedDupRows.length === 0 ? (
+                <div className="text-sm text-slate-500 space-y-2">
+                  <p>
+                    {aiSessionVerdictStats.total === 0
+                      ? "Пока нет — запустите проверку блоком OpenAI."
+                      : aiSessionVerdictStats.dupYes === 0
+                        ? `Проверено вердиктов: ${aiSessionVerdictStats.total}, ответов «дубль» пока нет.`
+                        : "Не удалось отобразить строки по id из вердиктов."}
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-3">
-                  {aiExclusiveRows.map((row) => {
+                  {aiConfirmedDupRows.map((row) => {
                     const la = compareIdsOnAForLabels.has(row.a.id)
                       ? data.siteALabel
                       : data.siteBLabel;
@@ -5449,6 +5529,15 @@ export default function ComparePage() {
                           <p className="text-[11px] text-slate-500 mb-0.5">{lb}</p>
                           <ProductCell c={row.b} siteLabel={lb} />
                         </div>
+                        {row.inReport ? (
+                          <p className="sm:col-span-2 text-xs text-slate-600">
+                            Также в <strong>автоматическом отчёте</strong> — AI подтвердил дубль.
+                          </p>
+                        ) : (
+                          <p className="sm:col-span-2 text-xs text-indigo-900/90">
+                            Пара отобрана <strong>вне</strong> автоматических слоёв отчёта.
+                          </p>
+                        )}
                         <div className="sm:col-span-2">
                           <AiDupVerdictNote
                             verdicts={aiDupVerdicts}
