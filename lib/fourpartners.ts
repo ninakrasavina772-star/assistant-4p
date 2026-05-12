@@ -95,16 +95,49 @@ export async function fetchRubricChildren(token: string, parentId: number): Prom
   return normalizeRubrics(json.result?.rubrics ?? []);
 }
 
-function readPagination(result: Record<string, unknown>) {
+function readPagination(result: Record<string, unknown>, productsOnPage: number) {
+  // Try all known pagination container field names
   const pg =
     (result.pagination_info as Record<string, unknown> | undefined) ||
     (result.pager as Record<string, unknown> | undefined) ||
+    (result.pagination as Record<string, unknown> | undefined) ||
+    (result.meta as Record<string, unknown> | undefined) ||
     {};
-  return {
-    hasMore: Boolean(pg.has_more ?? pg.hasMore ?? false),
-    page: Number(pg.page ?? 1),
-    perPage: Number(pg.per_page ?? pg.perPage ?? 0)
-  };
+
+  const currentPage = Number(
+    pg.page ?? pg.current_page ?? result.page ?? result.current_page ?? 1
+  );
+  const perPage = Number(
+    pg.per_page ?? pg.perPage ?? result.per_page ?? result.perPage ?? 0
+  );
+  const total = Number(
+    pg.total ?? pg.total_count ?? pg.count ??
+    result.total ?? result.total_count ?? result.count ??
+    NaN
+  );
+  const totalPages = Number(
+    pg.pages ?? pg.total_pages ?? pg.last_page ??
+    result.pages ?? result.total_pages ?? result.last_page ??
+    NaN
+  );
+
+  // Explicit has_more field
+  let hasMore = Boolean(pg.has_more ?? pg.hasMore ?? result.has_more ?? result.hasMore ?? false);
+
+  // Derive from total count
+  if (!hasMore && Number.isFinite(total) && total > 0 && perPage > 0) {
+    hasMore = currentPage * perPage < total;
+  }
+  // Derive from total pages
+  if (!hasMore && Number.isFinite(totalPages) && totalPages > currentPage) {
+    hasMore = true;
+  }
+  // Fallback: if we received a full page, assume there may be more (stops on empty/partial page)
+  if (!hasMore && perPage > 0 && productsOnPage >= perPage) {
+    hasMore = true;
+  }
+
+  return { hasMore, page: currentPage, perPage };
 }
 
 function readProducts(result: Record<string, unknown>): FpProduct[] {
@@ -132,7 +165,25 @@ async function fetchProductListRawPage(
   const result = (json.result ?? {}) as Record<string, unknown>;
   const listed = readProducts(result).map(normalizeFpProductListShape);
   const products = filterFpProductsActiveOffers(listed);
-  const pag = readPagination(result);
+  const pag = readPagination(result, listed.length);
+
+  // Диагностический лог — виден в Vercel Logs → Function logs
+  if (page <= 2) {
+    const pagRaw =
+      (result.pagination_info as Record<string, unknown> | undefined) ??
+      (result.pager as Record<string, unknown> | undefined) ??
+      (result.pagination as Record<string, unknown> | undefined) ??
+      (result.meta as Record<string, unknown> | undefined) ??
+      null;
+    const resultKeys = Object.keys(result).filter(k => k !== "products" && k !== "product");
+    console.log(
+      `[4P page=${page} rubric=${rubricId}] keys=[${resultKeys.join(",")}]` +
+      ` pag=${JSON.stringify(pagRaw)}` +
+      ` hasMore=${pag.hasMore} curPage=${pag.page} perPage=${pag.perPage}` +
+      ` listed=${listed.length} active=${products.length}`
+    );
+  }
+
   return {
     products,
     hasMore: pag.hasMore,
@@ -237,7 +288,8 @@ export async function fetchAllProductsInRubric(
     modelExcludedNotInList += applied.modelExcludedNotInList;
     for (const p of applied.out) merged.set(p.id, p);
     if (!hasMore || raw.length === 0) break;
-    pageReq = pg + 1;
+    // Use the page number from the API response if it looks correct; otherwise increment our counter
+    pageReq = pg > pageReq ? pg + 1 : pageReq + 1;
   }
 
   let excludeMeta: FetchRubricProductsResult["excludeMeta"];
@@ -250,12 +302,14 @@ export async function fetchAllProductsInRubric(
   /**
    * /product/list возвращает краткую карточку — поле `eans` часто отсутствует.
    * Обогащаем через /product/info (батчами по 50), чтобы получить полные штрихкоды.
-   * Если /product/info не вернул карточку — оставляем версию из list.
+   * Ограничиваем до MAX_ENRICH_BATCHES батчей, чтобы не выйти за лимит времени.
    */
+  const MAX_ENRICH_BATCHES = 40; // 40 × 50 = 2000 товаров максимум
   const listProducts = [...merged.values()];
   const ids = listProducts.map((p) => p.id);
   const fullByIds = new Map<number, FpProduct>();
-  for (let i = 0; i < ids.length; i += 50) {
+  const batchCount = Math.min(Math.ceil(ids.length / 50), MAX_ENRICH_BATCHES);
+  for (let i = 0; i < batchCount * 50 && i < ids.length; i += 50) {
     const chunk = ids.slice(i, i + 50);
     const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
     try {
@@ -328,7 +382,7 @@ async function fetchAllProductIdsInRubric(
     modelExcludedNotInList += applied.modelExcludedNotInList;
     for (const p of applied.out) merged.add(p.id);
     if (!hasMore || raw.length === 0) break;
-    pageReq = pg + 1;
+    pageReq = pg > pageReq ? pg + 1 : pageReq + 1;
   }
 
   let excludeMeta: FetchRubricIdsResult["excludeMeta"];
