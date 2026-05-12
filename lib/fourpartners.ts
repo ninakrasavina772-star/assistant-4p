@@ -136,6 +136,11 @@ function readPagination(result: Record<string, unknown>, productsOnPage: number)
   if (!hasMore && perPage > 0 && productsOnPage >= perPage) {
     hasMore = true;
   }
+  // Strongest fallback: if perPage is unknown but we got products, keep going
+  // (the loop in fetchAll* stops on empty page or MAX_RUBRIC_PAGES)
+  if (!hasMore && perPage === 0 && productsOnPage > 0) {
+    hasMore = true;
+  }
 
   return { hasMore, page: currentPage, perPage };
 }
