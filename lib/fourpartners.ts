@@ -136,6 +136,10 @@ function readPagination(result: Record<string, unknown>, productsOnPage: number)
   if (!hasMore && perPage > 0 && productsOnPage >= perPage) {
     hasMore = true;
   }
+  // If no perPage info at all but we got products - try next page (404/empty will stop the loop)
+  if (!hasMore && perPage === 0 && productsOnPage > 0) {
+    hasMore = true;
+  }
 
   return { hasMore, page: currentPage, perPage };
 }
@@ -157,7 +161,7 @@ async function fetchProductListRawPage(
   const path = `/product/list/${encodeURIComponent(variation)}/products`;
   const res = await fpFetch(token, path, {
     method: "POST",
-    body: JSON.stringify({ page, filter_rubrics: [rubricId], order: "popular" })
+    body: JSON.stringify({ page, per_page: 100, filter_rubrics: [rubricId], order: "popular" })
   });
   const text = await res.text();
   if (!res.ok) {
