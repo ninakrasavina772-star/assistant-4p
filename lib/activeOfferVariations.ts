@@ -15,8 +15,15 @@ export function variationHasActiveOffer(v: unknown): boolean {
 }
 
 export function filterFpProductKeepActiveOfferVariations(p: FpProduct): FpProduct | null {
+  /** До отсечения неактивных вариантов: иначе теряются штрихкоды только у «закончившихся» SKU. */
+  const allEansForDedup = collectEans(p);
   const pv = p.product_variation;
-  if (!pv || Object.keys(pv).length === 0) return p;
+  if (!pv || Object.keys(pv).length === 0) {
+    return {
+      ...p,
+      ...(allEansForDedup.length ? { eans: allEansForDedup } : {})
+    };
+  }
 
   const next: NonNullable<FpProduct["product_variation"]> = {};
   for (const [k, v] of Object.entries(pv)) {
@@ -24,15 +31,13 @@ export function filterFpProductKeepActiveOfferVariations(p: FpProduct): FpProduc
   }
   if (Object.keys(next).length === 0) return null;
 
-  /** Не обнуляем `eans`: в /product/list штрихкод часто только в корне, а в вариациях — без `ean` или неактивный оффер. */
   const trimmed: FpProduct = {
     ...p,
     product_variation: next
   };
-  const eans = collectEans(trimmed);
   return {
     ...trimmed,
-    ...(eans.length ? { eans } : { eans: undefined })
+    ...(allEansForDedup.length ? { eans: allEansForDedup } : { eans: undefined })
   };
 }
 

@@ -6,6 +6,10 @@ export type FpProduct = {
   name: string;
   link: string;
   eans?: string[] | null;
+  /** Альтернативные имена для штрихкода в сыром JSON списка товаров */
+  ean?: string | null;
+  barcode?: string | null;
+  gtin?: string | null;
   /**
    * В выгрузке /product/list обычно { name }. Реже API отдаёт бренд строкой в `brand`
    * или в корневом `brand_name` — см. productBrandName в brand-filter.
@@ -25,6 +29,11 @@ export type FpProduct = {
     {
       id?: number;
       ean?: string;
+      /** Иногда штрихкод приходит под другим ключом */
+      barcode?: string;
+      gtin?: string;
+      upc?: string;
+      eans?: string[] | string | null;
       images?: string[];
       link?: string;
       /** Активный остаток по офферу (Partner API); null/0 — вариант без активного оффера */

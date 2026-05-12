@@ -40,21 +40,74 @@ export function collectArticleKeys(p: FpProduct): string[] {
 }
 
 /**
- * EAN: объединяем корневой список и варианты, без пустых строк.
+ * Собираем возможные штрихкоды из полей ответа /product/list (имена полей в API 4Partners/поставщиков плавают).
+ */
+function addEanTokens(set: Set<string>, raw: unknown, depth = 0): void {
+  if (raw == null || raw === "" || depth > 5) return;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const t = String(raw).trim();
+    if (t) set.add(t);
+    return;
+  }
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (!t) return;
+    if (/[,;|]/.test(t)) {
+      for (const part of t.split(/[,;|]+/)) {
+        const w = part.trim();
+        if (w) set.add(w);
+      }
+    } else {
+      set.add(t);
+    }
+    return;
+  }
+  if (Array.isArray(raw)) {
+    for (const x of raw) addEanTokens(set, x, depth + 1);
+    return;
+  }
+  if (typeof raw === "object") {
+    for (const v of Object.values(raw as Record<string, unknown>)) {
+      addEanTokens(set, v, depth + 1);
+    }
+  }
+}
+
+const ROOT_BARCODE_KEYS = [
+  "ean",
+  "barcode",
+  "barcode_ean",
+  "gtin",
+  "ean13",
+  "ean_13",
+  "upc",
+  "product_ean",
+  "product_barcode"
+] as const;
+
+const VAR_BARCODE_KEYS = ["ean", "barcode", "gtin", "upc", "eans"] as const;
+
+/**
+ * EAN: корень + вариации, плюс типичные синонимы полей в JSON.
  */
 export function collectEans(p: FpProduct): string[] {
   const set = new Set<string>();
-  (p.eans || []).forEach((e) => {
-    if (e == null || e === "") return;
-    set.add(String(e).trim());
-  });
+  addEanTokens(set, p.eans);
+  const ext = p as Record<string, unknown>;
+  for (const k of ROOT_BARCODE_KEYS) {
+    if (k in ext) addEanTokens(set, ext[k]);
+  }
   const pv = p.product_variation;
   if (pv) {
     for (const v of Object.values(pv)) {
-      if (v?.ean) set.add(String(v.ean).trim());
+      if (!v || typeof v !== "object") continue;
+      const vo = v as Record<string, unknown>;
+      for (const k of VAR_BARCODE_KEYS) {
+        if (k in vo) addEanTokens(set, vo[k]);
+      }
     }
   }
-  return [...set];
+  return [...set].filter((s) => s.length > 0);
 }
 
 /** Минимальная длина цифр для ключа штрихкода (после удаления нецифровых символов). 8 — классический EAN‑8+; 6 — не отсекаем короткие внутренние коды в фиде. */
