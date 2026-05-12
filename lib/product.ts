@@ -110,6 +110,28 @@ export function collectEans(p: FpProduct): string[] {
   return [...set].filter((s) => s.length > 0);
 }
 
+/**
+ * Swagger описывает `product_variation` как array; в ответе так и приходит.
+ * Приводим к Record, чтобы весь код одинаково обходил варианты (в т.ч. офферы/EAN).
+ */
+export function normalizeFpProductListShape(p: FpProduct): FpProduct {
+  const pv = p.product_variation as unknown;
+  if (!Array.isArray(pv)) return p;
+  const record: NonNullable<FpProduct["product_variation"]> = {};
+  for (let i = 0; i < pv.length; i++) {
+    const item = pv[i];
+    if (!item || typeof item !== "object") continue;
+    const id = (item as { id?: number }).id;
+    const key =
+      id != null && Number.isFinite(Number(id)) ? String(id) : `_i${i}`;
+    record[key] = item as NonNullable<FpProduct["product_variation"]>[string];
+  }
+  return {
+    ...p,
+    product_variation: Object.keys(record).length ? record : null
+  };
+}
+
 /** Минимальная длина цифр для ключа штрихкода (после удаления нецифровых символов). 8 — классический EAN‑8+; 6 — не отсекаем короткие внутренние коды в фиде. */
 export const MIN_EAN_INDEX_DIGITS = 6;
 
@@ -161,6 +183,15 @@ export function collectEanIndexKeys(p: FpProduct): string[] {
     }
   }
   return [...keys];
+}
+
+/** Сколько карточек после фильтров имеют хотя бы один ключ штрихкода для индекса дублей. */
+export function countProductsWithEanIndexKeys(products: FpProduct[]): number {
+  let n = 0;
+  for (const p of products) {
+    if (collectEanIndexKeys(p).length > 0) n++;
+  }
+  return n;
 }
 
 function displayNames(p: FpProduct) {

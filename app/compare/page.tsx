@@ -4805,8 +4805,14 @@ export default function ComparePage() {
                 <>
                   {": "}
                   список id — запрошено{" "}
-                  <strong className="tabular-nums">{data.stats.idList.requestedIds}</strong>, карточек после фильтров{" "}
+                  <strong className="tabular-nums">{data.stats.idList.requestedIds}</strong>,                   карточек после фильтров{" "}
                   <strong className="tabular-nums">{data.stats.count}</strong>
+                  {data.stats.withEanIndexKeys != null ? (
+                    <>
+                      , штрихкод в данных у{" "}
+                      <strong className="tabular-nums">{data.stats.withEanIndexKeys}</strong>
+                    </>
+                  ) : null}
                   {data.stats.idList.missingInApi > 0 ? (
                     <>
                       , не вернулось из API:{" "}
@@ -4821,7 +4827,21 @@ export default function ComparePage() {
                   {", рубрика "}
                   {data.rubricId}
                   {": "}
-                  {data.stats.count} товаров
+                  <strong className="tabular-nums">{data.stats.count}</strong> товаров
+                  {data.stats.withEanIndexKeys != null ? (
+                    <>
+                      , EAN в JSON у{" "}
+                      <strong className="tabular-nums">{data.stats.withEanIndexKeys}</strong> шт.
+                      {data.stats.withEanIndexKeys < data.stats.count ? (
+                        <span
+                          className="text-amber-800 ml-1 cursor-help border-b border-dotted border-amber-700"
+                          title="Если здесь мало — в /product/list не приходит штрихкод или он в неизвестном поле; тогда «0 групп по EAN» ожидаемо."
+                        >
+                          (не у всех карточек в ответе)
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
                 </>
               )}
             </span>

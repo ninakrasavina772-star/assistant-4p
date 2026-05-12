@@ -18,7 +18,7 @@ import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
 import { MAX_RUBRICS_B } from "@/lib/rubricIds";
 import { parsePartnersFeedCsv } from "@/lib/partnersFeedCsv";
 import { runCompare } from "@/lib/match";
-import { collectEanIndexKeys } from "@/lib/product";
+import { collectEanIndexKeys, countProductsWithEanIndexKeys } from "@/lib/product";
 import type {
   AttrMatchOptions,
   CompareBrandFilterInfo,
@@ -306,6 +306,7 @@ export async function POST(req: NextRequest) {
         rubricId: 0,
         stats: {
           count: products.length,
+          withEanIndexKeys: countProductsWithEanIndexKeys(products),
           idList: { requestedIds: ids.length, missingInApi }
         },
         brandFilter: brandsRaw.length
@@ -516,7 +517,10 @@ export async function POST(req: NextRequest) {
           siteLabel: siteALabel,
           nameLocale,
           rubricId: 0,
-          stats: { count: mergedProducts.length },
+          stats: {
+            count: mergedProducts.length,
+            withEanIndexKeys: countProductsWithEanIndexKeys(mergedProducts)
+          },
           brandFilter: buildBrandFilterInfo(
             brandsRaw,
             brandMatch,
@@ -594,7 +598,10 @@ export async function POST(req: NextRequest) {
         siteLabel: siteALabel,
         nameLocale,
         rubricId: rubricA,
-        stats: { count: merged.products.length },
+        stats: {
+          count: merged.products.length,
+          withEanIndexKeys: countProductsWithEanIndexKeys(merged.products)
+        },
         brandFilter: buildBrandFilterInfo(
           brandsRaw,
           brandMatch,

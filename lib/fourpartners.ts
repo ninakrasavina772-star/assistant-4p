@@ -2,6 +2,7 @@ import { filterFpProductsActiveOffers } from "./activeOfferVariations";
 import { filterFpProductsByBrands, type BrandMatchMode } from "./brand-filter";
 import { filterFpProductsByModels, type ModelMatchMode } from "./model-filter";
 import { filterSiteAByExcludedProductIds } from "./excludeProductIds";
+import { normalizeFpProductListShape } from "./product";
 import type { FpProduct } from "./types";
 
 const DEFAULT_BASE = "https://api.4partners.io/v1";
@@ -129,7 +130,8 @@ async function fetchProductListRawPage(
   if (!res.ok) httpErr(path, res, text);
   const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
   const result = (json.result ?? {}) as Record<string, unknown>;
-  const products = filterFpProductsActiveOffers(readProducts(result));
+  const listed = readProducts(result).map(normalizeFpProductListShape);
+  const products = filterFpProductsActiveOffers(listed);
   const pag = readPagination(result);
   return {
     products,
@@ -384,7 +386,9 @@ export async function fetchProductsByIds(
     const json = JSON.parse(text) as ApiEnvelope<{ product?: FpProduct | FpProduct[] }>;
     const prod = json.result?.product;
     const arr = Array.isArray(prod) ? prod : prod ? [prod] : [];
-    out.push(...filterFpProductsActiveOffers(arr));
+    out.push(
+      ...filterFpProductsActiveOffers(arr.map(normalizeFpProductListShape))
+    );
   }
   return out;
 }

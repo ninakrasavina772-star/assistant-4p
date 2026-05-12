@@ -268,6 +268,11 @@ export type SingleSiteDupsResult = {
   rubricId: number;
   stats: {
     count: number;
+    /**
+     * Сколько карточек имеют хотя бы один распознанный штрихкод в данных после фильтров
+     * (если ≈0 при «полной» рубрике — в /product/list не приходят eans, нужен другой endpoint или поле).
+     */
+    withEanIndexKeys?: number;
     /** Режим: список id из файла/тела запроса, карточки подтянуты по API */
     idList?: {
       requestedIds: number;
