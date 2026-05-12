@@ -3,6 +3,83 @@
 import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
+
+/** Keeps only the columns needed for duplicate detection, drops all "Свойство/Параметр/description" columns.
+ *  Reduces large 4Partners CSV exports by 5-10x before sending to the server. */
+function stripCsvToNeededColumns(csvText: string): string {
+  const NEEDED = [
+    "id товара", "product id", "product_id",
+    "артикул", "sku", "article", "vendor code", "код товара",
+    "ean", "gtin", "штрихкод", "barcode",
+    "бренд", "brand",
+    "url", "link",
+    "название товара", "product name", "name",
+    "изображения варианта", "variant images", "product images",
+    "цена продажи", "price", "цена",
+    "остаток", "stock", "quantity",
+    "корневая", "подкатегория"
+  ];
+
+  const lines = csvText.split(/\r?\n/);
+  if (lines.length < 2) return csvText;
+
+  // Find header row
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(lines.length, 80); i++) {
+    const l = lines[i]!.toLowerCase();
+    if (l.includes("id товара") || l.includes("product id") || l.includes("product_id")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return csvText;
+
+  // Parse header columns
+  const headerLine = lines[headerIdx]!;
+  const headers = headerLine.split(",").map(h => h.replace(/^"|"$/g, "").trim().toLowerCase());
+
+  // Find which columns to keep
+  const keepIndices: number[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i]!;
+    if (NEEDED.some(n => h === n || h.startsWith(n))) {
+      keepIndices.push(i);
+    }
+  }
+  if (keepIndices.length === 0) return csvText;
+
+  // Rebuild CSV keeping only needed columns
+  const out: string[] = [];
+  for (let i = headerIdx; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line && i > headerIdx) { out.push(""); continue; }
+    if (!line) continue;
+    // Simple split by comma respecting quoted fields
+    const cells = splitCsvLine(line);
+    const kept = keepIndices.map(idx => cells[idx] ?? "");
+    out.push(kept.map(c => c.includes(",") || c.includes('"') || c.includes("\n") ? `"${c.replace(/"/g, '""')}"` : c).join(","));
+  }
+  return out.join("\n");
+}
+
+function splitCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (ch === "," && !inQ) {
+      result.push(cur); cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  result.push(cur);
+  return result;
+}
 import { mergeBrandLists, parseBrandListFromText } from "@/lib/brand-filter";
 import {
   mergeModelLists,
@@ -2503,6 +2580,7 @@ export default function ComparePage() {
     void (async () => {
       try {
         const lower = f.name.toLowerCase();
+        let csv: string;
         if (
           lower.endsWith(".xlsx") ||
           lower.endsWith(".xls") ||
@@ -2514,11 +2592,11 @@ export default function ComparePage() {
           if (!sh) throw new Error("В книге Excel нет листов");
           const sheet = wb.Sheets[sh];
           if (!sheet) throw new Error("Не удалось прочитать первый лист");
-          const csv = XLSX.utils.sheet_to_csv(sheet);
-          setFeedCsvTextA(csv);
+          csv = XLSX.utils.sheet_to_csv(sheet);
         } else {
-          setFeedCsvTextA(await f.text());
+          csv = await f.text();
         }
+        setFeedCsvTextA(stripCsvToNeededColumns(csv));
         setFeedUrlA("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Не удалось прочитать файл");
@@ -2546,9 +2624,9 @@ export default function ComparePage() {
           const sheet = wb.Sheets[sh];
           if (!sheet) throw new Error("Не удалось прочитать первый лист");
           const csv = XLSX.utils.sheet_to_csv(sheet);
-          setFeedCsvTextB(csv);
+          setFeedCsvTextB(stripCsvToNeededColumns(csv));
         } else {
-          setFeedCsvTextB(await f.text());
+          setFeedCsvTextB(stripCsvToNeededColumns(await f.text()));
         }
         setFeedUrlB("");
       } catch (err) {

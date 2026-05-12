@@ -200,7 +200,7 @@ function applyBrandModelOnly(
 
 type CompareBody = Record<string, unknown>;
 
-const MAX_FEED_CSV_BODY_CHARS = 25 * 1024 * 1024;
+const MAX_FEED_CSV_BODY_CHARS = 100 * 1024 * 1024;
 
 async function resolveFeedCsvInput(label: string, urlRaw: unknown, textRaw: unknown): Promise<string> {
   const url = typeof urlRaw === "string" ? urlRaw.trim() : "";

@@ -1,4 +1,4 @@
-const MAX_FEED_BYTES = 25 * 1024 * 1024;
+const MAX_FEED_BYTES = 100 * 1024 * 1024;
 
 /**
  * Только https на доменах 4Partners (как публичные фиды my/feed/*.csv).
