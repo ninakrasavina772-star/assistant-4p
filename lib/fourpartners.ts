@@ -1,4 +1,4 @@
-import { filterFpProductsActiveOffers } from "./activeOfferVariations";
+import { filterFpProductKeepActiveOfferVariations, filterFpProductsActiveOffers } from "./activeOfferVariations";
 import { filterFpProductsByBrands, type BrandMatchMode } from "./brand-filter";
 import { filterFpProductsByModels, type ModelMatchMode } from "./model-filter";
 import { filterSiteAByExcludedProductIds } from "./excludeProductIds";
@@ -247,8 +247,50 @@ export async function fetchAllProductsInRubric(
     excludeMeta = { removedFromA: excludeRemovedFromA, listIdsNotFoundInRubric: nf };
   }
 
+  /**
+   * /product/list возвращает краткую карточку — поле `eans` часто отсутствует.
+   * Обогащаем через /product/info (батчами по 50), чтобы получить полные штрихкоды.
+   * Если /product/info не вернул карточку — оставляем версию из list.
+   */
+  const listProducts = [...merged.values()];
+  const ids = listProducts.map((p) => p.id);
+  const fullByIds = new Map<number, FpProduct>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
+    try {
+      const res = await fpFetch(token, path, { method: "GET" });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const json = JSON.parse(text) as ApiEnvelope<{ product?: FpProduct | FpProduct[] }>;
+      const prod = json.result?.product;
+      const arr = Array.isArray(prod) ? prod : prod ? [prod] : [];
+      for (const p of arr.map(normalizeFpProductListShape)) {
+        fullByIds.set(p.id, p);
+      }
+    } catch {
+      // Если батч упал — продолжаем с данными из list
+    }
+  }
+
+  /** Сливаем: берём полную карточку, но применяем фильтр оффера заново */
+  const enriched: FpProduct[] = [];
+  for (const lp of listProducts) {
+    const full = fullByIds.get(lp.id);
+    if (full) {
+      const kept = filterFpProductKeepActiveOfferVariations(full);
+      if (kept) {
+        enriched.push(kept);
+      } else {
+        enriched.push(lp);
+      }
+    } else {
+      enriched.push(lp);
+    }
+  }
+
   return {
-    products: [...merged.values()],
+    products: enriched,
     excludeMeta,
     brandExcludedMissing,
     brandExcludedNotInList,
