@@ -136,11 +136,6 @@ function readPagination(result: Record<string, unknown>, productsOnPage: number)
   if (!hasMore && perPage > 0 && productsOnPage >= perPage) {
     hasMore = true;
   }
-  // Strongest fallback: if perPage is unknown but we got products, keep going
-  // (the loop in fetchAll* stops on empty page or MAX_RUBRIC_PAGES)
-  if (!hasMore && perPage === 0 && productsOnPage > 0) {
-    hasMore = true;
-  }
 
   return { hasMore, page: currentPage, perPage };
 }
@@ -165,7 +160,11 @@ async function fetchProductListRawPage(
     body: JSON.stringify({ page, filter_rubrics: [rubricId], order: "popular" })
   });
   const text = await res.text();
-  if (!res.ok) httpErr(path, res, text);
+  if (!res.ok) {
+    // On page 1 this is a real error; on subsequent pages treat as end of list
+    if (page === 1) httpErr(path, res, text);
+    return { products: [], hasMore: false, page, perPage: 0 };
+  }
   const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
   const result = (json.result ?? {}) as Record<string, unknown>;
   const listed = readProducts(result).map(normalizeFpProductListShape);
