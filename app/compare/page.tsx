@@ -5359,7 +5359,8 @@ export default function ComparePage() {
               <span className="text-amber-800 tabular-nums">({cEan})</span>
             </h2>
             <p className="text-xs text-slate-500 mb-3">
-              Два столбца: разные карточки в одной строке. Полное совпадение по штрихкоду.
+              В каждой группе один и тот же штрихкод у всех карточек. Карточка с несколькими EAN
+              (варианты из фида) может попасть в несколько групп — пары с разными EAN не склеиваются.
             </p>
             {data.eanGroups.length === 0 && (
               <p className="text-sm text-slate-500">Нет</p>

@@ -94,8 +94,9 @@ class UnionFind {
 }
 
 /**
- * Все id, у которых пересекается хотя бы один ключ (EAN), — в одну группу.
- * Иначе одна пара сходилась по ключу 13 цифр, другая по 14 — и в отчёте «терялись» дубли.
+ * Одна группа = один нормализованный EAN и все id, у которых он есть.
+ * Не склеиваем разные EAN транзитивно (иначе карточка с несколькими SKU/EAN
+ * из фида тянет в одну группу товары с разными штрихкодами).
  */
 function buildEanClusters(
   products: FpProduct[],
@@ -109,27 +110,12 @@ function buildEanClusters(
     }
   }
 
-  const uf = new UnionFind();
-  for (const p of products) uf.ensure(p.id);
-  for (const ids of keyToIds.values()) {
-    const arr = [...ids];
-    for (let i = 1; i < arr.length; i++) uf.union(arr[0]!, arr[i]!);
-  }
-
-  const rootToIds = new Map<number, Set<number>>();
-  for (const p of products) {
-    const root = uf.find(p.id);
-    if (!rootToIds.has(root)) rootToIds.set(root, new Set());
-    rootToIds.get(root)!.add(p.id);
-  }
-
   const groups: IntraEanGroupRow[] = [];
-  for (const clusterIds of rootToIds.values()) {
-    if (clusterIds.size < 2) continue;
-    const displayEan = pickDisplayEanForCluster(clusterIds, keyToIds, idToP);
+  for (const [ean, ids] of keyToIds) {
+    if (ids.size < 2) continue;
     groups.push({
-      ean: displayEan,
-      products: [...clusterIds]
+      ean,
+      products: [...ids]
         .sort((a, b) => a - b)
         .map((id) => toCompareProduct(idToP.get(id)!))
         .filter(Boolean)
@@ -142,41 +128,6 @@ function buildEanClusters(
     return a.ean.localeCompare(b.ean, "ru");
   });
   return groups;
-}
-
-function pickDisplayEanForCluster(
-  clusterIds: Set<number>,
-  keyToIds: Map<string, Set<number>>,
-  idToP: Map<number, FpProduct>
-): string {
-  let bestKey = "";
-  let bestCount = 0;
-  for (const [key, ids] of keyToIds) {
-    if (ids.size < 2) continue;
-    let allIn = true;
-    for (const id of ids) {
-      if (!clusterIds.has(id)) {
-        allIn = false;
-        break;
-      }
-    }
-    if (!allIn) continue;
-    if (
-      ids.size > bestCount ||
-      (ids.size === bestCount && key.length > bestKey.length)
-    ) {
-      bestKey = key;
-      bestCount = ids.size;
-    }
-  }
-  if (bestKey) return bestKey;
-  for (const id of clusterIds) {
-    const p = idToP.get(id);
-    if (!p) continue;
-    const keys = collectEanIndexKeys(p);
-    if (keys[0]) return keys[0];
-  }
-  return "";
 }
 
 /**
