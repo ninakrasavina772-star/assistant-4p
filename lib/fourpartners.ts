@@ -324,7 +324,7 @@ async function fetchProductListRawPage(
   if (!res.ok) {
     // On page 1 this is a real error; on subsequent pages treat as end of list
     if (page === 1) httpErr(path, res, text);
-    return { products: [], hasMore: false, page, perPage: 0 };
+    return { products: [], hasMore: false, page, perPage: 0, listedCount: 0 };
   }
   const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
   const result = (json.result ?? {}) as Record<string, unknown>;
