@@ -4978,7 +4978,41 @@ export default function ComparePage() {
                             из {data.stats.fetchDiagnostics.infoBatchesTotal ?? "?"}
                           </>
                         ) : null}
+                        {data.stats.fetchDiagnostics.listPagesLoaded != null ? (
+                          <>
+                            . Страниц list:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.listPagesLoaded}
+                            </strong>
+                          </>
+                        ) : null}
+                        {data.stats.fetchDiagnostics.apiTotalItemsReported != null &&
+                        data.stats.fetchDiagnostics.apiTotalItemsReported > 0 ? (
+                          <>
+                            . API total_items:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.apiTotalItemsReported}
+                            </strong>
+                          </>
+                        ) : null}
+                        {data.stats.fetchDiagnostics.variationSlotsTotal != null ? (
+                          <>
+                            . Вариаций (SKU) в JSON:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.variationSlotsTotal}
+                            </strong>
+                          </>
+                        ) : null}
                       </span>
+                      {data.stats.fetchDiagnostics.variationSlotsTotal != null &&
+                      data.stats.fetchDiagnostics.variationSlotsTotal >
+                        data.stats.count * 2 ? (
+                        <span className="block mt-1 text-xs text-slate-600">
+                          В админке «~27000» часто означает <strong>вариации (SKU)</strong>, а не
+                          отдельные id карточек. Дубли по EAN считаются по id товара; сравните число
+                          вариаций выше с ожиданием.
+                        </span>
+                      ) : null}
                       {data.stats.count > 0 &&
                       (data.stats.withEanIndexKeys ?? 0) === 0 &&
                       !data.stats.fetchDiagnostics.feedSource ? (

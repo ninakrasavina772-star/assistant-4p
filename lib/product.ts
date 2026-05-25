@@ -219,6 +219,21 @@ export function collectEanIndexKeys(p: FpProduct): string[] {
   return [...keys];
 }
 
+/** Сумма строк product_variation (SKU) по всем карточкам — ближе к «N вариаций» в админке. */
+export function countVariationSlots(products: FpProduct[]): number {
+  let n = 0;
+  for (const p of products) {
+    const pv = p.product_variation;
+    if (pv && typeof pv === "object") {
+      const c = Object.keys(pv).length;
+      n += c > 0 ? c : 1;
+    } else {
+      n += 1;
+    }
+  }
+  return n;
+}
+
 /** Сколько карточек после фильтров имеют хотя бы один ключ штрихкода для индекса дублей. */
 export function countProductsWithEanIndexKeys(products: FpProduct[]): number {
   let n = 0;

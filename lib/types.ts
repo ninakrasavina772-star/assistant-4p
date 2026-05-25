@@ -301,6 +301,9 @@ export type SingleSiteDupsResult = {
       infoIdsReturned?: number;
       /** Карточек с EAN после обогащения info */
       withEanAfterEnrich?: number;
+      listPagesLoaded?: number;
+      apiTotalItemsReported?: number;
+      variationSlotsTotal?: number;
     };
   };
   brandFilter?: CompareBrandFilterInfo;
