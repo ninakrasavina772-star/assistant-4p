@@ -156,6 +156,12 @@ export type IntraEanGroupRow = {
   products: CompareProduct[];
 };
 
+/** Полное совпадение нормализованного названия — несколько id в одной рубрике */
+export type IntraNameGroupRow = {
+  name: string;
+  products: CompareProduct[];
+};
+
 /** Сводка по блоку «один EAN — несколько id» (одна карточка может попасть в две группы при двух разных конфликтных штрихкодах). */
 export type EanGroupsSummary = {
   groupCount: number;
@@ -279,6 +285,21 @@ export type SingleSiteDupsResult = {
       /** Сколько id из запроса не вернулись из /product/info (нет прав, удалён, опечатка) */
       missingInApi: number;
     };
+    /** Почему в отчёте 0 товаров — сверка с API */
+    fetchDiagnostics?: {
+      listedFromApi: number;
+      droppedNoActiveOffer: number;
+      uniqueBeforePipeline: number;
+      rubricIdsQueried: number[];
+      /** Загрузка из CSV/Excel, не API */
+      feedSource?: boolean;
+      /** Батчей GET /product/info (по 50 id) */
+      infoBatchesTotal?: number;
+      /** Батчей info без ответа или с ошибкой */
+      infoBatchesFailed?: number;
+      /** Карточек с EAN после обогащения info */
+      withEanAfterEnrich?: number;
+    };
   };
   brandFilter?: CompareBrandFilterInfo;
   modelFilter?: CompareModelFilterInfo;
@@ -287,7 +308,10 @@ export type SingleSiteDupsResult = {
   eanGroups: IntraEanGroupRow[];
   /** Группы / уникальные карточки / сумма строк по группам */
   eanGroupsSummary: EanGroupsSummary;
-  /** ~90%: частичное название + эквивалентный URL фото (не в EAN-группах) */
+  /** Одно название — несколько разных id (все товары рубрики, как EAN) */
+  nameGroups: IntraNameGroupRow[];
+  nameGroupsSummary: EanGroupsSummary;
+  /** ~90%: частичное название + эквивалентный URL фото (не в точных EAN/название) */
   namePhotoPairs: IntraNamePhotoPairRow[];
   /** ~60%: точный бренд + частичное название + визуально похожее фото */
   brandVisualPairs: IntraNamePhotoPairRow[];
@@ -395,6 +419,8 @@ export type CompareResult = {
   intraSiteADups: {
     eanGroups: IntraEanGroupRow[];
     eanGroupsSummary: EanGroupsSummary;
+    nameGroups: IntraNameGroupRow[];
+    nameGroupsSummary: EanGroupsSummary;
     namePhotoPairs: IntraNamePhotoPairRow[];
     brandVisualPairs: IntraNamePhotoPairRow[];
     unlikelyPairs: IntraUnlikelyPairRow[];
@@ -403,6 +429,8 @@ export type CompareResult = {
   intraSiteBDups: {
     eanGroups: IntraEanGroupRow[];
     eanGroupsSummary: EanGroupsSummary;
+    nameGroups: IntraNameGroupRow[];
+    nameGroupsSummary: EanGroupsSummary;
     namePhotoPairs: IntraNamePhotoPairRow[];
     brandVisualPairs: IntraNamePhotoPairRow[];
     unlikelyPairs: IntraUnlikelyPairRow[];

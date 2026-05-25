@@ -92,6 +92,9 @@ export function collectProductsFromSingleSiteDups(
   for (const g of data.eanGroups) {
     for (const c of g.products) m.set(c.id, c);
   }
+  for (const g of data.nameGroups ?? []) {
+    for (const c of g.products) m.set(c.id, c);
+  }
   for (const row of data.namePhotoPairs ?? []) {
     m.set(row.a.id, row.a);
     m.set(row.b.id, row.b);
@@ -110,19 +113,21 @@ export function collectProductsFromSingleSiteDups(
 /** Пары, которые отчёт уже классифицировал (вкладки EAN / название+фото / маловероятные). */
 export function buildIntraAlgoSlicePairKeys(slice: {
   eanGroups: IntraEanGroupRow[];
+  nameGroups?: { products: CompareProduct[] }[];
   namePhotoPairs: IntraNamePhotoPairRow[];
   brandVisualPairs: IntraNamePhotoPairRow[];
   unlikelyPairs: IntraUnlikelyPairRow[];
 }): Set<string> {
   const s = new Set<string>();
-  for (const g of slice.eanGroups ?? []) {
-    const prods = g.products;
+  const addGroupProducts = (prods: CompareProduct[]) => {
     for (let i = 0; i < prods.length; i++) {
       for (let j = i + 1; j < prods.length; j++) {
         s.add(dupPairKey(prods[i]!.id, prods[j]!.id));
       }
     }
-  }
+  };
+  for (const g of slice.eanGroups ?? []) addGroupProducts(g.products);
+  for (const g of slice.nameGroups ?? []) addGroupProducts(g.products);
   const addRow = (a: CompareProduct, b: CompareProduct) =>
     s.add(dupPairKey(a.id, b.id));
   for (const row of slice.namePhotoPairs ?? []) addRow(row.a, row.b);
@@ -136,6 +141,7 @@ export function buildIntraAlgorithmPairKeysSingleSite(
 ): Set<string> {
   return buildIntraAlgoSlicePairKeys({
     eanGroups: data.eanGroups,
+    nameGroups: data.nameGroups,
     namePhotoPairs: data.namePhotoPairs,
     brandVisualPairs: data.brandVisualPairs ?? [],
     unlikelyPairs: data.unlikelyPairs ?? []
@@ -534,6 +540,9 @@ export function collectProductsForAiLookup(
   }
   for (const slice of [cr.intraSiteADups, cr.intraSiteBDups]) {
     for (const g of slice.eanGroups ?? []) {
+      for (const c of g.products) add(c);
+    }
+    for (const g of slice.nameGroups ?? []) {
       for (const c of g.products) add(c);
     }
     for (const row of slice.namePhotoPairs ?? []) {

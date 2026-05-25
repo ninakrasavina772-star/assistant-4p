@@ -2,7 +2,12 @@ import { filterFpProductKeepActiveOfferVariations, filterFpProductsActiveOffers 
 import { filterFpProductsByBrands, type BrandMatchMode } from "./brand-filter";
 import { filterFpProductsByModels, type ModelMatchMode } from "./model-filter";
 import { filterSiteAByExcludedProductIds } from "./excludeProductIds";
-import { normalizeFpProductListShape } from "./product";
+import {
+  collectEans,
+  countProductsWithEanIndexKeys,
+  fpProductWithMergedEans,
+  normalizeFpProductListShape
+} from "./product";
 import type { FpProduct } from "./types";
 
 const DEFAULT_BASE = "https://api.4partners.io/v1";
@@ -53,12 +58,30 @@ export type RubricFetchPipeline = {
   excludeIdsRaw?: number[];
 };
 
+/** Как собирать каталог рубрики для поиска дублей */
+export type RubricCatalogScope = "active_offers" | "full_catalog";
+
+export type RubricFetchDiagnostics = {
+  /** Карточек в ответе API до отсечения неактивных офферов */
+  listedFromApi: number;
+  /** Не попали в расчёт: нет активного quantity ни у одного варианта */
+  droppedNoActiveOffer: number;
+  /** Уникальных id после объединения страниц, до бренд/модель/исключений */
+  uniqueBeforePipeline: number;
+  /** Сколько рубрик реально опрошено (родитель + дочерние) */
+  rubricIdsQueried: number[];
+  infoBatchesTotal?: number;
+  infoBatchesFailed?: number;
+  withEanAfterEnrich?: number;
+};
+
 export type FetchRubricProductsResult = {
   products: FpProduct[];
   excludeMeta?: { removedFromA: number; listIdsNotFoundInRubric: number };
   brandExcludedMissing: number;
   brandExcludedNotInList: number;
   modelExcludedNotInList: number;
+  fetchDiagnostics?: RubricFetchDiagnostics;
 };
 
 export type FetchRubricIdsResult = {
@@ -108,12 +131,24 @@ function readPagination(result: Record<string, unknown>, productsOnPage: number)
     pg.page ?? pg.current_page ?? result.page ?? result.current_page ?? 1
   );
   const perPage = Number(
-    pg.per_page ?? pg.perPage ?? result.per_page ?? result.perPage ?? 0
+    pg.per_page ??
+      pg.perPage ??
+      pg.items_per_page ??
+      result.per_page ??
+      result.perPage ??
+      result.items_per_page ??
+      0
   );
   const total = Number(
-    pg.total ?? pg.total_count ?? pg.count ??
-    result.total ?? result.total_count ?? result.count ??
-    NaN
+    pg.total ??
+      pg.total_count ??
+      pg.count ??
+      pg.total_items ??
+      result.total ??
+      result.total_count ??
+      result.count ??
+      result.total_items ??
+      NaN
   );
   const totalPages = Number(
     pg.pages ?? pg.total_pages ?? pg.last_page ??
@@ -152,16 +187,110 @@ function readProducts(result: Record<string, unknown>): FpProduct[] {
   return Array.isArray(raw) ? raw : [];
 }
 
+/** Ответ GET /product/info/{ids}/{variation} — product или products. */
+function parseProductsFromInfoEnvelope(
+  json: ApiEnvelope<Record<string, unknown>>
+): FpProduct[] {
+  const result = (json.result ?? {}) as Record<string, unknown>;
+  const prod = result.product;
+  if (Array.isArray(prod)) return prod as FpProduct[];
+  if (prod && typeof prod === "object") return [prod as FpProduct];
+  const products = result.products;
+  if (Array.isArray(products)) return products as FpProduct[];
+  return [];
+}
+
+function mergeListProductWithInfoFull(listRow: FpProduct, full: FpProduct): FpProduct {
+  const merged = fpProductWithMergedEans(normalizeFpProductListShape(full));
+  const eans = [...new Set([...collectEans(merged), ...collectEans(listRow)])];
+  return {
+    ...merged,
+    id: listRow.id,
+    name: listRow.name || merged.name,
+    link: listRow.link || merged.link,
+    brand: listRow.brand ?? merged.brand,
+    ...(eans.length ? { eans } : {})
+  };
+}
+
+const ENRICH_BATCH = 50;
+const ENRICH_CONCURRENCY = 5;
+
+async function enrichProductsWithInfo(
+  token: string,
+  variation: string,
+  listProducts: FpProduct[],
+  catalogScope: RubricCatalogScope
+): Promise<{
+  products: FpProduct[];
+  infoBatchesTotal: number;
+  infoBatchesFailed: number;
+}> {
+  const ids = listProducts.map((p) => p.id);
+  const fullByIds = new Map<number, FpProduct>();
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += ENRICH_BATCH) {
+    chunks.push(ids.slice(i, i + ENRICH_BATCH));
+  }
+  let infoBatchesFailed = 0;
+
+  for (let i = 0; i < chunks.length; i += ENRICH_CONCURRENCY) {
+    const slice = chunks.slice(i, i + ENRICH_CONCURRENCY);
+    await Promise.all(
+      slice.map(async (chunk) => {
+        const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
+        try {
+          const res = await fpFetch(token, path, { method: "GET" });
+          if (!res.ok) {
+            infoBatchesFailed += 1;
+            return;
+          }
+          const text = await res.text();
+          const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
+          for (const p of parseProductsFromInfoEnvelope(json)) {
+            fullByIds.set(p.id, p);
+          }
+        } catch {
+          infoBatchesFailed += 1;
+        }
+      })
+    );
+  }
+
+  const enriched: FpProduct[] = [];
+  for (const lp of listProducts) {
+    const full = fullByIds.get(lp.id);
+    if (full) {
+      const merged = mergeListProductWithInfoFull(lp, full);
+      if (catalogScope === "full_catalog") {
+        enriched.push(merged);
+      } else {
+        const kept = filterFpProductKeepActiveOfferVariations(merged);
+        enriched.push(kept ?? merged);
+      }
+    } else {
+      enriched.push(fpProductWithMergedEans(lp));
+    }
+  }
+
+  return {
+    products: enriched,
+    infoBatchesTotal: chunks.length,
+    infoBatchesFailed
+  };
+}
+
 async function fetchProductListRawPage(
   token: string,
   variation: string,
   rubricId: number,
-  page: number
+  page: number,
+  catalogScope: RubricCatalogScope = "active_offers"
 ) {
   const path = `/product/list/${encodeURIComponent(variation)}/products`;
   const res = await fpFetch(token, path, {
     method: "POST",
-    body: JSON.stringify({ page, per_page: 100, filter_rubrics: [rubricId], order: "popular" })
+    body: JSON.stringify({ page, per_page: 500, filter_rubrics: [rubricId], order: "popular" })
   });
   const text = await res.text();
   if (!res.ok) {
@@ -172,7 +301,8 @@ async function fetchProductListRawPage(
   const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
   const result = (json.result ?? {}) as Record<string, unknown>;
   const listed = readProducts(result).map(normalizeFpProductListShape);
-  const products = filterFpProductsActiveOffers(listed);
+  const products =
+    catalogScope === "full_catalog" ? listed : filterFpProductsActiveOffers(listed);
   const pag = readPagination(result, listed.length);
 
   // Диагностический лог — виден в Vercel Logs → Function logs
@@ -196,7 +326,8 @@ async function fetchProductListRawPage(
     products,
     hasMore: pag.hasMore,
     page: pag.page,
-    perPage: pag.perPage
+    perPage: pag.perPage,
+    listedCount: listed.length
   };
 }
 
@@ -271,7 +402,8 @@ export async function fetchAllProductsInRubric(
   token: string,
   variation: string,
   rubricId: number,
-  pipe: RubricFetchPipeline
+  pipe: RubricFetchPipeline,
+  catalogScope: RubricCatalogScope = "active_offers"
 ): Promise<FetchRubricProductsResult> {
   const merged = new Map<number, FpProduct>();
   const rawSeen = new Set<number>();
@@ -280,14 +412,20 @@ export async function fetchAllProductsInRubric(
   let brandExcludedNotInList = 0;
   let modelExcludedNotInList = 0;
   let excludeRemovedFromA = 0;
+  let listedFromApi = 0;
+  let droppedNoActiveOffer = 0;
 
   for (let iter = 0; iter < MAX_RUBRIC_PAGES; iter++) {
-    const { products: raw, hasMore, page: pg } = await fetchProductListRawPage(
-      token,
-      variation,
-      rubricId,
-      pageReq
-    );
+    const { products: raw, hasMore, page: pg, listedCount } =
+      await fetchProductListRawPage(
+        token,
+        variation,
+        rubricId,
+        pageReq,
+        catalogScope
+      );
+    listedFromApi += listedCount;
+    droppedNoActiveOffer += Math.max(0, listedCount - raw.length);
     for (const p of raw) rawSeen.add(p.id);
     const applied = applyRubricFetchPipeline(raw, pipe, "A");
     excludeRemovedFromA += applied.excludeRemovedFromA;
@@ -308,55 +446,28 @@ export async function fetchAllProductsInRubric(
   }
 
   /**
-   * /product/list возвращает краткую карточку — поле `eans` часто отсутствует.
-   * Обогащаем через /product/info (батчами по 50), чтобы получить полные штрихкоды.
-   * Ограничиваем до MAX_ENRICH_BATCHES батчей, чтобы не выйти за лимит времени.
+   * /product/list — краткая карточка, `eans` часто пустые.
+   * Штрихкоды подтягиваем из /product/info (батчи по 50, параллельно).
    */
-  const MAX_ENRICH_BATCHES = 40; // 40 × 50 = 2000 товаров максимум
   const listProducts = [...merged.values()];
-  const ids = listProducts.map((p) => p.id);
-  const fullByIds = new Map<number, FpProduct>();
-  const batchCount = Math.min(Math.ceil(ids.length / 50), MAX_ENRICH_BATCHES);
-  for (let i = 0; i < batchCount * 50 && i < ids.length; i += 50) {
-    const chunk = ids.slice(i, i + 50);
-    const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
-    try {
-      const res = await fpFetch(token, path, { method: "GET" });
-      if (!res.ok) continue;
-      const text = await res.text();
-      const json = JSON.parse(text) as ApiEnvelope<{ product?: FpProduct | FpProduct[] }>;
-      const prod = json.result?.product;
-      const arr = Array.isArray(prod) ? prod : prod ? [prod] : [];
-      for (const p of arr.map(normalizeFpProductListShape)) {
-        fullByIds.set(p.id, p);
-      }
-    } catch {
-      // Если батч упал — продолжаем с данными из list
-    }
-  }
-
-  /** Сливаем: берём полную карточку, но применяем фильтр оффера заново */
-  const enriched: FpProduct[] = [];
-  for (const lp of listProducts) {
-    const full = fullByIds.get(lp.id);
-    if (full) {
-      const kept = filterFpProductKeepActiveOfferVariations(full);
-      if (kept) {
-        enriched.push(kept);
-      } else {
-        enriched.push(lp);
-      }
-    } else {
-      enriched.push(lp);
-    }
-  }
+  const { products: enriched, infoBatchesTotal, infoBatchesFailed } =
+    await enrichProductsWithInfo(token, variation, listProducts, catalogScope);
 
   return {
     products: enriched,
     excludeMeta,
     brandExcludedMissing,
     brandExcludedNotInList,
-    modelExcludedNotInList
+    modelExcludedNotInList,
+    fetchDiagnostics: {
+      listedFromApi,
+      droppedNoActiveOffer,
+      uniqueBeforePipeline: merged.size,
+      rubricIdsQueried: [rubricId],
+      infoBatchesTotal,
+      infoBatchesFailed,
+      withEanAfterEnrich: countProductsWithEanIndexKeys(enriched)
+    }
   };
 }
 
@@ -409,20 +520,54 @@ async function fetchAllProductIdsInRubric(
   };
 }
 
+/**
+ * Returns child rubric IDs for a given parent rubric.
+ * Returns [] if the rubric has no children or on error.
+ */
+export async function fetchChildRubricIds(token: string, parentId: number): Promise<number[]> {
+  try {
+    const children = await fetchRubricChildren(token, parentId);
+    return children.map((r) => r.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Expands a single rubric ID to include itself + all direct children.
+ * Used so that selecting a parent rubric automatically covers sub-rubrics.
+ */
+export async function expandRubricWithChildren(token: string, rubricId: number): Promise<number[]> {
+  const children = await fetchChildRubricIds(token, rubricId);
+  if (children.length === 0) return [rubricId];
+  return [rubricId, ...children];
+}
+
 export async function fetchMergedRubricsProducts(
   token: string,
   variation: string,
   rubricIds: number[],
-  pipe: RubricFetchPipeline
+  pipe: RubricFetchPipeline,
+  catalogScope: RubricCatalogScope = "active_offers"
 ): Promise<FetchRubricProductsResult> {
   const maps = await Promise.all(
-    rubricIds.map((rid) => fetchAllProductsInRubric(token, variation, rid, pipe))
+    rubricIds.map((rid) =>
+      fetchAllProductsInRubric(token, variation, rid, pipe, catalogScope)
+    )
   );
   const merged = new Map<number, FpProduct>();
   let brandExcludedMissing = 0;
   let brandExcludedNotInList = 0;
   let modelExcludedNotInList = 0;
   let excludeMeta: FetchRubricProductsResult["excludeMeta"];
+  let listedFromApi = 0;
+  let droppedNoActiveOffer = 0;
+  let uniqueBeforePipeline = 0;
+  const rubricIdsQueried: number[] = [];
+
+  let infoBatchesTotal = 0;
+  let infoBatchesFailed = 0;
+  let withEanAfterEnrich = 0;
 
   for (const m of maps) {
     for (const p of m.products) merged.set(p.id, p);
@@ -430,15 +575,54 @@ export async function fetchMergedRubricsProducts(
     brandExcludedNotInList += m.brandExcludedNotInList;
     modelExcludedNotInList += m.modelExcludedNotInList;
     if (m.excludeMeta) excludeMeta = m.excludeMeta;
+    const d = m.fetchDiagnostics;
+    if (d) {
+      listedFromApi += d.listedFromApi;
+      droppedNoActiveOffer += d.droppedNoActiveOffer;
+      uniqueBeforePipeline += d.uniqueBeforePipeline;
+      rubricIdsQueried.push(...d.rubricIdsQueried);
+      infoBatchesTotal += d.infoBatchesTotal ?? 0;
+      infoBatchesFailed += d.infoBatchesFailed ?? 0;
+      withEanAfterEnrich += d.withEanAfterEnrich ?? 0;
+    }
   }
 
+  const products = [...merged.values()];
+
   return {
-    products: [...merged.values()],
+    products,
     excludeMeta,
     brandExcludedMissing,
     brandExcludedNotInList,
-    modelExcludedNotInList
+    modelExcludedNotInList,
+    fetchDiagnostics: {
+      listedFromApi,
+      droppedNoActiveOffer,
+      uniqueBeforePipeline,
+      rubricIdsQueried,
+      infoBatchesTotal,
+      infoBatchesFailed,
+      withEanAfterEnrich:
+        withEanAfterEnrich > 0 ? withEanAfterEnrich : countProductsWithEanIndexKeys(products)
+    }
   };
+}
+
+/**
+ * Рубрика + прямые дочерние (если у родителя в API нет своих карточек — типично для «весь ассортимент»).
+ */
+export async function fetchAllProductsInRubricTree(
+  token: string,
+  variation: string,
+  rubricId: number,
+  pipe: RubricFetchPipeline,
+  catalogScope: RubricCatalogScope = "full_catalog"
+): Promise<FetchRubricProductsResult> {
+  const rubricIds = await expandRubricWithChildren(token, rubricId);
+  console.log(
+    `[fetchRubricTree] root=${rubricId} → query rubrics [${rubricIds.join(",")}] scope=${catalogScope}`
+  );
+  return fetchMergedRubricsProducts(token, variation, rubricIds, pipe, catalogScope);
 }
 
 export async function fetchMergedRubricsProductIds(
@@ -487,12 +671,12 @@ export async function fetchProductsByIds(
     const res = await fpFetch(token, path, { method: "GET" });
     const text = await res.text();
     if (!res.ok) httpErr(path, res, text);
-    const json = JSON.parse(text) as ApiEnvelope<{ product?: FpProduct | FpProduct[] }>;
-    const prod = json.result?.product;
-    const arr = Array.isArray(prod) ? prod : prod ? [prod] : [];
-    out.push(
-      ...filterFpProductsActiveOffers(arr.map(normalizeFpProductListShape))
-    );
+    const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
+    for (const p of parseProductsFromInfoEnvelope(json)) {
+      const merged = fpProductWithMergedEans(normalizeFpProductListShape(p));
+      const kept = filterFpProductKeepActiveOfferVariations(merged);
+      out.push(kept ?? merged);
+    }
   }
   return out;
 }

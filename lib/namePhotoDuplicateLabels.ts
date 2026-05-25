@@ -12,7 +12,7 @@ export type NamePhotoDupInputRow = {
 type RowRef = { rowIndex: number; link: string; article: string };
 
 function normNameKey(name: string): string {
-  return name.trim().toLowerCase();
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 /**
@@ -49,10 +49,11 @@ export function labelsForNamePhotoDuplicates(
     const duplicates: string[] = [];
     const seen = new Set<string>();
     for (const g of group) {
-      if (g.rowIndex === i || !g.link) continue;
-      if (seen.has(g.link)) continue;
-      seen.add(g.link);
-      duplicates.push(g.link);
+      if (g.rowIndex === i) continue;
+      const token = g.link.trim() || g.article;
+      if (!token || seen.has(token)) continue;
+      seen.add(token);
+      duplicates.push(g.link.trim() || g.article);
     }
     if (duplicates.length > 0) {
       out.push(duplicates.join(linkSeparator));

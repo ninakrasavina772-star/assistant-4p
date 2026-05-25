@@ -4869,11 +4869,17 @@ export default function ComparePage() {
         const cEanRows = eg?.rowSlotsInGroups ?? rowSlotsFallback;
         const cEanCards = eg?.uniqueProductCount ?? eanDupIdSet.size;
         const cEan = data.eanGroups.length;
+        const nameGroups = data.nameGroups ?? [];
+        const cNameExact = nameGroups.length;
+        const ngSummary = data.nameGroupsSummary;
+        const cNameRows =
+          ngSummary?.rowSlotsInGroups ??
+          nameGroups.reduce((s, g) => s + g.products.length, 0);
         const cName = data.namePhotoPairs.length;
         const cVis = data.brandVisualPairs?.length ?? 0;
         const cUnl = data.unlikelyPairs?.length ?? 0;
-        const cNameAttr = cName + cVis;
-        const cAllBlocks = cEan + cName + cVis + cUnl;
+        const cNameAttr = cNameExact + cName + cVis;
+        const cAllBlocks = cEan + cNameExact + cName + cVis + cUnl;
         return (
         <>
           <div className="flex flex-wrap gap-4 text-sm text-slate-700 mb-6 p-4 rounded-xl bg-white border border-slate-200">
@@ -4920,6 +4926,84 @@ export default function ComparePage() {
                       ) : null}
                     </>
                   ) : null}
+                  {data.stats.fetchDiagnostics ? (
+                    <>
+                      <span className="block mt-2 text-xs text-slate-600">
+                        Загрузка API: в ответе{" "}
+                        <strong className="tabular-nums">
+                          {data.stats.fetchDiagnostics.listedFromApi}
+                        </strong>{" "}
+                        карточек
+                        {data.stats.fetchDiagnostics.droppedNoActiveOffer > 0 ? (
+                          <>
+                            , без активного оффера отсечено{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.droppedNoActiveOffer}
+                            </strong>
+                          </>
+                        ) : null}
+                        {data.stats.fetchDiagnostics.rubricIdsQueried.length > 1 ? (
+                          <>
+                            . Опрошено рубрик:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.rubricIdsQueried.length}
+                            </strong>{" "}
+                            (родитель + дочерние:{" "}
+                            {data.stats.fetchDiagnostics.rubricIdsQueried.join(", ")})
+                          </>
+                        ) : null}
+                        {data.stats.fetchDiagnostics.withEanAfterEnrich != null ? (
+                          <>
+                            . Со штрихкодом после /product/info:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.withEanAfterEnrich}
+                            </strong>
+                          </>
+                        ) : null}
+                        {(data.stats.fetchDiagnostics.infoBatchesFailed ?? 0) > 0 ? (
+                          <>
+                            . Батчей info с ошибкой:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.infoBatchesFailed}
+                            </strong>
+                            {" "}
+                            из {data.stats.fetchDiagnostics.infoBatchesTotal ?? "?"}
+                          </>
+                        ) : null}
+                      </span>
+                      {data.stats.count > 0 &&
+                      (data.stats.withEanIndexKeys ?? 0) === 0 &&
+                      !data.stats.fetchDiagnostics.feedSource ? (
+                        <span className="block mt-1 text-xs text-amber-900">
+                          Товары загружены, но штрихкоды не распознаны — проверьте ключ API и site
+                          variation; без EAN из /product/info группы «дубли по EAN» будут пустыми.
+                        </span>
+                      ) : null}
+                      {data.stats.count === 0 &&
+                      data.stats.fetchDiagnostics.listedFromApi > 0 ? (
+                        <span className="block mt-1 text-xs text-amber-900">
+                          В API товары есть, но после фильтров (бренд / модель / исключённые id)
+                          ничего не осталось — снимите фильтры в форме и повторите.
+                        </span>
+                      ) : null}
+                      {data.stats.count === 0 &&
+                      data.stats.fetchDiagnostics.listedFromApi === 0 ? (
+                        <span className="block mt-1 text-xs text-amber-900">
+                          {data.stats.fetchDiagnostics.feedSource
+                            ? "Фид не дал ни одной строки с Id товара. Проверьте файл: первая строка таблицы — заголовки Id товара + Артикул/EAN; уберите лишние строки сверху (как в экспорте 4Partners)."
+                            : "API вернул 0 карточек по этой рубрике. Проверьте ключ, site variation, номер рубрики; для родительской ветки подтягиваются дочерние рубрики."}
+                        </span>
+                      ) : null}
+                      {data.stats.fetchDiagnostics.feedSource &&
+                      data.stats.fetchDiagnostics.listedFromApi > 0 ? (
+                        <span className="block mt-1 text-xs text-slate-600">
+                          Режим <strong>CSV/Excel</strong>: номер рубрики в форме файл{" "}
+                          <strong>не режет</strong> — в расчёт попадает весь загруженный фид.
+                          Нужен экспорт именно нужной ветки или полный ассортимент.
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
                 </>
               )}
             </span>
@@ -4930,6 +5014,10 @@ export default function ComparePage() {
               EAN → несколько id: <strong className="tabular-nums">{cEan}</strong> групп ·{" "}
               <strong className="tabular-nums">{cEanRows}</strong> строк в группах ·{" "}
               <strong className="tabular-nums">{cEanCards}</strong> уник. карточек
+            </span>
+            <span className="text-amber-800">
+              Название (точное): <strong className="tabular-nums">{cNameExact}</strong> групп ·{" "}
+              <strong className="tabular-nums">{cNameRows}</strong> строк
             </span>
             <span className="text-amber-800">
               ~90% (имя+URL фото): {cName}
@@ -4944,20 +5032,19 @@ export default function ComparePage() {
               Всего блоков в отчёте:{" "}
               <strong className="text-slate-900 tabular-nums">{cAllBlocks}</strong>{" "}
               <span className="text-slate-500">
-                ({cEan}+{cName}+{cVis}+{cUnl})
+                ({cEan}+{cNameExact}+{cName}+{cVis}+{cUnl})
               </span>
             </span>
           </div>
 
           <div className="mb-6 p-4 rounded-xl border border-amber-200/80 bg-amber-50/40 text-sm">
             <p className="text-xs text-slate-600 mb-2">
-              Что показывать: дубли <strong>по EAN</strong> и/или{" "}
-              <strong>по названию + фото</strong>
+              Что показывать: дубли <strong>по EAN</strong>, <strong>по точному названию</strong> и/или{" "}
+              <strong>по похожему названию + фото</strong>
               <span className="text-slate-500">
                 {" "}
-                — счётчики: EAN — <strong className="tabular-nums text-slate-700">{cEan}</strong>{" "}
-                групп / <strong className="tabular-nums text-slate-700">{cEanRows}</strong> строк /{" "}
-                <strong className="tabular-nums text-slate-700">{cEanCards}</strong> уник. карточек, ~90%{" "}
+                — EAN: <strong className="tabular-nums text-slate-700">{cEan}</strong> групп, название
+                (точное): <strong className="tabular-nums text-slate-700">{cNameExact}</strong>, ~90%{" "}
                 <strong className="tabular-nums text-slate-700">{cName}</strong>, ~60%{" "}
                 <strong className="tabular-nums text-slate-700">{cVis}</strong>, маловероятн.{" "}
                 <strong className="tabular-nums text-slate-700">{cUnl}</strong>
@@ -5256,13 +5343,49 @@ export default function ComparePage() {
           )}
 
           {(dupKindFilter === "all" || dupKindFilter === "nameAttr") && (
+          <section className="mb-10" id="intra-name-exact">
+            <h2 className="text-lg font-semibold text-slate-900 mb-2">
+              Одно название — несколько разных id{" "}
+              <span className="text-amber-800 tabular-nums">({cNameExact})</span>
+            </h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Полное совпадение названия (по выбранному языку RU/EN) среди всех товаров рубрики после
+              фильтров. Как с EAN: в группе все карточки с одинаковым заголовком.
+            </p>
+            {nameGroups.length === 0 && (
+              <p className="text-sm text-slate-500">Нет</p>
+            )}
+            <div className="space-y-6">
+              {nameGroups.map((g) => (
+                <div
+                  key={g.name.slice(0, 80)}
+                  className="rounded-xl border border-violet-200 bg-violet-50/30 p-4"
+                >
+                  <p className="text-xs text-slate-700 mb-3 line-clamp-3" title={g.name}>
+                    {g.name}
+                  </p>
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    {g.products.map((c) => (
+                      <div key={c.id} className="min-w-0">
+                        <ProductCell c={c} siteLabel={data.siteLabel} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+          )}
+
+          {(dupKindFilter === "all" || dupKindFilter === "nameAttr") && (
           <section className="mb-10" id="intra-name">
             <h2 className="text-lg font-semibold text-slate-900 mb-2">
               ~90%: частичное название + эквивалентный URL фото{" "}
               <span className="text-amber-800 tabular-nums">({cName})</span>
             </h2>
             <p className="text-xs text-slate-500 mb-3">
-              Внутри бренда. Товары из EAN-групп выше сюда не включаются. При галочках
+              Похожие, но не идентичные названия. Товары из точных групп EAN/названия сюда не
+              включаются. При галочках
               объём/оттенок/цвет — жёсткий отсев по расхождению.
             </p>
             {singleNamePhotoDisplayed.length === 0 && (
@@ -6020,6 +6143,40 @@ export default function ComparePage() {
                           >
                             <p className="text-xs font-mono text-amber-950 mb-3">
                               EAN {g.ean}
+                            </p>
+                            <div className="grid sm:grid-cols-1 md:grid-cols-2 gap-4">
+                              {g.products.map((c) => (
+                                <ProductCell
+                                  key={c.id}
+                                  c={c}
+                                  siteLabel={dupSiteLabel}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {showNameAttrSections && (intra.nameGroups?.length ?? 0) > 0 && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-violet-900 mb-2">
+                        Одно название — несколько id на {dupSiteLabel}
+                      </h3>
+                      <p className="text-xs text-violet-900/80 mb-3">
+                        Точное совпадение заголовка (как колонка «Дубль по названию» в таблице):{" "}
+                        <strong className="tabular-nums">{intra.nameGroups.length}</strong>{" "}
+                        групп.
+                      </p>
+                      <div className="space-y-6">
+                        {intra.nameGroups.map((g) => (
+                          <div
+                            key={g.name.slice(0, 80)}
+                            className="rounded-xl border border-violet-200 bg-violet-50/30 p-4"
+                          >
+                            <p className="text-xs text-slate-700 mb-3 line-clamp-3" title={g.name}>
+                              {g.name}
                             </p>
                             <div className="grid sm:grid-cols-1 md:grid-cols-2 gap-4">
                               {g.products.map((c) => (

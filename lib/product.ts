@@ -172,6 +172,16 @@ export function expandEanDigitsForIndex(digits: string): string[] {
   return [...out];
 }
 
+/**
+ * Собирает все штрихкоды с карточки (включая неактивные варианты) в корневое `eans`
+ * — чтобы индекс дублей не зависел от фильтра офферов.
+ */
+export function fpProductWithMergedEans(p: FpProduct): FpProduct {
+  const eans = collectEans(p);
+  if (!eans.length) return p;
+  return { ...p, eans };
+}
+
 /** Уникальные ключи штрихкодов карточки для индекса (несколько форм одного GTIN/EAN). */
 export function collectEanIndexKeys(p: FpProduct): string[] {
   const keys = new Set<string>();

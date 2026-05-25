@@ -1,12 +1,18 @@
 import { productBrandName } from "./brand-filter";
 import { computeIntraSoftDupTiers } from "./dupTiers";
-import { collectEanIndexKeys, toCompareProduct } from "./product";
+import {
+  collectEanIndexKeys,
+  pickComparableName,
+  toCompareProduct
+} from "./product";
 import { normBrand } from "./pairScoring";
 import type {
   AttrMatchOptions,
   CompareProduct,
   EanGroupsSummary,
   FpProduct,
+  IntraEanGroupRow,
+  IntraNameGroupRow,
   NameLocale
 } from "./types";
 
@@ -26,17 +32,20 @@ export function summarizeIntraEanGroups(
   };
 }
 
+export const summarizeIntraNameGroups = summarizeIntraEanGroups;
+
 export type IntraSiteDupResult = {
-  eanGroups: { ean: string; products: CompareProduct[] }[];
+  eanGroups: IntraEanGroupRow[];
   eanGroupsSummary: EanGroupsSummary;
-  /** ~90%: частичное название + эквивалентный URL фото */
+  /** Полное совпадение нормализованного названия (все карточки рубрики, как EAN) */
+  nameGroups: IntraNameGroupRow[];
+  nameGroupsSummary: EanGroupsSummary;
   namePhotoPairs: {
     a: CompareProduct;
     b: CompareProduct;
     score: number;
     matchReasons: string[];
   }[];
-  /** ~60%: точный бренд + частичное название + визуально похожее фото */
   brandVisualPairs: {
     a: CompareProduct;
     b: CompareProduct;
@@ -51,6 +60,160 @@ export type IntraSiteDupResult = {
   }[];
 };
 
+function normExactNameKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+class UnionFind {
+  private parent = new Map<number, number>();
+
+  ensure(id: number): void {
+    if (!this.parent.has(id)) this.parent.set(id, id);
+  }
+
+  find(id: number): number {
+    this.ensure(id);
+    let r = this.parent.get(id)!;
+    while (r !== this.parent.get(r)) {
+      r = this.parent.get(r)!;
+    }
+    let x = id;
+    while (x !== r) {
+      const next = this.parent.get(x)!;
+      this.parent.set(x, r);
+      x = next;
+    }
+    return r;
+  }
+
+  union(a: number, b: number): void {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent.set(ra, rb);
+  }
+}
+
+/**
+ * Все id, у которых пересекается хотя бы один ключ (EAN), — в одну группу.
+ * Иначе одна пара сходилась по ключу 13 цифр, другая по 14 — и в отчёте «терялись» дубли.
+ */
+function buildEanClusters(
+  products: FpProduct[],
+  idToP: Map<number, FpProduct>
+): IntraEanGroupRow[] {
+  const keyToIds = new Map<string, Set<number>>();
+  for (const p of products) {
+    for (const key of collectEanIndexKeys(p)) {
+      if (!keyToIds.has(key)) keyToIds.set(key, new Set());
+      keyToIds.get(key)!.add(p.id);
+    }
+  }
+
+  const uf = new UnionFind();
+  for (const p of products) uf.ensure(p.id);
+  for (const ids of keyToIds.values()) {
+    const arr = [...ids];
+    for (let i = 1; i < arr.length; i++) uf.union(arr[0]!, arr[i]!);
+  }
+
+  const rootToIds = new Map<number, Set<number>>();
+  for (const p of products) {
+    const root = uf.find(p.id);
+    if (!rootToIds.has(root)) rootToIds.set(root, new Set());
+    rootToIds.get(root)!.add(p.id);
+  }
+
+  const groups: IntraEanGroupRow[] = [];
+  for (const clusterIds of rootToIds.values()) {
+    if (clusterIds.size < 2) continue;
+    const displayEan = pickDisplayEanForCluster(clusterIds, keyToIds, idToP);
+    groups.push({
+      ean: displayEan,
+      products: [...clusterIds]
+        .sort((a, b) => a - b)
+        .map((id) => toCompareProduct(idToP.get(id)!))
+        .filter(Boolean)
+    });
+  }
+
+  groups.sort((a, b) => {
+    const d = b.products.length - a.products.length;
+    if (d !== 0) return d;
+    return a.ean.localeCompare(b.ean, "ru");
+  });
+  return groups;
+}
+
+function pickDisplayEanForCluster(
+  clusterIds: Set<number>,
+  keyToIds: Map<string, Set<number>>,
+  idToP: Map<number, FpProduct>
+): string {
+  let bestKey = "";
+  let bestCount = 0;
+  for (const [key, ids] of keyToIds) {
+    if (ids.size < 2) continue;
+    let allIn = true;
+    for (const id of ids) {
+      if (!clusterIds.has(id)) {
+        allIn = false;
+        break;
+      }
+    }
+    if (!allIn) continue;
+    if (
+      ids.size > bestCount ||
+      (ids.size === bestCount && key.length > bestKey.length)
+    ) {
+      bestKey = key;
+      bestCount = ids.size;
+    }
+  }
+  if (bestKey) return bestKey;
+  for (const id of clusterIds) {
+    const p = idToP.get(id);
+    if (!p) continue;
+    const keys = collectEanIndexKeys(p);
+    if (keys[0]) return keys[0];
+  }
+  return "";
+}
+
+/** Точное совпадение сравниваемого названия (RU/EN по настройке), без фото. */
+function buildExactNameGroups(
+  products: FpProduct[],
+  nameLocale: NameLocale,
+  idToP: Map<number, FpProduct>
+): IntraNameGroupRow[] {
+  const nameToIds = new Map<string, Set<number>>();
+  for (const p of products) {
+    const c = toCompareProduct(p);
+    const key = normExactNameKey(pickComparableName(c, nameLocale));
+    if (!key) continue;
+    if (!nameToIds.has(key)) nameToIds.set(key, new Set());
+    nameToIds.get(key)!.add(p.id);
+  }
+
+  const groups: IntraNameGroupRow[] = [];
+  for (const [name, ids] of nameToIds) {
+    if (ids.size < 2) continue;
+    groups.push({
+      name,
+      products: [...ids]
+        .sort((a, b) => a - b)
+        .map((id) => toCompareProduct(idToP.get(id)!))
+        .filter(Boolean)
+    });
+  }
+
+  groups.sort((a, b) => {
+    const d = b.products.length - a.products.length;
+    if (d !== 0) return d;
+    return a.name.localeCompare(b.name, "ru");
+  });
+  return groups;
+}
+
 /** Как sameBrandForFuzzy: пара возможна только внутри одного нормализованного бренда или оба без бренда. */
 function brandFuzzyGroupKey(p: FpProduct): string {
   const n = normBrand(productBrandName(p));
@@ -58,35 +221,24 @@ function brandFuzzyGroupKey(p: FpProduct): string {
 }
 
 /**
- * Дубли в одной выгрузке (один сайт, одна рубрика): 2 «колонки» = две карточки в строке.
- * Уровни: EAN (100%) → 90% / 60% / маловероятные — см. dupTiers.
+ * Дубли в одной выгрузке (один сайт, одна рубрика).
+ * EAN и точное название — по всем переданным товарам (уже с учётом фильтров пайплайна).
+ * Мягкие слои (~90% / ~60% / маловероятные) — только для пар, не попавших в EAN/точное имя.
  */
 export async function findIntraSiteDuplicates(
   products: FpProduct[],
   nameLocale: NameLocale,
   attrOpts?: AttrMatchOptions
 ): Promise<IntraSiteDupResult> {
-  const eanToIds = new Map<string, Set<number>>();
   const idToP = new Map<number, FpProduct>();
-  for (const p of products) {
-    idToP.set(p.id, p);
-    for (const e of collectEanIndexKeys(p)) {
-      if (!eanToIds.has(e)) eanToIds.set(e, new Set());
-      eanToIds.get(e)!.add(p.id);
-    }
-  }
-  const eanGroups: IntraSiteDupResult["eanGroups"] = [];
-  for (const [ean, ids] of eanToIds) {
-    if (ids.size < 2) continue;
-    eanGroups.push({
-      ean,
-      products: [...ids]
-        .map((id) => toCompareProduct(idToP.get(id)!))
-        .filter(Boolean)
-    });
-  }
-  const usedInEan = new Set<number>();
-  for (const g of eanGroups) for (const c of g.products) usedInEan.add(c.id);
+  for (const p of products) idToP.set(p.id, p);
+
+  const eanGroups = buildEanClusters(products, idToP);
+  const nameGroups = buildExactNameGroups(products, nameLocale, idToP);
+
+  const usedInExactDup = new Set<number>();
+  for (const g of eanGroups) for (const c of g.products) usedInExactDup.add(c.id);
+  for (const g of nameGroups) for (const c of g.products) usedInExactDup.add(c.id);
 
   const byFuzzyBrand = new Map<string, FpProduct[]>();
   for (const p of products) {
@@ -97,7 +249,7 @@ export async function findIntraSiteDuplicates(
 
   const soft = await computeIntraSoftDupTiers(
     byFuzzyBrand,
-    usedInEan,
+    usedInExactDup,
     nameLocale,
     attrOpts
   );
@@ -105,6 +257,8 @@ export async function findIntraSiteDuplicates(
   return {
     eanGroups,
     eanGroupsSummary: summarizeIntraEanGroups(eanGroups),
+    nameGroups,
+    nameGroupsSummary: summarizeIntraNameGroups(nameGroups),
     namePhotoPairs: soft.namePhotoPairs,
     brandVisualPairs: soft.brandVisualPairs,
     unlikelyPairs: soft.unlikelyPairs

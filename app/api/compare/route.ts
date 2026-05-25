@@ -5,7 +5,7 @@ import { filterFpProductsByBrands, mergeBrandLists, type BrandMatchMode } from "
 import { parseExcludeIdsFromRequest } from "@/lib/excludeProductIds";
 import {
   applyRubricFetchPipeline,
-  fetchAllProductsInRubric,
+  fetchAllProductsInRubricTree,
   fetchMergedRubricsProductIds,
   fetchMergedRubricsProducts,
   fetchNoveltyIdsSlicePage,
@@ -325,6 +325,8 @@ export async function POST(req: NextRequest) {
         excludeIdsA: undefined,
         eanGroups: dups.eanGroups,
         eanGroupsSummary: dups.eanGroupsSummary,
+        nameGroups: dups.nameGroups,
+        nameGroupsSummary: dups.nameGroupsSummary,
         namePhotoPairs: dups.namePhotoPairs,
         brandVisualPairs: dups.brandVisualPairs,
         unlikelyPairs: dups.unlikelyPairs,
@@ -512,14 +514,22 @@ export async function POST(req: NextRequest) {
             : undefined;
         const mergedProducts = applied.out;
         const dups = await findIntraSiteDuplicates(mergedProducts, nameLocale, attrMatch);
+        const rubricAHint = Number(body.rubricA);
         const single: SingleSiteDupsResult = {
           resultKind: "singleSiteDups",
           siteLabel: siteALabel,
           nameLocale,
-          rubricId: 0,
+          rubricId: Number.isFinite(rubricAHint) && rubricAHint > 0 ? Math.floor(rubricAHint) : 0,
           stats: {
             count: mergedProducts.length,
-            withEanIndexKeys: countProductsWithEanIndexKeys(mergedProducts)
+            withEanIndexKeys: countProductsWithEanIndexKeys(mergedProducts),
+            fetchDiagnostics: {
+              listedFromApi: raw.length,
+              droppedNoActiveOffer: 0,
+              uniqueBeforePipeline: raw.length,
+              rubricIdsQueried: [],
+              feedSource: true
+            }
           },
           brandFilter: buildBrandFilterInfo(
             brandsRaw,
@@ -533,6 +543,8 @@ export async function POST(req: NextRequest) {
           excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, excludeMeta),
           eanGroups: dups.eanGroups,
           eanGroupsSummary: dups.eanGroupsSummary,
+          nameGroups: dups.nameGroups,
+          nameGroupsSummary: dups.nameGroupsSummary,
           namePhotoPairs: dups.namePhotoPairs,
           brandVisualPairs: dups.brandVisualPairs,
           unlikelyPairs: dups.unlikelyPairs,
@@ -591,8 +603,15 @@ export async function POST(req: NextRequest) {
       if (!Number.isFinite(rubricA) || rubricA < 1) {
         return NextResponse.json({ error: "Некорректная rubricA" }, { status: 400 });
       }
-      const merged = await fetchAllProductsInRubric(token, siteVariation, rubricA, pipeA);
+      const merged = await fetchAllProductsInRubricTree(
+        token,
+        siteVariation,
+        rubricA,
+        pipeA,
+        "full_catalog"
+      );
       const dups = await findIntraSiteDuplicates(merged.products, nameLocale, attrMatch);
+      const fd = merged.fetchDiagnostics;
       const single: SingleSiteDupsResult = {
         resultKind: "singleSiteDups",
         siteLabel: siteALabel,
@@ -600,7 +619,8 @@ export async function POST(req: NextRequest) {
         rubricId: rubricA,
         stats: {
           count: merged.products.length,
-          withEanIndexKeys: countProductsWithEanIndexKeys(merged.products)
+          withEanIndexKeys: countProductsWithEanIndexKeys(merged.products),
+          fetchDiagnostics: fd
         },
         brandFilter: buildBrandFilterInfo(
           brandsRaw,
@@ -614,6 +634,8 @@ export async function POST(req: NextRequest) {
         excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, merged.excludeMeta),
         eanGroups: dups.eanGroups,
         eanGroupsSummary: dups.eanGroupsSummary,
+        nameGroups: dups.nameGroups,
+        nameGroupsSummary: dups.nameGroupsSummary,
         namePhotoPairs: dups.namePhotoPairs,
         brandVisualPairs: dups.brandVisualPairs,
         unlikelyPairs: dups.unlikelyPairs,

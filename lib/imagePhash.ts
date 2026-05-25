@@ -27,7 +27,7 @@ export type PhashCache = Map<string, bigint | null>;
 export async function phash64FromUrl(
   url: string,
   cache: PhashCache,
-  timeoutMs = 12000
+  timeoutMs = 4000
 ): Promise<bigint | null> {
   const u = url.trim();
   if (!u) return null;
@@ -78,12 +78,17 @@ export async function phash64FromUrl(
   }
 }
 
+/** Max images to download per request — keeps function within Vercel Hobby 60s limit */
+const MAX_PHASH_DOWNLOADS = 60;
+
 export async function prefetchPhashes(
   urls: Iterable<string>,
   cache: PhashCache,
   batchSize = 8
 ): Promise<void> {
   const uniq = [...new Set([...urls].map((s) => s.trim()).filter(Boolean))];
+  // Skip downloading entirely if too many images — gracefully falls back to URL-only matching
+  if (uniq.length > MAX_PHASH_DOWNLOADS) return;
   for (let i = 0; i < uniq.length; i += batchSize) {
     const chunk = uniq.slice(i, i + batchSize);
     await Promise.all(chunk.map((u) => phash64FromUrl(u, cache)));

@@ -4,6 +4,7 @@
 
 export const COL_ARTICLE = "Артикул";
 export const COL_EAN = "EAN";
+export const COL_EAN_ALT = "Штрихкод";
 /** Заголовок результата в вашей таблице */
 export const COL_DUP_RESULT = "Дубль по eан";
 export const COL_DUP_RESULT_ALT = "Дубль по EAN";
@@ -29,9 +30,14 @@ function normHeader(h: unknown): string {
   return String(h ?? "").trim();
 }
 
+function normHeaderKey(h: unknown): string {
+  return normHeader(h).toLowerCase();
+}
+
 function findCol(headers: string[], ...candidates: string[]): number {
   for (const name of candidates) {
-    const i = headers.findIndex((h) => h === name);
+    const key = normHeaderKey(name);
+    const i = headers.findIndex((h) => normHeaderKey(h) === key);
     if (i >= 0) return i;
   }
   return -1;
@@ -43,7 +49,7 @@ export function parseNoveltiesSheetForEanDup(
   if (!matrix.length) throw new Error("Файл пустой или нет строк.");
   const headerCells = matrix[0]!.map(normHeader);
   const art = findCol(headerCells, COL_ARTICLE);
-  const ean = findCol(headerCells, COL_EAN);
+  const ean = findCol(headerCells, COL_EAN, COL_EAN_ALT);
   if (art < 0) throw new Error(`Не найдена колонка «${COL_ARTICLE}».`);
   if (ean < 0) throw new Error(`Не найдена колонка «${COL_EAN}».`);
   const rows: string[][] = [headerCells];
@@ -143,7 +149,7 @@ export function extractArticleEanColumns(sheet: NoveltiesSheetForEanDup): {
 } {
   const headers = sheet.rows[0]!.map(normHeader);
   const art = findCol(headers, COL_ARTICLE);
-  const ean = findCol(headers, COL_EAN);
+  const ean = findCol(headers, COL_EAN, COL_EAN_ALT);
   const articles: string[] = [];
   const eans: string[] = [];
   for (let i = 1; i < sheet.rows.length; i++) {

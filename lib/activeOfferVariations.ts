@@ -29,7 +29,15 @@ export function filterFpProductKeepActiveOfferVariations(p: FpProduct): FpProduc
   for (const [k, v] of Object.entries(pv)) {
     if (variationHasActiveOffer(v)) next[k] = v;
   }
-  if (Object.keys(next).length === 0) return null;
+  /** Нет активных SKU, но штрихкоды нужны для поиска дублей по EAN */
+  if (Object.keys(next).length === 0) {
+    if (!allEansForDedup.length) return null;
+    return {
+      ...p,
+      product_variation: null,
+      eans: allEansForDedup
+    };
+  }
 
   const trimmed: FpProduct = {
     ...p,

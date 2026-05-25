@@ -274,7 +274,10 @@ function resolveTierForPair(
     comb >= INTRA_NAME_STRONG_NO_URL_MIN &&
     (!modelSubstantial || modelSim >= INTRA_NAME_STRONG_MODEL_MIN) &&
     !softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq) &&
-    !softDupBlockedByDisjointEans(cI, cJ);
+    !(
+      !crossOpts?.skipDisjointEanGuard &&
+      softDupBlockedByDisjointEans(cI, cJ)
+    );
 
   if (modelLineStrictPrefixExtensionConflict(mA, mB) && !urlEq) return null;
 

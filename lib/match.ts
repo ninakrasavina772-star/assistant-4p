@@ -406,6 +406,8 @@ export async function runCompare(
     intraSiteADups: {
       eanGroups: intraSiteADups.eanGroups,
       eanGroupsSummary: intraSiteADups.eanGroupsSummary,
+      nameGroups: intraSiteADups.nameGroups,
+      nameGroupsSummary: intraSiteADups.nameGroupsSummary,
       namePhotoPairs: intraSiteADups.namePhotoPairs,
       brandVisualPairs: intraSiteADups.brandVisualPairs,
       unlikelyPairs: intraSiteADups.unlikelyPairs
@@ -413,6 +415,8 @@ export async function runCompare(
     intraSiteBDups: {
       eanGroups: intraSiteBDups.eanGroups,
       eanGroupsSummary: intraSiteBDups.eanGroupsSummary,
+      nameGroups: intraSiteBDups.nameGroups,
+      nameGroupsSummary: intraSiteBDups.nameGroupsSummary,
       namePhotoPairs: intraSiteBDups.namePhotoPairs,
       brandVisualPairs: intraSiteBDups.brandVisualPairs,
       unlikelyPairs: intraSiteBDups.unlikelyPairs
