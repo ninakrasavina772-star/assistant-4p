@@ -10,6 +10,7 @@ import {
 import { modelLineStrictPrefixExtensionConflict, nameAndModelScore } from "./nameModel";
 import { nameSimilarity, normalizeComparableName } from "./nameSimilarity";
 import { applyAttrGate, normBrand, sameBrandForFuzzy } from "./pairScoring";
+import { volumeStringsEquivalentForGate } from "./volumeFromText";
 import {
   expandEanDigitsForIndex,
   pickComparableName,
@@ -42,6 +43,8 @@ export const PARTIAL_NAME_MIN_90 = 0.42;
 /** ~60%: точный бренд + модельная линия в названии + визуально похожее фото */
 /** Выше минимум — меньше ложных пар вроде разных линеек Hermes при похожем флаконе. */
 export const PARTIAL_NAME_MIN_60 = 0.46;
+/** Вкладка «по названию» (intra): сходство модельной строки после снятия бренда/типа. */
+export const NAME_TAB_MODEL_MIN = 0.68;
 /** Маловероятный: тот же бренд (fuzzy), слабее название */
 export const SLIGHT_NAME_UNLIKELY = 0.24;
 
@@ -420,6 +423,129 @@ const TIER_WEIGHT: Record<ResolvedTier["kind"], number> = {
   "60": 2,
   un: 1
 };
+
+function volumesCompatibleForNameTab(a: CompareProduct, b: CompareProduct): boolean {
+  const av = a.attrVolume?.trim();
+  const bv = b.attrVolume?.trim();
+  if (av && bv) return volumeStringsEquivalentForGate(av, bv);
+  return !av && !bv;
+}
+
+function resolveNameTabPair(
+  cI: CompareProduct,
+  cJ: CompareProduct,
+  nameLocale: NameLocale,
+  cache: PhashCache
+): { score: number; reasons: string[] } | null {
+  if (softDupBlockedByDisjointEans(cI, cJ)) return null;
+  if (!brandsExactForDup(cI, cJ)) return null;
+
+  const na = pickComparableName(cI, nameLocale);
+  const nb = pickComparableName(cJ, nameLocale);
+  if (wordFollowedByConflictingDigit(na, nb)) return null;
+  if (incompatibleBeautyTitles(na, nb)) return null;
+
+  const { model: modelSim, modelA: mA, modelB: mB } = nameAndModelScore(
+    na,
+    nb,
+    cI.brand,
+    cJ.brand
+  );
+  if (modelSim < NAME_TAB_MODEL_MIN) return null;
+  if (modelLineStrictPrefixExtensionConflict(mA, mB)) return null;
+  if (!volumesCompatibleForNameTab(cI, cJ)) return null;
+
+  const imgI = cI.firstImage || "";
+  const imgJ = cJ.firstImage || "";
+  if (!imgI || !imgJ) return null;
+  const urlEq = firstImageRefEquivalent(imgI, imgJ);
+  if (
+    softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)
+  ) {
+    return null;
+  }
+  if (!urlEq && !visualFromCache(imgI, imgJ, cache, DEFAULT_VISUAL_HAMMING_MAX)) {
+    return null;
+  }
+
+  const volBits: string[] = [];
+  if (cI.attrVolume?.trim() && cJ.attrVolume?.trim()) volBits.push("объём");
+  else if (!cI.attrVolume?.trim() && !cJ.attrVolume?.trim()) {
+    volBits.push("объём не указан у обоих");
+  }
+  return {
+    score: 0.85,
+    reasons: [
+      "дубль по названию: бренд (точно) + модель + похожее фото (API/выбранный язык)",
+      `модель~${Math.round(modelSim * 100)}%`,
+      ...volBits
+    ]
+  };
+}
+
+/** Пары для вкладки «Похожие: имя/фото» — без карточек из EAN-групп. */
+export async function computeIntraNameTabDupPairs(
+  byFuzzyBrand: Map<string, FpProduct[]>,
+  excludedFromEanTab: Set<number>,
+  nameLocale: NameLocale
+): Promise<IntraNamePhotoPairRow[]> {
+  const work: PairWork[] = [];
+  for (const [, list] of byFuzzyBrand) {
+    const pool = list.filter((p) => !excludedFromEanTab.has(p.id));
+    for (let i = 0; i < pool.length; i++) {
+      for (let j = i + 1; j < pool.length; j++) {
+        const pi = pool[i]!;
+        const pj = pool[j]!;
+        const cI = toCompareProduct(pi);
+        const cJ = toCompareProduct(pj);
+        if (!sameBrandForFuzzy(cI, cJ)) continue;
+        const imgI = cI.firstImage || "";
+        const imgJ = cJ.firstImage || "";
+        if (!imgI || !imgJ) continue;
+        work.push({
+          pa: pi,
+          pb: pj,
+          cI,
+          cJ,
+          comb: 0,
+          imgI,
+          imgJ,
+          urlEq: firstImageRefEquivalent(imgI, imgJ)
+        });
+      }
+    }
+  }
+
+  const cache: PhashCache = new Map();
+  const urls: string[] = [];
+  for (const p of work) {
+    if (p.urlEq) continue;
+    urls.push(p.imgI, p.imgJ);
+  }
+  await prefetchPhashes(urls, cache);
+
+  const rows: IntraNamePhotoPairRow[] = [];
+  for (const p of work) {
+    const res = resolveNameTabPair(p.cI, p.cJ, nameLocale, cache);
+    if (!res) continue;
+    rows.push({
+      a: p.cI,
+      b: p.cJ,
+      score: res.score,
+      matchReasons: res.reasons
+    });
+  }
+
+  rows.sort((a, b) => {
+    const d = b.score - a.score;
+    if (d !== 0) return d;
+    const ia = Math.min(a.a.id, a.b.id);
+    const ib = Math.min(b.a.id, b.b.id);
+    if (ia !== ib) return ia - ib;
+    return Math.max(a.a.id, a.b.id) - Math.max(b.a.id, b.b.id);
+  });
+  return rows;
+}
 
 export async function computeIntraSoftDupTiers(
   byFuzzyBrand: Map<string, FpProduct[]>,

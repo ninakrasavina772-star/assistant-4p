@@ -288,3 +288,22 @@ export function pickComparableName(
   if (nameLocale === "ru") return c.nameRu;
   return c.nameEn;
 }
+
+/** Слияние строки фида с карточкой /product/info: названия и i18n из API, EAN и фото из фида. */
+export function mergeFeedRowWithApiInfo(feed: FpProduct, api: FpProduct): FpProduct {
+  const merged = fpProductWithMergedEans(normalizeFpProductListShape(api));
+  const eans = [...new Set([...collectEans(merged), ...collectEans(feed)])];
+  const feedPv = feed.product_variation;
+  const apiPv = merged.product_variation;
+  return {
+    ...merged,
+    id: feed.id,
+    name: merged.name || feed.name,
+    link: feed.link || merged.link,
+    brand: feed.brand ?? merged.brand,
+    ...(eans.length ? { eans } : {}),
+    ...(feedPv || apiPv
+      ? { product_variation: (feedPv ?? apiPv) as FpProduct["product_variation"] }
+      : {})
+  };
+}

@@ -7,6 +7,7 @@ import {
   countProductsWithEanIndexKeys,
   countVariationSlots,
   fpProductWithMergedEans,
+  mergeFeedRowWithApiInfo,
   normalizeFpProductListShape
 } from "./product";
 import type { FpProduct } from "./types";
@@ -696,6 +697,64 @@ export async function fetchMergedRubricsProductIds(
     brandExcludedMissing,
     brandExcludedNotInList,
     modelExcludedNotInList
+  };
+}
+
+/** Для CSV-фида: подтянуть i18n/названия из API, EAN и картинки оставить из фида. */
+export async function enrichFeedProductsFromApi(
+  token: string,
+  variation: string,
+  feedProducts: FpProduct[]
+): Promise<{
+  products: FpProduct[];
+  infoIdsReturned: number;
+  infoBatchesFailed: number;
+}> {
+  if (!feedProducts.length) {
+    return { products: [], infoIdsReturned: 0, infoBatchesFailed: 0 };
+  }
+  const ids = feedProducts.map((p) => p.id);
+  const feedById = new Map(feedProducts.map((p) => [p.id, p]));
+  const fullByIds = new Map<number, FpProduct>();
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += ENRICH_BATCH) {
+    chunks.push(ids.slice(i, i + ENRICH_BATCH));
+  }
+  let infoBatchesFailed = 0;
+  for (let i = 0; i < chunks.length; i += ENRICH_CONCURRENCY) {
+    const slice = chunks.slice(i, i + ENRICH_CONCURRENCY);
+    await Promise.all(
+      slice.map(async (chunk) => {
+        const { products, failed } = await fetchProductInfoChunk(
+          token,
+          variation,
+          chunk
+        );
+        if (failed) infoBatchesFailed += 1;
+        for (const p of products) fullByIds.set(p.id, p);
+        const missing = chunk.filter((id) => !fullByIds.has(id));
+        for (let m = 0; m < missing.length; m += ENRICH_SINGLE_CONCURRENCY) {
+          const part = missing.slice(m, m + ENRICH_SINGLE_CONCURRENCY);
+          await Promise.all(
+            part.map(async (id) => {
+              const one = await fetchProductInfoChunk(token, variation, [id]);
+              if (one.failed) infoBatchesFailed += 1;
+              for (const p of one.products) fullByIds.set(p.id, p);
+            })
+          );
+        }
+      })
+    );
+  }
+  const out: FpProduct[] = [];
+  for (const feed of feedProducts) {
+    const full = fullByIds.get(feed.id);
+    out.push(full ? mergeFeedRowWithApiInfo(feed, full) : fpProductWithMergedEans(feed));
+  }
+  return {
+    products: out,
+    infoIdsReturned: fullByIds.size,
+    infoBatchesFailed
   };
 }
 

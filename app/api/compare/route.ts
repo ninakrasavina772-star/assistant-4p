@@ -5,6 +5,7 @@ import { filterFpProductsByBrands, mergeBrandLists, type BrandMatchMode } from "
 import { parseExcludeIdsFromRequest } from "@/lib/excludeProductIds";
 import {
   applyRubricFetchPipeline,
+  enrichFeedProductsFromApi,
   fetchAllProductsInRubricTree,
   fetchMergedRubricsProductIds,
   fetchMergedRubricsProducts,
@@ -512,7 +513,18 @@ export async function POST(req: NextRequest) {
           excludeIdsRaw.length > 0
             ? { removedFromA: applied.excludeRemovedFromA, listIdsNotFoundInRubric: nf }
             : undefined;
-        const mergedProducts = applied.out;
+        let mergedProducts = applied.out;
+        let feedInfoIds: number | undefined;
+        const feedToken = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
+        if (feedToken.length >= MIN_TOKEN_LEN) {
+          const enriched = await enrichFeedProductsFromApi(
+            feedToken,
+            siteVariation,
+            mergedProducts
+          );
+          mergedProducts = enriched.products;
+          feedInfoIds = enriched.infoIdsReturned;
+        }
         const dups = await findIntraSiteDuplicates(mergedProducts, nameLocale, attrMatch);
         const rubricAHint = Number(body.rubricA);
         const single: SingleSiteDupsResult = {
@@ -528,7 +540,8 @@ export async function POST(req: NextRequest) {
               droppedNoActiveOffer: 0,
               uniqueBeforePipeline: raw.length,
               rubricIdsQueried: [],
-              feedSource: true
+              feedSource: true,
+              ...(feedInfoIds != null ? { infoIdsReturned: feedInfoIds } : {})
             }
           },
           brandFilter: buildBrandFilterInfo(

@@ -4878,8 +4878,8 @@ export default function ComparePage() {
         const cName = data.namePhotoPairs.length;
         const cVis = data.brandVisualPairs?.length ?? 0;
         const cUnl = data.unlikelyPairs?.length ?? 0;
-        const cNameAttr = cNameExact + cName + cVis;
-        const cAllBlocks = cEan + cNameExact + cName + cVis + cUnl;
+        const cNameAttr = cName + cVis;
+        const cAllBlocks = cEan + cName + cVis + cUnl;
         return (
         <>
           <div className="flex flex-wrap gap-4 text-sm text-slate-700 mb-6 p-4 rounded-xl bg-white border border-slate-200">
@@ -5058,7 +5058,7 @@ export default function ComparePage() {
               <strong className="tabular-nums">{cEanCards}</strong> уник. карточек
             </span>
             <span className="text-amber-800">
-              Название (точное): <strong className="tabular-nums">{cNameExact}</strong> групп ·{" "}
+              По названию: <strong className="tabular-nums">{cName}</strong> пар ·{" "}
               <strong className="tabular-nums">{cNameRows}</strong> строк
             </span>
             <span className="text-amber-800">
@@ -5074,7 +5074,7 @@ export default function ComparePage() {
               Всего блоков в отчёте:{" "}
               <strong className="text-slate-900 tabular-nums">{cAllBlocks}</strong>{" "}
               <span className="text-slate-500">
-                ({cEan}+{cNameExact}+{cName}+{cVis}+{cUnl})
+                ({cEan}+{cName}+{cVis}+{cUnl})
               </span>
             </span>
           </div>
@@ -5085,9 +5085,8 @@ export default function ComparePage() {
               <strong>по похожему названию + фото</strong>
               <span className="text-slate-500">
                 {" "}
-                — EAN: <strong className="tabular-nums text-slate-700">{cEan}</strong> групп, название
-                (точное): <strong className="tabular-nums text-slate-700">{cNameExact}</strong>, ~90%{" "}
-                <strong className="tabular-nums text-slate-700">{cName}</strong>, ~60%{" "}
+                — EAN: <strong className="tabular-nums text-slate-700">{cEan}</strong> групп, по
+                названию: <strong className="tabular-nums text-slate-700">{cName}</strong>, ~60%{" "}
                 <strong className="tabular-nums text-slate-700">{cVis}</strong>, маловероятн.{" "}
                 <strong className="tabular-nums text-slate-700">{cUnl}</strong>
               </span>
@@ -5124,7 +5123,7 @@ export default function ComparePage() {
                     : "bg-white border border-slate-200 text-slate-800"
                 }`}
               >
-                Похожие: имя/фото ({cNameAttr})
+                Дубли по названию ({cNameAttr})
               </button>
               <button
                 type="button"
@@ -5386,50 +5385,16 @@ export default function ComparePage() {
           )}
 
           {(dupKindFilter === "all" || dupKindFilter === "nameAttr") && (
-          <section className="mb-10" id="intra-name-exact">
-            <h2 className="text-lg font-semibold text-slate-900 mb-2">
-              Одно название — несколько разных id{" "}
-              <span className="text-amber-800 tabular-nums">({cNameExact})</span>
-            </h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Полное совпадение названия (по выбранному языку RU/EN) среди всех товаров рубрики после
-              фильтров. Как с EAN: в группе все карточки с одинаковым заголовком.
-            </p>
-            {nameGroups.length === 0 && (
-              <p className="text-sm text-slate-500">Нет</p>
-            )}
-            <div className="space-y-6">
-              {nameGroups.map((g) => (
-                <div
-                  key={g.name.slice(0, 80)}
-                  className="rounded-xl border border-violet-200 bg-violet-50/30 p-4"
-                >
-                  <p className="text-xs text-slate-700 mb-3 line-clamp-3" title={g.name}>
-                    {g.name}
-                  </p>
-                  <div className="grid sm:grid-cols-2 gap-4">
-                    {g.products.map((c) => (
-                      <div key={c.id} className="min-w-0">
-                        <ProductCell c={c} siteLabel={data.siteLabel} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-          )}
-
-          {(dupKindFilter === "all" || dupKindFilter === "nameAttr") && (
           <section className="mb-10" id="intra-name">
             <h2 className="text-lg font-semibold text-slate-900 mb-2">
-              ~90%: частичное название + эквивалентный URL фото{" "}
+              Дубли по названию: бренд + модель + объём + фото{" "}
               <span className="text-amber-800 tabular-nums">({cName})</span>
             </h2>
             <p className="text-xs text-slate-500 mb-3">
-              Похожие, но не идентичные названия. Товары из точных групп EAN/названия сюда не
-              включаются. При галочках
-              объём/оттенок/цвет — жёсткий отсев по расхождению.
+              Сравнение по названию из API (RU/EN), не из строки фида, если ключ API задан. Нужны
+              точный бренд, близкая модельная линия, совпадающий объём (если указан у обоих) и
+              похожее первое фото. Карточки из вкладки «Дубли по EAN» сюда не попадают; при разных
+              EAN у обеих карточек пара тоже не показывается.
             </p>
             {singleNamePhotoDisplayed.length === 0 && (
               <p className="text-sm text-slate-500">Нет</p>
@@ -5459,7 +5424,7 @@ export default function ComparePage() {
           </section>
           )}
 
-          {(dupKindFilter === "all" || dupKindFilter === "nameAttr") && (
+          {(dupKindFilter === "all" || dupKindFilter === "nameAttr") && cVis > 0 && (
           <section className="mb-10" id="intra-brand-visual">
             <h2 className="text-lg font-semibold text-slate-900 mb-2">
               ~60%: тот же бренд +{" "}
