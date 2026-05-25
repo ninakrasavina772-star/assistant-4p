@@ -4952,9 +4952,17 @@ export default function ComparePage() {
                             {data.stats.fetchDiagnostics.rubricIdsQueried.join(", ")})
                           </>
                         ) : null}
+                        {data.stats.fetchDiagnostics.infoIdsReturned != null ? (
+                          <>
+                            . Карточек из /product/info:{" "}
+                            <strong className="tabular-nums">
+                              {data.stats.fetchDiagnostics.infoIdsReturned}
+                            </strong>
+                          </>
+                        ) : null}
                         {data.stats.fetchDiagnostics.withEanAfterEnrich != null ? (
                           <>
-                            . Со штрихкодом после /product/info:{" "}
+                            , со штрихкодом:{" "}
                             <strong className="tabular-nums">
                               {data.stats.fetchDiagnostics.withEanAfterEnrich}
                             </strong>
@@ -5071,7 +5079,7 @@ export default function ComparePage() {
                     : "bg-white border border-slate-200 text-slate-800"
                 }`}
               >
-                По EAN ({cEan})
+                Дубли по EAN ({cEan})
               </button>
               <button
                 type="button"
@@ -5082,7 +5090,7 @@ export default function ComparePage() {
                     : "bg-white border border-slate-200 text-slate-800"
                 }`}
               >
-                Название + хар. + фото ({cNameAttr})
+                Похожие: имя/фото ({cNameAttr})
               </button>
               <button
                 type="button"

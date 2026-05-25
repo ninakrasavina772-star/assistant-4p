@@ -137,7 +137,11 @@ function eanKeySetForDisjointGuard(c: CompareProduct): Set<string> {
   return s;
 }
 
-/** Оба товара имеют валидные штрихкоды, но множества не пересекаются → не может быть «мягкого» дубля. */
+/**
+ * Оба товара имеют валидные штрихкоды, но множества не пересекаются.
+ * Тогда это не дубль: сопоставление по названию/фото запрещено.
+ * Разрешено только если EAN нет у обоих или есть только у одной карточки.
+ */
 export function softDupBlockedByDisjointEans(
   a: CompareProduct,
   b: CompareProduct
@@ -149,6 +153,14 @@ export function softDupBlockedByDisjointEans(
     if (eb.has(x)) return false;
   }
   return true;
+}
+
+/** Можно ли считать пару кандидатом по названию/фото (не по EAN). */
+export function namePhotoMatchingAllowed(
+  a: CompareProduct,
+  b: CompareProduct
+): boolean {
+  return !softDupBlockedByDisjointEans(a, b);
 }
 
 /**
@@ -219,9 +231,8 @@ type ResolvedTier =
 /** Параметры мягкой кросс-пары ({@link classifyCrossSoftPair}). */
 export type CrossSoftDupOptions = {
   /**
-   * Не блокировать пару только из‑за непересекающихся EAN (валидные штрихкоды на обеих карточках, но разные).
-   * Включено для второго контура между витринами и для мягкого слоя **в одной рубрике**: иначе при заполненных
-   * GTIN почти не остаётся кандидатов по названию/фото (~ косметика).
+   * Устаревший обход: не использовать для витрины. При true пары с разными EAN
+   * попадают в ~90% / ~60% — это ложные дубли.
    */
   skipDisjointEanGuard?: boolean;
 };
@@ -410,11 +421,6 @@ const TIER_WEIGHT: Record<ResolvedTier["kind"], number> = {
   un: 1
 };
 
-/** Внутри одной рубрики не режем мягкий слой из‑за разных GTIN на паре (см. CrossSoftDupOptions). */
-const INTRA_RUBRIC_SOFT_OPTS: CrossSoftDupOptions = {
-  skipDisjointEanGuard: true
-};
-
 export async function computeIntraSoftDupTiers(
   byFuzzyBrand: Map<string, FpProduct[]>,
   usedInEan: Set<number>,
@@ -430,8 +436,7 @@ export async function computeIntraSoftDupTiers(
     byFuzzyBrand,
     usedInEan,
     nameLocale,
-    bannedPairKeys,
-    INTRA_RUBRIC_SOFT_OPTS
+    bannedPairKeys
   );
   const cache: PhashCache = new Map();
   await prefetchPhashes(urlsNeedingPhash(pairs), cache);
@@ -439,14 +444,7 @@ export async function computeIntraSoftDupTiers(
   type Scored = PairWork & { res: ResolvedTier };
   const scored: Scored[] = [];
   for (const p of pairs) {
-    const res = resolveTierForPair(
-      p.cI,
-      p.cJ,
-      nameLocale,
-      attrOpts,
-      cache,
-      INTRA_RUBRIC_SOFT_OPTS
-    );
+    const res = resolveTierForPair(p.cI, p.cJ, nameLocale, attrOpts, cache);
     if (res) scored.push({ ...p, res });
   }
 

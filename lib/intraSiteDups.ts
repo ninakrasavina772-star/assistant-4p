@@ -1,5 +1,5 @@
 import { productBrandName } from "./brand-filter";
-import { computeIntraSoftDupTiers } from "./dupTiers";
+import { computeIntraSoftDupTiers, namePhotoMatchingAllowed } from "./dupTiers";
 import {
   collectEanIndexKeys,
   pickComparableName,
@@ -179,31 +179,55 @@ function pickDisplayEanForCluster(
   return "";
 }
 
-/** Точное совпадение сравниваемого названия (RU/EN по настройке), без фото. */
+/**
+ * Одно название — несколько id, только если по правилам EAN можно сопоставлять по имени
+ * (нет EAN у обоих или EAN только у одной карточки в паре).
+ */
 function buildExactNameGroups(
   products: FpProduct[],
   nameLocale: NameLocale,
   idToP: Map<number, FpProduct>
 ): IntraNameGroupRow[] {
-  const nameToIds = new Map<string, Set<number>>();
+  const nameToIds = new Map<string, number[]>();
   for (const p of products) {
     const c = toCompareProduct(p);
     const key = normExactNameKey(pickComparableName(c, nameLocale));
     if (!key) continue;
-    if (!nameToIds.has(key)) nameToIds.set(key, new Set());
-    nameToIds.get(key)!.add(p.id);
+    if (!nameToIds.has(key)) nameToIds.set(key, []);
+    nameToIds.get(key)!.push(p.id);
   }
 
   const groups: IntraNameGroupRow[] = [];
-  for (const [name, ids] of nameToIds) {
-    if (ids.size < 2) continue;
-    groups.push({
-      name,
-      products: [...ids]
-        .sort((a, b) => a - b)
-        .map((id) => toCompareProduct(idToP.get(id)!))
-        .filter(Boolean)
-    });
+  for (const [name, idList] of nameToIds) {
+    if (idList.length < 2) continue;
+
+    const uf = new UnionFind();
+    for (const id of idList) uf.ensure(id);
+    for (let i = 0; i < idList.length; i++) {
+      const cI = toCompareProduct(idToP.get(idList[i]!)!);
+      for (let j = i + 1; j < idList.length; j++) {
+        const cJ = toCompareProduct(idToP.get(idList[j]!)!);
+        if (namePhotoMatchingAllowed(cI, cJ)) uf.union(idList[i]!, idList[j]!);
+      }
+    }
+
+    const rootToIds = new Map<number, Set<number>>();
+    for (const id of idList) {
+      const r = uf.find(id);
+      if (!rootToIds.has(r)) rootToIds.set(r, new Set());
+      rootToIds.get(r)!.add(id);
+    }
+
+    for (const clusterIds of rootToIds.values()) {
+      if (clusterIds.size < 2) continue;
+      groups.push({
+        name,
+        products: [...clusterIds]
+          .sort((a, b) => a - b)
+          .map((id) => toCompareProduct(idToP.get(id)!))
+          .filter(Boolean)
+      });
+    }
   }
 
   groups.sort((a, b) => {
@@ -223,7 +247,7 @@ function brandFuzzyGroupKey(p: FpProduct): string {
 /**
  * Дубли в одной выгрузке (один сайт, одна рубрика).
  * EAN и точное название — по всем переданным товарам (уже с учётом фильтров пайплайна).
- * Мягкие слои (~90% / ~60% / маловероятные) — только для пар, не попавших в EAN/точное имя.
+ * Мягкие слои (~90% / ~60%) — только если у пары нет двух разных EAN; иначе только блок «По EAN».
  */
 export async function findIntraSiteDuplicates(
   products: FpProduct[],

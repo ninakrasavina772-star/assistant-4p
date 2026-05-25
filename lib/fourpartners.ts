@@ -72,6 +72,8 @@ export type RubricFetchDiagnostics = {
   rubricIdsQueried: number[];
   infoBatchesTotal?: number;
   infoBatchesFailed?: number;
+  /** Сколько id реально вернул /product/info */
+  infoIdsReturned?: number;
   withEanAfterEnrich?: number;
 };
 
@@ -215,6 +217,25 @@ function mergeListProductWithInfoFull(listRow: FpProduct, full: FpProduct): FpPr
 
 const ENRICH_BATCH = 50;
 const ENRICH_CONCURRENCY = 5;
+const ENRICH_SINGLE_CONCURRENCY = 8;
+
+async function fetchProductInfoChunk(
+  token: string,
+  variation: string,
+  chunk: number[]
+): Promise<{ products: FpProduct[]; failed: boolean }> {
+  if (!chunk.length) return { products: [], failed: false };
+  const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
+  try {
+    const res = await fpFetch(token, path, { method: "GET" });
+    if (!res.ok) return { products: [], failed: true };
+    const text = await res.text();
+    const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
+    return { products: parseProductsFromInfoEnvelope(json), failed: false };
+  } catch {
+    return { products: [], failed: true };
+  }
+}
 
 async function enrichProductsWithInfo(
   token: string,
@@ -225,6 +246,7 @@ async function enrichProductsWithInfo(
   products: FpProduct[];
   infoBatchesTotal: number;
   infoBatchesFailed: number;
+  infoIdsReturned: number;
 }> {
   const ids = listProducts.map((p) => p.id);
   const fullByIds = new Map<number, FpProduct>();
@@ -238,20 +260,25 @@ async function enrichProductsWithInfo(
     const slice = chunks.slice(i, i + ENRICH_CONCURRENCY);
     await Promise.all(
       slice.map(async (chunk) => {
-        const path = `/product/info/${chunk.join(",")}/${encodeURIComponent(variation)}`;
-        try {
-          const res = await fpFetch(token, path, { method: "GET" });
-          if (!res.ok) {
-            infoBatchesFailed += 1;
-            return;
-          }
-          const text = await res.text();
-          const json = JSON.parse(text) as ApiEnvelope<Record<string, unknown>>;
-          for (const p of parseProductsFromInfoEnvelope(json)) {
-            fullByIds.set(p.id, p);
-          }
-        } catch {
-          infoBatchesFailed += 1;
+        const { products, failed } = await fetchProductInfoChunk(
+          token,
+          variation,
+          chunk
+        );
+        if (failed) infoBatchesFailed += 1;
+        for (const p of products) fullByIds.set(p.id, p);
+
+        /** В батче часто приходит 1 карточка — догружаем остальные id по одному */
+        const missing = chunk.filter((id) => !fullByIds.has(id));
+        for (let m = 0; m < missing.length; m += ENRICH_SINGLE_CONCURRENCY) {
+          const part = missing.slice(m, m + ENRICH_SINGLE_CONCURRENCY);
+          await Promise.all(
+            part.map(async (id) => {
+              const one = await fetchProductInfoChunk(token, variation, [id]);
+              if (one.failed) infoBatchesFailed += 1;
+              for (const p of one.products) fullByIds.set(p.id, p);
+            })
+          );
         }
       })
     );
@@ -276,7 +303,8 @@ async function enrichProductsWithInfo(
   return {
     products: enriched,
     infoBatchesTotal: chunks.length,
-    infoBatchesFailed
+    infoBatchesFailed,
+    infoIdsReturned: fullByIds.size
   };
 }
 
@@ -450,8 +478,12 @@ export async function fetchAllProductsInRubric(
    * Штрихкоды подтягиваем из /product/info (батчи по 50, параллельно).
    */
   const listProducts = [...merged.values()];
-  const { products: enriched, infoBatchesTotal, infoBatchesFailed } =
-    await enrichProductsWithInfo(token, variation, listProducts, catalogScope);
+  const {
+    products: enriched,
+    infoBatchesTotal,
+    infoBatchesFailed,
+    infoIdsReturned
+  } = await enrichProductsWithInfo(token, variation, listProducts, catalogScope);
 
   return {
     products: enriched,
@@ -466,6 +498,7 @@ export async function fetchAllProductsInRubric(
       rubricIdsQueried: [rubricId],
       infoBatchesTotal,
       infoBatchesFailed,
+      infoIdsReturned,
       withEanAfterEnrich: countProductsWithEanIndexKeys(enriched)
     }
   };
@@ -567,6 +600,7 @@ export async function fetchMergedRubricsProducts(
 
   let infoBatchesTotal = 0;
   let infoBatchesFailed = 0;
+  let infoIdsReturned = 0;
   let withEanAfterEnrich = 0;
 
   for (const m of maps) {
@@ -583,6 +617,7 @@ export async function fetchMergedRubricsProducts(
       rubricIdsQueried.push(...d.rubricIdsQueried);
       infoBatchesTotal += d.infoBatchesTotal ?? 0;
       infoBatchesFailed += d.infoBatchesFailed ?? 0;
+      infoIdsReturned += d.infoIdsReturned ?? 0;
       withEanAfterEnrich += d.withEanAfterEnrich ?? 0;
     }
   }
@@ -602,6 +637,7 @@ export async function fetchMergedRubricsProducts(
       rubricIdsQueried,
       infoBatchesTotal,
       infoBatchesFailed,
+      infoIdsReturned,
       withEanAfterEnrich:
         withEanAfterEnrich > 0 ? withEanAfterEnrich : countProductsWithEanIndexKeys(products)
     }

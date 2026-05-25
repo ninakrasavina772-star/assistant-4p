@@ -1,6 +1,5 @@
 import { productBrandName } from "./brand-filter";
 import {
-  type CrossSoftDupOptions,
   classifyCrossSoftPair,
   combinedNameSimilarity,
   computeIntraSoftDupTiers,
@@ -28,10 +27,6 @@ function normBrandKeyStr(p: FpProduct): string {
   const n = normBrand(productBrandName(p));
   return n || "__no_brand__";
 }
-
-const NOVELTY_VS_CATALOG_SOFT: CrossSoftDupOptions = {
-  skipDisjointEanGuard: true
-};
 
 /**
  * «Только на B» сопоставить с полным каталогом A: EAN, артикул, затем уровни 90/60/маловероятные.
@@ -66,7 +61,6 @@ export async function buildOnlyBCrossWithA(
     byBrandA,
     nameLocale,
     phashCache,
-    NOVELTY_VS_CATALOG_SOFT
   );
 
   for (const pB of rawOnlyB) {
@@ -116,7 +110,6 @@ export async function buildOnlyBCrossWithA(
         nameLocale,
         attrOpts,
         phashCache,
-        NOVELTY_VS_CATALOG_SOFT
       );
       if (!r) continue;
       hitA.add(pA.id);
@@ -183,7 +176,6 @@ export async function buildOnlyACrossWithB(
     byBrandB,
     nameLocale,
     phashCache,
-    NOVELTY_VS_CATALOG_SOFT
   );
 
   for (const pA of rawOnlyA) {
@@ -233,7 +225,6 @@ export async function buildOnlyACrossWithB(
         nameLocale,
         attrOpts,
         phashCache,
-        NOVELTY_VS_CATALOG_SOFT
       );
       if (!r) continue;
       hitB.add(pB.id);

@@ -87,6 +87,29 @@ const ROOT_BARCODE_KEYS = [
 
 const VAR_BARCODE_KEYS = ["ean", "barcode", "gtin", "upc", "eans"] as const;
 
+/** EAN в HTML-описании карточки (часто в /product/info, когда в variation.ean пусто). */
+const EAN_IN_TEXT_RE =
+  /\bean\s*[:\s>]*\*?\*?([\d][\d\s\-]{7,18})\*?\*?/gi;
+
+function addEansFromDescriptions(set: Set<string>, p: FpProduct): void {
+  const chunks = [
+    p.description,
+    p.short_description,
+    p.text,
+    p.i18n?.ru?.description,
+    p.i18n?.en?.description
+  ];
+  for (const raw of chunks) {
+    if (!raw || typeof raw !== "string") continue;
+    EAN_IN_TEXT_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = EAN_IN_TEXT_RE.exec(raw)) !== null) {
+      const d = m[1]!.replace(/\D/g, "");
+      if (d.length >= MIN_EAN_INDEX_DIGITS && d.length <= 14) set.add(d);
+    }
+  }
+}
+
 /**
  * EAN: корень + вариации, плюс типичные синонимы полей в JSON.
  */
@@ -107,6 +130,7 @@ export function collectEans(p: FpProduct): string[] {
       }
     }
   }
+  addEansFromDescriptions(set, p);
   return [...set].filter((s) => s.length > 0);
 }
 

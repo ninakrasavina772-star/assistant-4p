@@ -297,6 +297,8 @@ export type SingleSiteDupsResult = {
       infoBatchesTotal?: number;
       /** Батчей info без ответа или с ошибкой */
       infoBatchesFailed?: number;
+      /** Сколько id вернул /product/info */
+      infoIdsReturned?: number;
       /** Карточек с EAN после обогащения info */
       withEanAfterEnrich?: number;
     };
