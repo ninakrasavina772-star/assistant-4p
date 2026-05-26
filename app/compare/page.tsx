@@ -3126,7 +3126,7 @@ export default function ComparePage() {
         </div>
       </header>
 
-      {compareMode === "twoSite" && (
+      {compareMode === "twoSite" && catalogMainTask !== "twoSite_cleanNovelties" && (
         <section
           className="mb-8 rounded-2xl border-2 border-sky-600 bg-gradient-to-br from-sky-50 via-white to-white p-5 shadow-md ring-1 ring-sky-200/60 sm:p-6"
           aria-label="Мастер: новинки по двум витринам"
@@ -3447,9 +3447,14 @@ export default function ComparePage() {
                 Новинки: нет того же ID на первой витрине (A)
               </p>
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                <span className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
+                  Через API (нужен ключ)
+                </span>
+                <br />
                 Товары-новинки на B: опорная витрина A не содержит карточку с тем же{" "}
-                <strong className="font-semibold text-slate-800">внутренним id</strong>. Удобно
-                смотреть, чего не хватает в опорном каталоге.
+                <strong className="font-semibold text-slate-800">внутренним id</strong>. Без
+                проверки EAN/названия/фото — только фильтрация по id. Удобно, чтобы быстро
+                посмотреть, чего нет на A.
               </p>
             </button>
             <button
@@ -3465,8 +3470,13 @@ export default function ComparePage() {
                 Кандидаты в дубль — проверить вручную
               </p>
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                Две витрины: таблица «карточка на A — похожая на B» (код, название, фото). Внутри могут быть
-                и надёжные совпадения по штрихкоду — смотреть нужно каждую строку.
+                <span className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
+                  Через API (нужен ключ)
+                </span>
+                <br />
+                Две витрины: таблица «карточка на A — похожая на B» (код, название, фото).
+                Внутри могут быть надёжные совпадения по штрихкоду — смотреть нужно каждую
+                строку. Медленнее, чем «Чистый фид B», и не показывает дубли внутри новинок.
               </p>
             </button>
             <button
@@ -3480,16 +3490,22 @@ export default function ComparePage() {
             >
               <p className="text-sm font-bold text-slate-900 leading-snug">
                 Чистый фид B: новинки без дублей на A
+                <span className="ml-1 inline-block rounded-full bg-emerald-600 text-white text-[9px] font-semibold align-middle px-1.5 py-0.5">
+                  рекомендуем
+                </span>
               </p>
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                Только для CSV-фидов. За один запуск: 1) новинки B (нет того же id на A),
-                2) поиск дублей среди новинок на A — по EAN и по{" "}
+                <span className="text-[10px] uppercase tracking-wide text-emerald-700 font-semibold">
+                  CSV-фиды · покрывает задачи 1 и 2 + ещё больше
+                </span>
+                <br />
+                За один запуск: 1) новинки B (нет того же id на A),
+                2) поиск дублей с A — по EAN и по{" "}
                 <strong className="font-semibold text-slate-800">бренду + модели + фото</strong>,
                 3) поиск дублей{" "}
                 <strong className="font-semibold text-slate-800">внутри списка новинок</strong>{" "}
-                (один товар под разными id), 4) Excel из четырёх листов: новинки,
-                дубли с A, чистый фид (с пометкой «не удалось проверить»), дубли
-                среди новинок.
+                (один товар под разными id), 4) AI-проверка чистых, 5) Excel из четырёх
+                листов с готовыми колонками.
               </p>
             </button>
           </div>
