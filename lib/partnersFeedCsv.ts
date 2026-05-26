@@ -79,6 +79,11 @@ type Agg = {
   images: string[];
   /** Сырые строки из CSV: каждая строка = одна вариация (свой артикул + EAN). */
   variants: { article: string; ean: string }[];
+  description: string;
+  shortDescription: string;
+  volume: string;
+  price: string;
+  stock: string;
 };
 
 function parseImageUrls(cell: string): string[] {
@@ -124,7 +129,18 @@ function mergeAggs(aggs: Map<number, Agg>): FpProduct[] {
       article: a.article || undefined,
       ...(eans.length ? { eans } : {}),
       ...(pv ? { product_variation: pv as FpProduct["product_variation"] } : {}),
-      ...(feedVariants.length ? { feedVariants } : {})
+      ...(feedVariants.length ? { feedVariants } : {}),
+      ...(a.description ? { description: a.description } : {}),
+      ...(a.shortDescription ? { short_description: a.shortDescription } : {}),
+      ...(a.volume || a.price || a.stock
+        ? {
+            feedExtras: {
+              ...(a.volume ? { volume: a.volume } : {}),
+              ...(a.price ? { price: a.price } : {}),
+              ...(a.stock ? { stock: a.stock } : {})
+            }
+          }
+        : {})
     });
   }
   list.sort((x, y) => x.id - y.id);
@@ -180,6 +196,25 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
     "Product Images"
   );
   if (imgIdx < 0) imgIdx = findColIdxByTokens(headers, ["variant", "image"]);
+  const descIdx = findColIdx(
+    headers,
+    "Полное описание",
+    "Full Description",
+    "Description"
+  );
+  const shortIdx = findColIdx(
+    headers,
+    "Краткое описание",
+    "Short Description"
+  );
+  const priceIdx = findColIdx(headers, "Цена продажи", "Sale Price", "Price");
+  const stockIdx = findColIdx(headers, "Остаток", "Stock", "Quantity");
+  /** Объём может быть в нескольких колонках: Параметр/Свойство Volume или Property/Param Volume. */
+  const volumeIdxs: number[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i] ?? "";
+    if (/volume/i.test(h) || /объ[её]м/i.test(h)) volumeIdxs.push(i);
+  }
 
   if (idIdx < 0) {
     throw new Error(
@@ -208,6 +243,15 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
       nameIdx >= 0 ? normCell(row[nameIdx]) : "";
     const imgs =
       imgIdx >= 0 ? parseImageUrls(normCell(row[imgIdx])) : [];
+    const desc = descIdx >= 0 ? normCell(row[descIdx]) : "";
+    const short = shortIdx >= 0 ? normCell(row[shortIdx]) : "";
+    const price = priceIdx >= 0 ? normCell(row[priceIdx]) : "";
+    const stock = stockIdx >= 0 ? normCell(row[stockIdx]) : "";
+    let volume = "";
+    for (const vi of volumeIdxs) {
+      const v = normCell(row[vi]);
+      if (v && (!volume || v.length > volume.length)) volume = v;
+    }
 
     let agg = aggs.get(id);
     if (!agg) {
@@ -219,7 +263,12 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
         article,
         eans: new Set<string>(),
         images: [],
-        variants: []
+        variants: [],
+        description: "",
+        shortDescription: "",
+        volume: "",
+        price: "",
+        stock: ""
       };
       aggs.set(id, agg);
     }
@@ -229,6 +278,11 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
     if (brand && !agg.brand) agg.brand = brand;
     if (article && !agg.article) agg.article = article;
     if (ean) agg.eans.add(ean);
+    if (desc && desc.length > agg.description.length) agg.description = desc;
+    if (short && short.length > agg.shortDescription.length) agg.shortDescription = short;
+    if (volume && !agg.volume) agg.volume = volume;
+    if (price && !agg.price) agg.price = price;
+    if (stock && !agg.stock) agg.stock = stock;
     /** Каждая строка фида — это вариант с собственным артикулом и EAN. Дубли (та же пара) не повторяем. */
     if (article || ean) {
       const exists = agg.variants.some(

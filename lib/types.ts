@@ -56,6 +56,8 @@ export type FpProduct = {
    * Используется для пометки «дубль по EAN — вариация ABC» в выгрузке чистого фида.
    */
   feedVariants?: Array<{ article?: string; ean?: string }>;
+  /** Дополнительные поля из фида (объём, цена, остаток) для компактной Excel-выгрузки. */
+  feedExtras?: { volume?: string; price?: string; stock?: string };
 };
 
 export type NameLocale = "en" | "ru";
