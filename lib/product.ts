@@ -259,20 +259,47 @@ export function firstImageUrl(p: FpProduct): string | null {
   return null;
 }
 
+/**
+ * Все уникальные URL фото со всех вариаций (порядок: первая вариация → первая её картинка и т.д.).
+ * Используется для сравнения «тушь в коробке vs тушь без коробки» — если первое фото
+ * отличается, можем сматчить любые другие фото между карточками.
+ */
+const MAX_IMAGES_PER_PRODUCT = 8;
+export function allImageUrls(p: FpProduct): string[] {
+  const pv = p.product_variation;
+  if (!pv) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of Object.values(pv)) {
+    const imgs = v?.images ?? [];
+    for (const raw of imgs) {
+      if (typeof raw !== "string") continue;
+      const t = raw.trim();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+      if (out.length >= MAX_IMAGES_PER_PRODUCT) return out;
+    }
+  }
+  return out;
+}
+
 export function toCompareProduct(p: FpProduct): CompareProduct {
   const { nameEn, nameRu } = displayNames(p);
   const eans = collectEans(p);
   const attr = extractProductAttributes(p);
   const artKeys = collectArticleKeys(p);
   const lb = productBaseKeyFromLink(p.link);
+  const imgs = allImageUrls(p);
   return {
     id: p.id,
     nameEn,
     nameRu,
     link: p.link,
     eans,
-    firstImage: firstImageUrl(p),
+    firstImage: imgs[0] ?? null,
     brand: productBrandName(p),
+    ...(imgs.length > 1 ? { allImages: imgs } : {}),
     ...(lb ? { linkBaseKey: lb } : {}),
     ...(artKeys[0] ? { articleKey: artKeys[0] } : {}),
     ...(attr.attrVolume ? { attrVolume: attr.attrVolume } : {}),

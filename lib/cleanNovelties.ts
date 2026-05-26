@@ -179,13 +179,14 @@ export async function findInternalNoveltyDuplicates(
     arr.push(p);
     byBrand.set(k, arr);
   }
-  /** Прогреем phash для тех URL, что ещё не в кэше. */
+  /** Прогреем phash для тех URL, что ещё не в кэше — берём все фото каждой карточки. */
   const urls = new Set<string>();
   for (const list of byBrand.values()) {
     if (list.length < 2) continue;
     for (const p of list) {
       const cp = toCompareProduct(p);
-      if (cp.firstImage) urls.add(cp.firstImage.trim());
+      const imgs = cp.allImages ?? (cp.firstImage ? [cp.firstImage] : []);
+      for (const u of imgs) urls.add(u.trim());
     }
   }
   await prefetchPhashes(urls, cache);
@@ -262,16 +263,21 @@ export async function classifyNoveltiesAgainstA(
     const aSameBrand = aByBrand.get(k) ?? [];
     candidatePairs.push({ b, aSameBrand });
   }
+  /**
+   * Грузим **все** фото обеих карточек (а не только первые): это нужно, чтобы
+   * матчить пары «открытая тушь vs тушь в коробке», когда первое фото отличается.
+   */
   const phashUrls = new Set<string>();
   for (const { b, aSameBrand } of candidatePairs) {
     const cB = toCompareProduct(b);
-    if (!cB.firstImage) continue;
+    const imgsB = cB.allImages ?? (cB.firstImage ? [cB.firstImage] : []);
+    if (imgsB.length === 0) continue;
     for (const pA of aSameBrand) {
       const cA = toCompareProduct(pA);
-      if (!cA.firstImage) continue;
-      if (cA.firstImage.trim() === cB.firstImage.trim()) continue;
-      phashUrls.add(cA.firstImage.trim());
-      phashUrls.add(cB.firstImage.trim());
+      const imgsA = cA.allImages ?? (cA.firstImage ? [cA.firstImage] : []);
+      if (imgsA.length === 0) continue;
+      for (const u of imgsA) phashUrls.add(u.trim());
+      for (const u of imgsB) phashUrls.add(u.trim());
     }
   }
   const cache: PhashCache = new Map();

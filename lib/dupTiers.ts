@@ -50,6 +50,12 @@ export const NAME_TAB_VISUAL_HAMMING_MAX = 18;
 /** Если phash отключён (превышен лимит) или картинки не качаются, и модель ≥ этого порога —
  *  допускаем пару с пометкой «без подтверждения фото» (бренд+модель строгие, объём не противоречит). */
 export const NAME_TAB_MODEL_NO_PHOTO_MIN = 0.72;
+/**
+ * Спец-случай: у одного из товаров **нет EAN вообще** (например, новинка ещё без штрихкода).
+ * Тогда даже при разных первых фото и более скромном сходстве модели — допускаем пару, если
+ * нормализованные названия очень близки. Используем порог сходства модельной строки.
+ */
+export const NAME_TAB_MODEL_NO_EAN_MIN = 0.62;
 /** Маловероятный: тот же бренд (fuzzy), слабее название */
 export const SLIGHT_NAME_UNLIKELY = 0.24;
 
@@ -229,6 +235,28 @@ function visualFromCache(
     b === undefined ? null : b,
     maxDist
   );
+}
+
+/**
+ * Проверяет похожесть **по всем** фото обеих карточек: пара принимается, если
+ * хоть одно фото A визуально похоже на хоть одно фото B (одинаковый URL или
+ * phash в пределах `maxDist`).
+ */
+function visualSimilarAcrossAllPhotos(
+  cA: CompareProduct,
+  cB: CompareProduct,
+  cache: PhashCache,
+  maxDist = DEFAULT_VISUAL_HAMMING_MAX
+): boolean {
+  const aList = cA.allImages?.length ? cA.allImages : cA.firstImage ? [cA.firstImage] : [];
+  const bList = cB.allImages?.length ? cB.allImages : cB.firstImage ? [cB.firstImage] : [];
+  if (!aList.length || !bList.length) return false;
+  for (const ua of aList) {
+    for (const ub of bList) {
+      if (visualFromCache(ua, ub, cache, maxDist)) return true;
+    }
+  }
+  return false;
 }
 
 type ResolvedTier =
@@ -490,22 +518,36 @@ export function resolveNameTabPair(
     return { reject: "model_line_distinct" };
   }
 
+  /**
+   * Сначала пробуем самый дешёвый сигнал — одинаковый URL первого фото.
+   * Затем — phash по всем парам фото (тушь в коробке vs тушь без коробки и т.п.).
+   * Если фото не совпадают, оставляем «fallback по модели»:
+   *   - модель ≥ NAME_TAB_MODEL_NO_PHOTO_MIN (~0.72) — допускаем;
+   *   - либо у одной из карточек **нет EAN вообще** и модель ≥ NAME_TAB_MODEL_NO_EAN_MIN (~0.62).
+   *     Это покрывает кейс «новинка без штрихкода и с другим ракурсом — но название то же».
+   */
+  const visualAcrossPhotos =
+    haveBothImgs &&
+    !photoPhashSkipped &&
+    visualSimilarAcrossAllPhotos(cI, cJ, cache, NAME_TAB_VISUAL_HAMMING_MAX);
+
+  const someoneHasNoEan = cI.eans.length === 0 || cJ.eans.length === 0;
+
   let photoNote = "";
   if (urlEq) {
     photoNote = "одинаковая ссылка на первое фото";
-  } else if (
-    haveBothImgs &&
-    !photoPhashSkipped &&
-    visualFromCache(imgI, imgJ, cache, NAME_TAB_VISUAL_HAMMING_MAX)
-  ) {
-    photoNote = "похожее фото (визуально)";
+  } else if (visualAcrossPhotos) {
+    photoNote = "похожее фото среди всех ракурсов (визуально)";
   } else if (modelSim >= NAME_TAB_MODEL_NO_PHOTO_MIN) {
-    /** Без подтверждения по фото: модель совпадает почти точно, бренд точен, объём не конфликтует. */
     photoNote = haveBothImgs
       ? photoPhashSkipped
         ? "фото не сравнили (превышен лимит загрузок)"
         : "фото не похожи, но модель почти совпадает"
       : "у одного из товаров нет фото";
+  } else if (someoneHasNoEan && modelSim >= NAME_TAB_MODEL_NO_EAN_MIN) {
+    photoNote = haveBothImgs
+      ? "фото разные, но у одного из товаров нет EAN — приняли по сильному названию"
+      : "у одного нет EAN, у другого нет фото — приняли по сильному названию";
   } else if (!haveBothImgs) {
     return { reject: "no_photo" };
   } else {

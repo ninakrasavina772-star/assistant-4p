@@ -76,6 +76,12 @@ export type CompareProduct = {
   link: string;
   eans: string[];
   firstImage: string | null;
+  /**
+   * Все фото карточки (если их больше одного). Используется для дополнительной
+   * визуальной проверки «тушь в коробке vs открытая тушь»: пара принимается,
+   * если хоть одна пара URL из A × B даёт похожий phash.
+   */
+  allImages?: string[];
   brand: string;
   /** Суффикс в URL вида a1182822 — одна «семья» карточки */
   linkBaseKey?: string;
