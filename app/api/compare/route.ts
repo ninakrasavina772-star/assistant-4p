@@ -542,7 +542,8 @@ export async function POST(req: NextRequest) {
               rubricIdsQueried: [],
               feedSource: true,
               ...(feedInfoIds != null ? { infoIdsReturned: feedInfoIds } : {})
-            }
+            },
+            ...(dups.nameTabStats ? { nameTabStats: dups.nameTabStats } : {})
           },
           brandFilter: buildBrandFilterInfo(
             brandsRaw,
@@ -633,7 +634,8 @@ export async function POST(req: NextRequest) {
         stats: {
           count: merged.products.length,
           withEanIndexKeys: countProductsWithEanIndexKeys(merged.products),
-          fetchDiagnostics: fd
+          fetchDiagnostics: fd,
+          ...(dups.nameTabStats ? { nameTabStats: dups.nameTabStats } : {})
         },
         brandFilter: buildBrandFilterInfo(
           brandsRaw,

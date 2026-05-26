@@ -1,7 +1,8 @@
 import { productBrandName } from "./brand-filter";
 import {
   computeIntraNameTabDupPairs,
-  computeIntraSoftDupTiers
+  computeIntraSoftDupTiers,
+  type NameTabStats
 } from "./dupTiers";
 import {
   collectEanIndexKeys,
@@ -61,6 +62,8 @@ export type IntraSiteDupResult = {
     score: number;
     matchReasons: string[];
   }[];
+  /** Диагностика вкладки «по названию» */
+  nameTabStats?: NameTabStats;
 };
 
 /**
@@ -133,11 +136,8 @@ export async function findIntraSiteDuplicates(
     byFuzzyBrand.get(k)!.push(p);
   }
 
-  const namePhotoPairs = await computeIntraNameTabDupPairs(
-    byFuzzyBrand,
-    excludedFromEanTab,
-    nameLocale
-  );
+  const { rows: namePhotoPairs, stats: nameTabStats } =
+    await computeIntraNameTabDupPairs(byFuzzyBrand, excludedFromEanTab, nameLocale);
 
   const soft = await computeIntraSoftDupTiers(
     byFuzzyBrand,
@@ -157,6 +157,7 @@ export async function findIntraSiteDuplicates(
     },
     namePhotoPairs,
     brandVisualPairs: [],
-    unlikelyPairs: soft.unlikelyPairs
+    unlikelyPairs: soft.unlikelyPairs,
+    nameTabStats
   };
 }

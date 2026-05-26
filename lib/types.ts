@@ -305,6 +305,27 @@ export type SingleSiteDupsResult = {
       apiTotalItemsReported?: number;
       variationSlotsTotal?: number;
     };
+    /** Диагностика вкладки «Дубли по названию»: где отсеялись пары */
+    nameTabStats?: {
+      /** Кандидаты в одном бренде до фильтров (n*(n-1)/2 после исключения EAN-дублей) */
+      pairsInBrandBuckets: number;
+      /** Не прошли «бренд точно» / «правила EAN» */
+      droppedBrandOrEan: number;
+      /** Сходство модели ниже порога */
+      droppedModelSim: number;
+      /** Объём задан у обоих и различается */
+      droppedVolume: number;
+      /** Нет первого фото у одного из товаров */
+      droppedNoPhoto: number;
+      /** Фото не похожи (URL и phash) */
+      droppedPhoto: number;
+      /** Прошли все фильтры */
+      kept: number;
+      /** Уникальных фото к загрузке для phash */
+      photoUrlsToDownload: number;
+      /** Скачивание phash отключено (превышен лимит); тогда работает только URL-эквивалент */
+      photoPhashSkipped: boolean;
+    };
   };
   brandFilter?: CompareBrandFilterInfo;
   modelFilter?: CompareModelFilterInfo;

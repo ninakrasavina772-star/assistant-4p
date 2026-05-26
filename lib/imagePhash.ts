@@ -78,8 +78,12 @@ export async function phash64FromUrl(
   }
 }
 
-/** Max images to download per request — keeps function within Vercel Hobby 60s limit */
-const MAX_PHASH_DOWNLOADS = 60;
+/**
+ * Max images to download per request. С `maxDuration=300` на Vercel Pro можно скачать сильно больше;
+ * при превышении prefetch не загружает ничего и ветка «похоже фото (phash)» молча отключается —
+ * остаётся только сравнение по эквивалентному URL.
+ */
+const MAX_PHASH_DOWNLOADS = 800;
 
 export async function prefetchPhashes(
   urls: Iterable<string>,

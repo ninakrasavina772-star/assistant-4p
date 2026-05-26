@@ -44,7 +44,7 @@ export const PARTIAL_NAME_MIN_90 = 0.42;
 /** Выше минимум — меньше ложных пар вроде разных линеек Hermes при похожем флаконе. */
 export const PARTIAL_NAME_MIN_60 = 0.46;
 /** Вкладка «по названию» (intra): сходство модельной строки после снятия бренда/типа. */
-export const NAME_TAB_MODEL_MIN = 0.68;
+export const NAME_TAB_MODEL_MIN = 0.6;
 /** Маловероятный: тот же бренд (fuzzy), слабее название */
 export const SLIGHT_NAME_UNLIKELY = 0.24;
 
@@ -424,26 +424,44 @@ const TIER_WEIGHT: Record<ResolvedTier["kind"], number> = {
   un: 1
 };
 
-function volumesCompatibleForNameTab(a: CompareProduct, b: CompareProduct): boolean {
+type NameTabVolumeCheck = "match" | "one_unknown" | "both_unknown" | "conflict";
+
+function checkVolumesForNameTab(
+  a: CompareProduct,
+  b: CompareProduct
+): NameTabVolumeCheck {
   const av = a.attrVolume?.trim();
   const bv = b.attrVolume?.trim();
-  if (av && bv) return volumeStringsEquivalentForGate(av, bv);
-  return !av && !bv;
+  if (av && bv) {
+    return volumeStringsEquivalentForGate(av, bv) ? "match" : "conflict";
+  }
+  if (!av && !bv) return "both_unknown";
+  return "one_unknown";
 }
+
+type NameTabReject =
+  | "brand_or_ean"
+  | "name_words"
+  | "model_sim"
+  | "model_prefix_extension"
+  | "volume_conflict"
+  | "no_photo"
+  | "model_line_distinct"
+  | "photo_not_similar";
 
 function resolveNameTabPair(
   cI: CompareProduct,
   cJ: CompareProduct,
   nameLocale: NameLocale,
   cache: PhashCache
-): { score: number; reasons: string[] } | null {
-  if (softDupBlockedByDisjointEans(cI, cJ)) return null;
-  if (!brandsExactForDup(cI, cJ)) return null;
+): { score: number; reasons: string[] } | { reject: NameTabReject } {
+  if (softDupBlockedByDisjointEans(cI, cJ)) return { reject: "brand_or_ean" };
+  if (!brandsExactForDup(cI, cJ)) return { reject: "brand_or_ean" };
 
   const na = pickComparableName(cI, nameLocale);
   const nb = pickComparableName(cJ, nameLocale);
-  if (wordFollowedByConflictingDigit(na, nb)) return null;
-  if (incompatibleBeautyTitles(na, nb)) return null;
+  if (wordFollowedByConflictingDigit(na, nb)) return { reject: "name_words" };
+  if (incompatibleBeautyTitles(na, nb)) return { reject: "name_words" };
 
   const { model: modelSim, modelA: mA, modelB: mB } = nameAndModelScore(
     na,
@@ -451,28 +469,28 @@ function resolveNameTabPair(
     cI.brand,
     cJ.brand
   );
-  if (modelSim < NAME_TAB_MODEL_MIN) return null;
-  if (modelLineStrictPrefixExtensionConflict(mA, mB)) return null;
-  if (!volumesCompatibleForNameTab(cI, cJ)) return null;
+  if (modelSim < NAME_TAB_MODEL_MIN) return { reject: "model_sim" };
+  if (modelLineStrictPrefixExtensionConflict(mA, mB)) {
+    return { reject: "model_prefix_extension" };
+  }
+  const volCheck = checkVolumesForNameTab(cI, cJ);
+  if (volCheck === "conflict") return { reject: "volume_conflict" };
 
   const imgI = cI.firstImage || "";
   const imgJ = cJ.firstImage || "";
-  if (!imgI || !imgJ) return null;
+  if (!imgI || !imgJ) return { reject: "no_photo" };
   const urlEq = firstImageRefEquivalent(imgI, imgJ);
-  if (
-    softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)
-  ) {
-    return null;
+  if (softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)) {
+    return { reject: "model_line_distinct" };
   }
   if (!urlEq && !visualFromCache(imgI, imgJ, cache, DEFAULT_VISUAL_HAMMING_MAX)) {
-    return null;
+    return { reject: "photo_not_similar" };
   }
 
   const volBits: string[] = [];
-  if (cI.attrVolume?.trim() && cJ.attrVolume?.trim()) volBits.push("объём");
-  else if (!cI.attrVolume?.trim() && !cJ.attrVolume?.trim()) {
-    volBits.push("объём не указан у обоих");
-  }
+  if (volCheck === "match") volBits.push("объём совпадает");
+  else if (volCheck === "one_unknown") volBits.push("объём задан у одного");
+  else volBits.push("объём не указан у обоих");
   return {
     score: 0.85,
     reasons: [
@@ -483,25 +501,56 @@ function resolveNameTabPair(
   };
 }
 
-/** Пары для вкладки «Похожие: имя/фото» — без карточек из EAN-групп. */
+export type NameTabStats = {
+  pairsInBrandBuckets: number;
+  droppedBrandOrEan: number;
+  droppedModelSim: number;
+  droppedVolume: number;
+  droppedNoPhoto: number;
+  droppedPhoto: number;
+  kept: number;
+  photoUrlsToDownload: number;
+  photoPhashSkipped: boolean;
+};
+
+/** Пары для вкладки «Дубли по названию» + диагностика стадий. */
 export async function computeIntraNameTabDupPairs(
   byFuzzyBrand: Map<string, FpProduct[]>,
   excludedFromEanTab: Set<number>,
   nameLocale: NameLocale
-): Promise<IntraNamePhotoPairRow[]> {
+): Promise<{ rows: IntraNamePhotoPairRow[]; stats: NameTabStats }> {
+  const stats: NameTabStats = {
+    pairsInBrandBuckets: 0,
+    droppedBrandOrEan: 0,
+    droppedModelSim: 0,
+    droppedVolume: 0,
+    droppedNoPhoto: 0,
+    droppedPhoto: 0,
+    kept: 0,
+    photoUrlsToDownload: 0,
+    photoPhashSkipped: false
+  };
+
   const work: PairWork[] = [];
   for (const [, list] of byFuzzyBrand) {
     const pool = list.filter((p) => !excludedFromEanTab.has(p.id));
     for (let i = 0; i < pool.length; i++) {
       for (let j = i + 1; j < pool.length; j++) {
+        stats.pairsInBrandBuckets++;
         const pi = pool[i]!;
         const pj = pool[j]!;
         const cI = toCompareProduct(pi);
         const cJ = toCompareProduct(pj);
-        if (!sameBrandForFuzzy(cI, cJ)) continue;
+        if (!sameBrandForFuzzy(cI, cJ)) {
+          stats.droppedBrandOrEan++;
+          continue;
+        }
         const imgI = cI.firstImage || "";
         const imgJ = cJ.firstImage || "";
-        if (!imgI || !imgJ) continue;
+        if (!imgI || !imgJ) {
+          stats.droppedNoPhoto++;
+          continue;
+        }
         work.push({
           pa: pi,
           pb: pj,
@@ -517,17 +566,44 @@ export async function computeIntraNameTabDupPairs(
   }
 
   const cache: PhashCache = new Map();
-  const urls: string[] = [];
+  const uniqueUrls = new Set<string>();
   for (const p of work) {
     if (p.urlEq) continue;
-    urls.push(p.imgI, p.imgJ);
+    uniqueUrls.add(p.imgI.trim());
+    uniqueUrls.add(p.imgJ.trim());
   }
-  await prefetchPhashes(urls, cache);
+  stats.photoUrlsToDownload = uniqueUrls.size;
+  const before = cache.size;
+  await prefetchPhashes(uniqueUrls, cache);
+  /** Если prefetch ничего не положил, а URL были — сработал лимит MAX_PHASH_DOWNLOADS. */
+  stats.photoPhashSkipped = uniqueUrls.size > 0 && cache.size === before;
 
   const rows: IntraNamePhotoPairRow[] = [];
   for (const p of work) {
     const res = resolveNameTabPair(p.cI, p.cJ, nameLocale, cache);
-    if (!res) continue;
+    if ("reject" in res) {
+      switch (res.reject) {
+        case "brand_or_ean":
+        case "name_words":
+          stats.droppedBrandOrEan++;
+          break;
+        case "model_sim":
+        case "model_prefix_extension":
+          stats.droppedModelSim++;
+          break;
+        case "volume_conflict":
+          stats.droppedVolume++;
+          break;
+        case "no_photo":
+          stats.droppedNoPhoto++;
+          break;
+        case "model_line_distinct":
+        case "photo_not_similar":
+          stats.droppedPhoto++;
+          break;
+      }
+      continue;
+    }
     rows.push({
       a: p.cI,
       b: p.cJ,
@@ -535,6 +611,7 @@ export async function computeIntraNameTabDupPairs(
       matchReasons: res.reasons
     });
   }
+  stats.kept = rows.length;
 
   rows.sort((a, b) => {
     const d = b.score - a.score;
@@ -544,7 +621,7 @@ export async function computeIntraNameTabDupPairs(
     if (ia !== ib) return ia - ib;
     return Math.max(a.a.id, a.b.id) - Math.max(b.a.id, b.b.id);
   });
-  return rows;
+  return { rows, stats };
 }
 
 export async function computeIntraSoftDupTiers(

@@ -5396,6 +5396,41 @@ export default function ComparePage() {
               похожее первое фото. Карточки из вкладки «Дубли по EAN» сюда не попадают; при разных
               EAN у обеих карточек пара тоже не показывается.
             </p>
+            {data.stats?.nameTabStats && (
+              <div className="text-xs text-slate-600 mb-3 px-3 py-2 rounded border border-slate-200 bg-slate-50">
+                <span className="font-medium text-slate-800">Диагностика:</span>{" "}
+                кандидатов в брендах{" "}
+                <strong className="tabular-nums">
+                  {data.stats.nameTabStats.pairsInBrandBuckets}
+                </strong>
+                , отсев — другой бренд/EAN:{" "}
+                <strong className="tabular-nums">{data.stats.nameTabStats.droppedBrandOrEan}</strong>
+                , нет фото:{" "}
+                <strong className="tabular-nums">{data.stats.nameTabStats.droppedNoPhoto}</strong>
+                , низкое сходство модели:{" "}
+                <strong className="tabular-nums">{data.stats.nameTabStats.droppedModelSim}</strong>
+                , конфликт объёма:{" "}
+                <strong className="tabular-nums">{data.stats.nameTabStats.droppedVolume}</strong>
+                , непохожее фото:{" "}
+                <strong className="tabular-nums">{data.stats.nameTabStats.droppedPhoto}</strong>
+                , осталось:{" "}
+                <strong className="tabular-nums text-amber-800">
+                  {data.stats.nameTabStats.kept}
+                </strong>
+                . Уник. фото к загрузке:{" "}
+                <strong className="tabular-nums">
+                  {data.stats.nameTabStats.photoUrlsToDownload}
+                </strong>
+                {data.stats.nameTabStats.photoPhashSkipped ? (
+                  <span className="text-rose-700">
+                    {" "}
+                    · превышен лимит загрузок — phash отключён, осталось только сравнение по
+                    одинаковому URL фото
+                  </span>
+                ) : null}
+                .
+              </div>
+            )}
             {singleNamePhotoDisplayed.length === 0 && (
               <p className="text-sm text-slate-500">Нет</p>
             )}
