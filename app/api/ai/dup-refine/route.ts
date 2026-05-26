@@ -107,20 +107,49 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const model =
-    typeof process.env.OPENAI_DUP_MODEL === "string" &&
-    process.env.OPENAI_DUP_MODEL.trim()
+  /**
+   * Разрешённые модели — защита от инъекций произвольных строк в payload OpenAI.
+   * Если нужна ещё одна модель — добавьте сюда.
+   */
+  const ALLOWED_MODELS = new Set([
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-4.1",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-5"
+  ]);
+  const envModel =
+    typeof process.env.OPENAI_DUP_MODEL === "string"
       ? process.env.OPENAI_DUP_MODEL.trim()
-      : "gpt-4o-mini";
+      : "";
+  const bodyModel = typeof body.model === "string" ? body.model.trim() : "";
+  const model =
+    bodyModel && ALLOWED_MODELS.has(bodyModel)
+      ? bodyModel
+      : envModel && ALLOWED_MODELS.has(envModel)
+        ? envModel
+        : "gpt-4o-mini";
+
+  /** Сколько чанков OpenAI запускаем параллельно. С `maxDuration=300` x3 безопасно. */
+  const SERVER_PARALLEL = 3;
 
   try {
-    const verdicts: DupPairVerdict[] = [];
     const chunkSize = useVision ? AI_DUP_CHUNK_VISION : AI_DUP_CHUNK_TEXT;
     const refine = useVision ? refineDupPairsOpenAiVisionBatch : refineDupPairsOpenAiBatch;
+    const chunks: DupPairRefineIn[][] = [];
     for (let i = 0; i < pairs.length; i += chunkSize) {
-      const chunk = pairs.slice(i, i + chunkSize);
-      const part = await refine(apiKey, chunk, model);
-      verdicts.push(...part);
+      chunks.push(pairs.slice(i, i + chunkSize));
+    }
+    const verdicts: DupPairVerdict[] = [];
+    for (let i = 0; i < chunks.length; i += SERVER_PARALLEL) {
+      const wave = chunks.slice(i, i + SERVER_PARALLEL);
+      const results = await Promise.all(
+        wave.map((chunk) => refine(apiKey, chunk, model))
+      );
+      for (const part of results) verdicts.push(...part);
     }
     return NextResponse.json({ verdicts, model, useVision });
   } catch (e) {

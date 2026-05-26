@@ -100,8 +100,6 @@ import {
   type NoveltiesSheetForEanDup
 } from "@/lib/noveltiesEanDupSheet";
 import {
-  AI_DUP_CHUNK_TEXT,
-  AI_DUP_CHUNK_VISION,
   AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST,
   AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
 } from "@/lib/aiDupLimits";
@@ -652,6 +650,18 @@ export default function ComparePage() {
   const [cleanAiUseVision, setCleanAiUseVision] = useState(true);
   /** Ограничение: сколько чистых новинок проверять за раз (защита от перегрузки). */
   const [cleanAiNoveltyLimit, setCleanAiNoveltyLimit] = useState(50);
+  /**
+   * Модель OpenAI для AI-проверки чистых.
+   * - быстрые/дешёвые: gpt-4o-mini, gpt-4.1-mini, gpt-4.1-nano.
+   * - точные/медленные: gpt-4o, gpt-4.1.
+   */
+  type CleanAiModel =
+    | "gpt-4o-mini"
+    | "gpt-4o"
+    | "gpt-4.1-mini"
+    | "gpt-4.1-nano"
+    | "gpt-4.1";
+  const [cleanAiModel, setCleanAiModel] = useState<CleanAiModel>("gpt-4o-mini");
 
   const runCleanNovelties = useCallback(async () => {
     userCancelledRef.current = false;
@@ -898,22 +908,33 @@ export default function ComparePage() {
       );
       return;
     }
-    const chunkSize = cleanAiUseVision
-      ? AI_DUP_CHUNK_VISION
-      : AI_DUP_CHUNK_TEXT;
+    /**
+     * Сразу шлём максимальные пакеты (72 пары для vision, 200 для текста) —
+     * сервер сам распараллелит чанки на 3 потока. И запускаем до 2 HTTP-запросов
+     * параллельно, чтобы суммарно было до ~6 одновременных вызовов OpenAI.
+     */
+    const requestSize = cleanAiUseVision
+      ? AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
+      : AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST;
+    const requests: { idx: number; pairs: typeof allPairs }[] = [];
+    for (let i = 0; i < allPairs.length; i += requestSize) {
+      requests.push({ idx: i, pairs: allPairs.slice(i, i + requestSize) });
+    }
+    const CLIENT_PARALLEL = 2;
     setCleanAiErr(null);
     setCleanAiBusy(true);
     setCleanAiProgress({ done: 0, total: allPairs.length });
     try {
       const merged: Record<string, CleanAiVerdict> = {};
-      for (let i = 0; i < allPairs.length; i += chunkSize) {
-        const chunk = allPairs.slice(i, i + chunkSize);
+      let doneCount = 0;
+      const sendOne = async (chunk: typeof allPairs) => {
         const res = await fetch("/api/ai/dup-refine", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             openaiApiKey: key,
             useVision: cleanAiUseVision,
+            model: cleanAiModel,
             pairs: chunk
           })
         });
@@ -930,7 +951,6 @@ export default function ComparePage() {
         for (const v of json.verdicts ?? []) {
           const [x, y] = v.pairKey.split("-").map((n) => Number(n));
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-          /** Для пары вычисляем какой id из них = B (новинка). Это id, который есть в `limited`. */
           const noveltyId = limited.find((n) => n.product.id === x)
             ? x
             : limited.find((n) => n.product.id === y)
@@ -946,10 +966,15 @@ export default function ComparePage() {
             noveltyBId: noveltyId
           };
         }
+        doneCount += chunk.length;
         setCleanAiProgress({
-          done: Math.min(i + chunk.length, allPairs.length),
+          done: Math.min(doneCount, allPairs.length),
           total: allPairs.length
         });
+      };
+      for (let i = 0; i < requests.length; i += CLIENT_PARALLEL) {
+        const wave = requests.slice(i, i + CLIENT_PARALLEL);
+        await Promise.all(wave.map((r) => sendOne(r.pairs)));
       }
       setCleanAiVerdicts((prev) => ({ ...prev, ...merged }));
       try {
@@ -970,6 +995,7 @@ export default function ComparePage() {
     openAiKey,
     cleanAiUseVision,
     cleanAiNoveltyLimit,
+    cleanAiModel,
     rememberOpenAiKey
   ]);
 
@@ -7789,6 +7815,28 @@ export default function ComparePage() {
                       }}
                       className="mt-0.5 rounded-md border border-purple-300 bg-white px-2 py-1 text-xs w-24"
                     />
+                  </label>
+                  <label className="flex flex-col text-xs text-purple-900">
+                    <span>Модель</span>
+                    <select
+                      value={cleanAiModel}
+                      onChange={(e) =>
+                        setCleanAiModel(e.target.value as CleanAiModel)
+                      }
+                      className="mt-0.5 rounded-md border border-purple-300 bg-white px-2 py-1 text-xs"
+                    >
+                      <option value="gpt-4o-mini">
+                        gpt-4o-mini — баланс (по умолчанию)
+                      </option>
+                      <option value="gpt-4.1-mini">
+                        gpt-4.1-mini — быстрее
+                      </option>
+                      <option value="gpt-4.1-nano">
+                        gpt-4.1-nano — самая быстрая
+                      </option>
+                      <option value="gpt-4o">gpt-4o — точнее, дороже</option>
+                      <option value="gpt-4.1">gpt-4.1 — точнее, дороже</option>
+                    </select>
                   </label>
                   <label className="flex items-center gap-1 text-xs text-purple-900">
                     <input
