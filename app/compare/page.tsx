@@ -3100,16 +3100,12 @@ export default function ComparePage() {
 
       <details
         className="mb-8 rounded-2xl border-2 border-amber-200/90 bg-gradient-to-br from-amber-50/95 via-white to-slate-50/40 shadow-sm ring-1 ring-amber-100/50 overflow-hidden group/amberhint"
-        open={compareMode === "singleDups"}
+        open
       >
         <summary className="cursor-pointer list-none px-5 py-4 sm:px-6 sm:py-5 [&::-webkit-details-marker]:hidden flex flex-wrap items-center gap-2 text-sm font-semibold text-amber-950 hover:bg-amber-50/50">
-          <span>
-            {compareMode === "twoSite"
-              ? "Памятка и три старых сценария (развернуть при необходимости)"
-              : "Памятка контенту и выбор задачи"}
-          </span>
+          <span>Памятка контенту и выбор задачи</span>
           <span className="text-xs font-normal text-slate-600 ml-auto">
-            {compareMode === "twoSite" ? "основной поток — синий блок выше" : ""}
+            свернуть/развернуть
           </span>
         </summary>
         <div className="px-5 pb-5 sm:px-6 border-t border-amber-100/90 pt-4 space-y-4">
@@ -4876,7 +4872,7 @@ export default function ComparePage() {
             {compareDisabledHint}
           </p>
         )}
-        {compareMode === "twoSite" ? (
+        {false ? (
           <details
             id="compare-run-anchor"
             className="scroll-mt-24 rounded-2xl border border-dashed border-slate-300 bg-slate-50/40 mb-2 overflow-hidden"
@@ -4964,14 +4960,42 @@ export default function ComparePage() {
           id="compare-run-anchor"
           className="flex flex-col gap-3 items-center scroll-mt-24 rounded-2xl border border-slate-200/90 bg-gradient-to-b from-amber-50/40 via-white to-slate-50/30 px-4 py-6 shadow-sm ring-1 ring-slate-200/40 sm:px-6"
         >
+          {catalogMainTask === "twoSite_cleanNovelties" && (
+            <div className="w-full rounded-xl border border-emerald-300/80 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-950">
+              <p className="font-semibold">Выбран сценарий: «Чистый фид B без дублей на A»</p>
+              <p className="mt-1 text-xs text-emerald-900/80">
+                Заполните URL фидов A и B (или вставьте CSV-текст), при желании добавьте список брендов
+                и нажмите кнопку ниже. Сервер сам отсеет совпадения по id, найдёт дубли по EAN
+                и названию/фото и предложит Excel из трёх листов.
+              </p>
+              {catalogSource !== "feeds" && (
+                <p className="mt-1 text-xs text-red-700">
+                  Сейчас источник — «API». Переключите на «Фиды (CSV)» в блоке выше — без этого
+                  запуск недоступен.
+                </p>
+              )}
+            </div>
+          )}
           <button
               type="button"
-              onClick={run}
-              disabled={comparePrimaryDisabled}
+              onClick={
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? runCleanNovelties
+                  : run
+              }
+              disabled={
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? loading || catalogSource !== "feeds"
+                  : comparePrimaryDisabled
+              }
               title={
-                comparePrimaryDisabled
-                  ? "Сначала укажите id рубрик (см. поля выше) или дождитесь загрузки"
-                  : "Запустить расчёт"
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? catalogSource !== "feeds"
+                    ? "Доступно только в режиме CSV-фидов. Переключите источник на «Фиды»."
+                    : "Запустить расчёт чистого фида B"
+                  : comparePrimaryDisabled
+                    ? "Сначала укажите id рубрик (см. поля выше) или дождитесь загрузки"
+                    : "Запустить расчёт"
               }
               className="min-w-[min(100%,18rem)] rounded-2xl bg-[#ffd740] text-[#0a0a0a] border border-black/10 px-8 py-3.5 text-base font-bold shadow-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#f5cd38] cursor-pointer ring-2 ring-amber-200/30 hover:ring-amber-400/40 transition"
             >
