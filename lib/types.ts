@@ -302,6 +302,15 @@ export type TwoFeedsCleanNoveltiesResult = {
   cleanNovelties: Array<{
     product: FpProduct;
     unverifiable: boolean;
+    /**
+     * Топ-K кандидатов с A того же бренда — для AI-проверки.
+     * Заполняется только для не-unverifiable; для «не удалось проверить» — пусто.
+     */
+    aiCandidates?: Array<{
+      productOnA: CompareProduct;
+      productOnAId: number;
+      textScore: number;
+    }>;
   }>;
   /** Новинки B, у которых нашёлся дубль на A — для отдельного листа Excel */
   duplicateNovelties: Array<{

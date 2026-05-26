@@ -100,6 +100,8 @@ import {
   type NoveltiesSheetForEanDup
 } from "@/lib/noveltiesEanDupSheet";
 import {
+  AI_DUP_CHUNK_TEXT,
+  AI_DUP_CHUNK_VISION,
   AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST,
   AI_DUP_MAX_PAIRS_VISION_PER_REQUEST
 } from "@/lib/aiDupLimits";
@@ -623,6 +625,30 @@ export default function ComparePage() {
     "all" | "ean" | "name_photo"
   >("all");
 
+  /** AI-проверка чистых новинок (по фото + названию, БЕЗ EAN). */
+  type CleanAiVerdict = {
+    duplicate: boolean;
+    confidence: number;
+    note?: string;
+    /** id товара на A, с которым сравнивали (для подсветки пары) */
+    productOnAId: number;
+    /** id новинки B */
+    noveltyBId: number;
+  };
+  const [cleanAiVerdicts, setCleanAiVerdicts] = useState<
+    Record<string, CleanAiVerdict>
+  >({});
+  const [cleanAiBusy, setCleanAiBusy] = useState(false);
+  const [cleanAiErr, setCleanAiErr] = useState<string | null>(null);
+  const [cleanAiProgress, setCleanAiProgress] = useState<{
+    done: number;
+    total: number;
+  }>({ done: 0, total: 0 });
+  /** Использовать ли превью фото в AI-проверке чистых (vision на gpt-4o-mini). */
+  const [cleanAiUseVision, setCleanAiUseVision] = useState(true);
+  /** Ограничение: сколько чистых новинок проверять за раз (защита от перегрузки). */
+  const [cleanAiNoveltyLimit, setCleanAiNoveltyLimit] = useState(50);
+
   const runCleanNovelties = useCallback(async () => {
     userCancelledRef.current = false;
     setError(null);
@@ -781,6 +807,171 @@ export default function ComparePage() {
     },
     [cleanNoveltiesData]
   );
+
+  /** Excel: только AI-дубли (положительные вердикты). */
+  const downloadCleanAiDuplicatesXlsx = useCallback(async () => {
+    if (!cleanNoveltiesData) return;
+    setError(null);
+    try {
+      const { downloadAiDuplicatesOnlyExcel } = await import(
+        "@/lib/exportCleanNovelties"
+      );
+      const verdicts = Object.values(cleanAiVerdicts).map((v) => ({
+        noveltyBId: v.noveltyBId,
+        productOnAId: v.productOnAId,
+        duplicate: v.duplicate,
+        confidence: v.confidence,
+        note: v.note
+      }));
+      await downloadAiDuplicatesOnlyExcel(
+        cleanNoveltiesData,
+        cleanNoveltiesData.nameLocale,
+        verdicts
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Не удалось сформировать Excel (нужен пакет xlsx)"
+      );
+    }
+  }, [cleanNoveltiesData, cleanAiVerdicts]);
+
+  /**
+   * AI-проверка чистых новинок: смотрим на пары «новинка B ↔ кандидат на A того же бренда»
+   * (формирует сервер при подсчёте чистых) и спрашиваем gpt-4o-mini как «квалифицированного
+   * специалиста»: дубль/не дубль по фото и названию. EAN не учитывается.
+   */
+  const runCleanAiCheck = useCallback(async () => {
+    if (!cleanNoveltiesData) return;
+    const key = openAiKey.trim();
+    if (!looksLikeOpenAiApiKey(key)) {
+      setCleanAiErr("Нужен ключ OpenAI API (sk-… или sk-proj-…)");
+      return;
+    }
+    /** Все пары «чистая новинка B → топ-K кандидатов A» */
+    const allPairs: {
+      idA: number;
+      idB: number;
+      titleA: string;
+      titleB: string;
+      brandA: string;
+      brandB: string;
+      layer: string;
+      imageUrlA?: string | null;
+      imageUrlB?: string | null;
+    }[] = [];
+    const cleanList = cleanNoveltiesData.cleanNovelties.filter(
+      (n) => !n.unverifiable && n.aiCandidates && n.aiCandidates.length > 0
+    );
+    const limited = cleanList.slice(0, Math.max(1, cleanAiNoveltyLimit));
+    const nl = cleanNoveltiesData.nameLocale;
+    for (const item of limited) {
+      const b = toCompareProduct(item.product);
+      const titleB = nl === "ru" ? b.nameRu : b.nameEn;
+      for (const cand of item.aiCandidates ?? []) {
+        const a = cand.productOnA;
+        const titleA = nl === "ru" ? a.nameRu : a.nameEn;
+        allPairs.push({
+          idA: a.id,
+          idB: b.id,
+          titleA,
+          titleB,
+          brandA: a.brand,
+          brandB: b.brand,
+          layer: "clean_novelties:ai",
+          imageUrlA: a.firstImage,
+          imageUrlB: b.firstImage
+        });
+      }
+    }
+    if (allPairs.length === 0) {
+      setCleanAiErr(
+        "Нет кандидатов для AI: у чистых новинок нет товаров того же бренда на A с похожими названиями."
+      );
+      return;
+    }
+    const chunkSize = cleanAiUseVision
+      ? AI_DUP_CHUNK_VISION
+      : AI_DUP_CHUNK_TEXT;
+    setCleanAiErr(null);
+    setCleanAiBusy(true);
+    setCleanAiProgress({ done: 0, total: allPairs.length });
+    try {
+      const merged: Record<string, CleanAiVerdict> = {};
+      for (let i = 0; i < allPairs.length; i += chunkSize) {
+        const chunk = allPairs.slice(i, i + chunkSize);
+        const res = await fetch("/api/ai/dup-refine", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            openaiApiKey: key,
+            useVision: cleanAiUseVision,
+            pairs: chunk
+          })
+        });
+        const json = (await res.json()) as {
+          error?: string;
+          verdicts?: {
+            pairKey: string;
+            duplicate: boolean;
+            confidence: number;
+            note?: string;
+          }[];
+        };
+        if (!res.ok) throw new Error(json.error || res.statusText);
+        for (const v of json.verdicts ?? []) {
+          const [x, y] = v.pairKey.split("-").map((n) => Number(n));
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          /** Для пары вычисляем какой id из них = B (новинка). Это id, который есть в `limited`. */
+          const noveltyId = limited.find((n) => n.product.id === x)
+            ? x
+            : limited.find((n) => n.product.id === y)
+              ? y
+              : null;
+          if (noveltyId == null) continue;
+          const productOnAId = noveltyId === x ? y : x;
+          merged[v.pairKey] = {
+            duplicate: v.duplicate,
+            confidence: v.confidence,
+            note: v.note,
+            productOnAId,
+            noveltyBId: noveltyId
+          };
+        }
+        setCleanAiProgress({
+          done: Math.min(i + chunk.length, allPairs.length),
+          total: allPairs.length
+        });
+      }
+      setCleanAiVerdicts((prev) => ({ ...prev, ...merged }));
+      try {
+        if (rememberOpenAiKey && typeof window !== "undefined") {
+          sessionStorage.setItem(SK_OPENAI_KEY, key);
+          sessionStorage.setItem(SK_OPENAI_REM, "1");
+        }
+      } catch {
+        /** ignore storage errors */
+      }
+    } catch (e) {
+      setCleanAiErr(e instanceof Error ? e.message : "Ошибка запроса AI");
+    } finally {
+      setCleanAiBusy(false);
+    }
+  }, [
+    cleanNoveltiesData,
+    openAiKey,
+    cleanAiUseVision,
+    cleanAiNoveltyLimit,
+    rememberOpenAiKey
+  ]);
+
+  /** Сброс вердиктов AI для чистых новинок. */
+  const resetCleanAiVerdicts = useCallback(() => {
+    setCleanAiVerdicts({});
+    setCleanAiErr(null);
+    setCleanAiProgress({ done: 0, total: 0 });
+  }, []);
 
   const run = useCallback(async () => {
     userCancelledRef.current = false;
@@ -7406,6 +7597,17 @@ export default function ComparePage() {
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Чистые (нет дубля)</p>
               <p className="text-lg font-bold text-emerald-900 tabular-nums">{cleanNoveltiesData.stats.clean}</p>
               <p className="text-[11px] text-slate-500 mb-2">можно лить на A</p>
+              {(() => {
+                const aiPositiveNovelties = new Set<number>();
+                for (const v of Object.values(cleanAiVerdicts)) {
+                  if (v.duplicate) aiPositiveNovelties.add(v.noveltyBId);
+                }
+                return aiPositiveNovelties.size > 0 ? (
+                  <p className="text-[11px] text-purple-800 mb-2 font-semibold">
+                    🤖 AI нашёл дубли у {aiPositiveNovelties.size}
+                  </p>
+                ) : null;
+              })()}
               <span
                 role="button"
                 tabIndex={0}
@@ -7467,6 +7669,120 @@ export default function ComparePage() {
               </span>
             </button>
           </div>
+          {(() => {
+            const cleanCandidatesCount = cleanNoveltiesData.cleanNovelties.filter(
+              (c) => !c.unverifiable && (c.aiCandidates?.length ?? 0) > 0
+            ).length;
+            const positiveAi = Object.values(cleanAiVerdicts).filter(
+              (v) => v.duplicate
+            ).length;
+            const checkedAi = Object.keys(cleanAiVerdicts).length;
+            return (
+              <div className="rounded-xl border border-purple-300 bg-purple-50 p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <p className="text-sm font-semibold text-purple-900">
+                      🤖 AI-проверка чистых новинок (фото + название, без EAN)
+                    </p>
+                    <p className="text-xs text-purple-800">
+                      ИИ смотрит как живой мерчандайзер: сравнивает обложку и
+                      полное название новинки B с кандидатами того же бренда на A
+                      и решает, дубль это или нет. EAN не учитывается.
+                    </p>
+                  </div>
+                  {checkedAi > 0 && (
+                    <button
+                      type="button"
+                      onClick={resetCleanAiVerdicts}
+                      className="text-xs text-purple-700 underline hover:text-purple-900"
+                    >
+                      сбросить вердикты ({checkedAi})
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-col text-xs text-purple-900">
+                    <span>Ключ OpenAI (sk-…)</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={openAiKey}
+                      placeholder="sk-..."
+                      onChange={(e) => setOpenAiKey(e.target.value)}
+                      className="mt-0.5 rounded-md border border-purple-300 bg-white px-2 py-1 text-xs w-72"
+                    />
+                  </label>
+                  <label className="flex flex-col text-xs text-purple-900">
+                    <span>Сколько новинок проверять</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={cleanAiNoveltyLimit}
+                      onChange={(e) => {
+                        const n = Math.max(
+                          1,
+                          Math.min(500, Number(e.target.value) || 1)
+                        );
+                        setCleanAiNoveltyLimit(n);
+                      }}
+                      className="mt-0.5 rounded-md border border-purple-300 bg-white px-2 py-1 text-xs w-24"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-purple-900">
+                    <input
+                      type="checkbox"
+                      checked={cleanAiUseVision}
+                      onChange={(e) => setCleanAiUseVision(e.target.checked)}
+                    />
+                    с фото (vision, точнее)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void runCleanAiCheck()}
+                    disabled={cleanAiBusy || cleanCandidatesCount === 0}
+                    className="rounded-md border border-purple-700 bg-purple-700 px-3 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {cleanAiBusy
+                      ? `Проверяю… ${cleanAiProgress.done}/${cleanAiProgress.total}`
+                      : "Запустить AI-проверку"}
+                  </button>
+                  <span className="text-[11px] text-purple-700">
+                    Кандидатов есть у{" "}
+                    <b className="tabular-nums">{cleanCandidatesCount}</b> новинок
+                    из {cleanNoveltiesData.stats.clean}
+                  </span>
+                </div>
+                {cleanAiErr && (
+                  <p className="text-xs text-red-700 font-medium">{cleanAiErr}</p>
+                )}
+                {checkedAi > 0 && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <p className="text-xs text-purple-900">
+                      Проверено пар: <b className="tabular-nums">{checkedAi}</b>;
+                      AI считает дублями:{" "}
+                      <b className="tabular-nums">{positiveAi}</b>.
+                      {positiveAi > 0 && (
+                        <span>
+                          {" "}
+                          Положительные подсвечены ниже в плитке «Чистые».
+                        </span>
+                      )}
+                    </p>
+                    {positiveAi > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void downloadCleanAiDuplicatesXlsx()}
+                        className="rounded-md border border-purple-400 bg-white px-2 py-1 text-xs font-semibold text-purple-900 hover:bg-purple-50"
+                      >
+                        Excel: AI-дубли ({positiveAi})
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {(() => {
             const titleByView: Record<typeof cleanNoveltiesView, string> = {
               duplicates: `Пары «новинка ${cleanNoveltiesData.siteBLabel} ↔ дубль на ${cleanNoveltiesData.siteALabel}» (до 100)`,
@@ -7602,17 +7918,59 @@ export default function ComparePage() {
                     if (items.length === 0) {
                       return <p className="text-sm text-slate-500">Нет позиций.</p>;
                     }
+                    /** Сортируем чистые так, чтобы AI-дубли были вверху. */
+                    const sortedItems =
+                      cleanNoveltiesView === "clean"
+                        ? [...items].sort((a, b) => {
+                            const aDup =
+                              (a.aiCandidates ?? []).some((c) => {
+                                const k = dupPairKey(a.product.id, c.productOnAId);
+                                return cleanAiVerdicts[k]?.duplicate;
+                              })
+                                ? 1
+                                : 0;
+                            const bDup =
+                              (b.aiCandidates ?? []).some((c) => {
+                                const k = dupPairKey(b.product.id, c.productOnAId);
+                                return cleanAiVerdicts[k]?.duplicate;
+                              })
+                                ? 1
+                                : 0;
+                            return bDup - aDup;
+                          })
+                        : items;
                     return (
                       <>
-                        {items.slice(0, 100).map((cn) => {
+                        {sortedItems.slice(0, 100).map((cn) => {
                           const cp = toCompareProduct(cn.product);
+                          const verdictsForItem = (cn.aiCandidates ?? [])
+                            .map((cand) => {
+                              const k = dupPairKey(
+                                cn.product.id,
+                                cand.productOnAId
+                              );
+                              const v = cleanAiVerdicts[k];
+                              return v ? { ...v, productOnA: cand.productOnA } : null;
+                            })
+                            .filter(
+                              (v): v is NonNullable<typeof v> => v !== null
+                            );
+                          const positive = verdictsForItem.filter(
+                            (v) => v.duplicate
+                          );
+                          const negative = verdictsForItem.filter(
+                            (v) => !v.duplicate
+                          );
+                          const isAiDup = positive.length > 0;
                           return (
                             <div
                               key={`cn-${cn.product.id}`}
                               className={`p-2 rounded-lg border bg-white ${
                                 cn.unverifiable
                                   ? "border-slate-200"
-                                  : "border-emerald-100"
+                                  : isAiDup
+                                    ? "border-purple-400 bg-purple-50/40 ring-1 ring-purple-200"
+                                    : "border-emerald-100"
                               }`}
                             >
                               <ProductCell c={cp} siteLabel={cleanNoveltiesData.siteBLabel} />
@@ -7621,10 +7979,44 @@ export default function ComparePage() {
                                   ⚠ не удалось проверить — нет EAN и нет фото
                                 </p>
                               )}
+                              {positive.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  <p className="text-[11px] uppercase tracking-wide text-purple-900 font-semibold">
+                                    AI считает дублем ({positive.length})
+                                  </p>
+                                  {positive.map((v) => (
+                                    <div
+                                      key={`pos-${v.productOnAId}`}
+                                      className="rounded-md border border-purple-300 bg-white p-1.5"
+                                    >
+                                      <p className="text-[11px] text-purple-900 mb-1">
+                                        id A: <b>{v.productOnAId}</b> · уверенность{" "}
+                                        <b>{Math.round(v.confidence * 100)}%</b>
+                                        {v.note ? ` · ${v.note}` : ""}
+                                      </p>
+                                      <ProductCell
+                                        c={v.productOnA}
+                                        siteLabel={cleanNoveltiesData.siteALabel}
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {positive.length === 0 && negative.length > 0 && (
+                                <p className="mt-1 text-[11px] text-slate-600">
+                                  AI проверил {negative.length} кандидат
+                                  {negative.length === 1
+                                    ? "а"
+                                    : negative.length < 5
+                                      ? "а"
+                                      : "ов"}{" "}
+                                  с A — дублей не нашёл.
+                                </p>
+                              )}
                             </div>
                           );
                         })}
-                        {items.length > 100 && (
+                        {sortedItems.length > 100 && (
                           <p className="text-xs text-slate-500">
                             Показаны первые 100. Полный список в Excel.
                           </p>

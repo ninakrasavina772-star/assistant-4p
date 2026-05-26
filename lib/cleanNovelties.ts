@@ -6,6 +6,26 @@ import {
 import { prefetchPhashes, type PhashCache } from "./imagePhash";
 import { normBrand } from "./pairScoring";
 import { collectEanIndexKeys, toCompareProduct } from "./product";
+
+/** Максимум кандидатов с A на одну чистую новинку для AI-проверки. */
+const MAX_AI_CANDIDATES_PER_NOVELTY = 4;
+
+function titleTokens(s: string): Set<string> {
+  return new Set(
+    (s || "")
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length > 2)
+  );
+}
+
+function tokenJaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  const union = a.size + b.size - inter;
+  return union > 0 ? inter / union : 0;
+}
 import type {
   AttrMatchOptions,
   CompareProduct,
@@ -30,6 +50,14 @@ export type NoveltyDupMatch = {
   variantArticleOnB?: string;
 };
 
+/** Кандидаты с A для AI-проверки чистых новинок. */
+export type NoveltyAiCandidate = {
+  productOnA: CompareProduct;
+  productOnAId: number;
+  /** 0..1 — оценка похожести названия (jaccard) — для отладки */
+  textScore: number;
+};
+
 export type NoveltyClassification =
   | {
       novelty: FpProduct;
@@ -41,6 +69,8 @@ export type NoveltyClassification =
       status: "clean";
       hasEan: boolean;
       hasImage: boolean;
+      /** Топ-K кандидатов с A для AI: тот же бренд + похожее название/первое фото есть. */
+      aiCandidates: NoveltyAiCandidate[];
     }
   | {
       novelty: FpProduct;
@@ -204,11 +234,42 @@ export async function classifyNoveltiesAgainstA(
       });
       unverifiable++;
     } else {
+      /** Для чистых — собираем top-K кандидатов с A того же бренда для последующей AI-проверки. */
+      const sameBrand = aByBrand.get(
+        normBrand(productBrandName(b)) || "__empty_brand__"
+      );
+      const tokB = titleTokens(cB.nameRu + " " + cB.nameEn + " " + (b.name || ""));
+      const candidates: NoveltyAiCandidate[] = [];
+      if (sameBrand && sameBrand.length > 0) {
+        const scored: { p: FpProduct; score: number }[] = [];
+        for (const pA of sameBrand) {
+          if (pA.id === b.id) continue;
+          const cA = toCompareProduct(pA);
+          const tokA = titleTokens(
+            cA.nameRu + " " + cA.nameEn + " " + (pA.name || "")
+          );
+          const sc = tokenJaccard(tokA, tokB);
+          if (sc > 0) scored.push({ p: pA, score: sc });
+        }
+        scored.sort((x, y) => y.score - x.score);
+        for (const { p: pA, score } of scored.slice(
+          0,
+          MAX_AI_CANDIDATES_PER_NOVELTY
+        )) {
+          const cA = toCompareProduct(pA);
+          candidates.push({
+            productOnA: cA,
+            productOnAId: pA.id,
+            textScore: score
+          });
+        }
+      }
       classifications.push({
         novelty: b,
         status: "clean",
         hasEan,
-        hasImage
+        hasImage,
+        aiCandidates: candidates
       });
       cleanCnt++;
     }

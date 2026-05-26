@@ -298,3 +298,70 @@ export async function downloadUnverifiableOnlyExcel(
     "Нет позиций «не удалось проверить»"
   );
 }
+
+/** AI-вердикт по одной паре «чистая новинка B ↔ кандидат с A». */
+export type CleanAiVerdictForExport = {
+  noveltyBId: number;
+  productOnAId: number;
+  duplicate: boolean;
+  confidence: number;
+  note?: string;
+};
+
+/** Строки листа «AI-дубли»: только положительные вердикты. */
+function buildAiDupRows(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale,
+  verdicts: CleanAiVerdictForExport[]
+): Record<string, string>[] {
+  const idToNovelty = new Map<number, FpProduct>();
+  for (const p of result.noveltiesAll) idToNovelty.set(p.id, p);
+  const idToCleanA = new Map<number, CompareProduct>();
+  for (const cn of result.cleanNovelties) {
+    for (const cand of cn.aiCandidates ?? []) {
+      idToCleanA.set(cand.productOnAId, cand.productOnA);
+    }
+  }
+  const positives = verdicts
+    .filter((v) => v.duplicate)
+    .sort((a, b) => b.confidence - a.confidence);
+  const rows: Record<string, string>[] = [];
+  for (const v of positives) {
+    const novelty = idToNovelty.get(v.noveltyBId);
+    const productA = idToCleanA.get(v.productOnAId);
+    if (!novelty || !productA) continue;
+    const bBlock = baseColsForB(novelty, nameLocale);
+    const bWithPrefix: Record<string, string> = {};
+    for (const [k, val] of Object.entries(bBlock)) {
+      const key =
+        k === "ID товара"
+          ? `ID товара на B (${result.siteBLabel})`
+          : `${k} (B / ${result.siteBLabel})`;
+      bWithPrefix[key] = val;
+    }
+    rows.push(
+      clipRow({
+        "AI вердикт": "дубль",
+        "AI уверенность %": String(Math.round(v.confidence * 100)),
+        "AI комментарий": v.note ?? "",
+        ...bWithPrefix,
+        ...colsForA(productA, nameLocale, result.siteALabel)
+      })
+    );
+  }
+  return rows;
+}
+
+/** Только лист «AI-дубли» (положительные вердикты). */
+export async function downloadAiDuplicatesOnlyExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale,
+  verdicts: CleanAiVerdictForExport[]
+): Promise<void> {
+  await writeSingleSheet(
+    buildAiDupRows(result, nameLocale, verdicts),
+    "AI дубли",
+    `AI_дубли_${fileBase(result)}.xlsx`,
+    "AI пока не нашёл дублей или проверка не запускалась"
+  );
+}

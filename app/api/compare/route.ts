@@ -561,7 +561,13 @@ export async function POST(req: NextRequest) {
             });
           }
         } else if (c.status === "clean") {
-          cleanNoveltiesOut.push({ product: c.novelty, unverifiable: false });
+          cleanNoveltiesOut.push({
+            product: c.novelty,
+            unverifiable: false,
+            ...(c.aiCandidates.length > 0
+              ? { aiCandidates: c.aiCandidates }
+              : {})
+          });
         } else {
           cleanNoveltiesOut.push({ product: c.novelty, unverifiable: true });
         }
