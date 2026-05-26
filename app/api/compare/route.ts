@@ -13,7 +13,10 @@ import {
   fetchProductsByIds,
   type RubricFetchPipeline
 } from "@/lib/fourpartners";
-import { classifyNoveltiesAgainstA } from "@/lib/cleanNovelties";
+import {
+  classifyNoveltiesAgainstA,
+  findInternalNoveltyDuplicates
+} from "@/lib/cleanNovelties";
 import { findIntraSiteDuplicates } from "@/lib/intraSiteDups";
 import { filterFpProductsByModels, mergeModelLists, type ModelMatchMode } from "@/lib/model-filter";
 import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
@@ -533,6 +536,17 @@ export async function POST(req: NextRequest) {
       const noveltiesAll = productsB.filter((p) => !idSetA.has(p.id));
 
       const cls = await classifyNoveltiesAgainstA(productsA, noveltiesAll, nameLocale, attrMatch);
+      /** Дубли внутри самого списка новинок B (один товар под разными id). */
+      const internalPairs = await findInternalNoveltyDuplicates(
+        noveltiesAll,
+        nameLocale
+      );
+      /** Сколько уникальных id попали хотя бы в одну пару — для статистики. */
+      const internalNoveltyIds = new Set<number>();
+      for (const p of internalPairs) {
+        internalNoveltyIds.add(p.aId);
+        internalNoveltyIds.add(p.bId);
+      }
 
       const duplicatePairs: TwoFeedsCleanNoveltiesResult["duplicatePairs"] = [];
       const duplicateNovelties: TwoFeedsCleanNoveltiesResult["duplicateNovelties"] = [];
@@ -600,12 +614,23 @@ export async function POST(req: NextRequest) {
           duplicates: cls.summary.duplicates,
           dupPairsCount: cls.summary.dupPairsCount,
           clean: cls.summary.clean,
-          unverifiable: cls.summary.unverifiable
+          unverifiable: cls.summary.unverifiable,
+          internalDupNovelties: internalNoveltyIds.size,
+          internalDupPairsCount: internalPairs.length
         },
         duplicatePairs,
         noveltiesAll,
         cleanNovelties: cleanNoveltiesOut,
-        duplicateNovelties
+        duplicateNovelties,
+        internalDuplicatePairs: internalPairs.map((p) => ({
+          kind: p.kind,
+          ...(p.ean ? { ean: p.ean } : {}),
+          reasons: p.reasons,
+          a: p.a,
+          b: p.b,
+          aId: p.aId,
+          bId: p.bId
+        }))
       };
       return NextResponse.json(result);
     }

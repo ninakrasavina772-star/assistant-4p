@@ -284,6 +284,10 @@ export type TwoFeedsCleanNoveltiesResult = {
     clean: number;
     /** Не проверено (нет EAN и нет фото) */
     unverifiable: number;
+    /** Сколько новинок попали хотя бы в одну пару внутренних дублей B↔B */
+    internalDupNovelties?: number;
+    /** Сколько пар внутренних дублей B↔B найдено */
+    internalDupPairsCount?: number;
   };
   /** Сами найденные пары (новинка ↔ дубль на A) для отчёта */
   duplicatePairs: Array<{
@@ -322,6 +326,16 @@ export type TwoFeedsCleanNoveltiesResult = {
       reasons: string[];
       variantArticleOnB?: string;
     }>;
+  }>;
+  /** Дубли внутри списка новинок B (один товар под разными id). Не пересекается с `duplicatePairs`. */
+  internalDuplicatePairs?: Array<{
+    kind: "ean" | "name_photo";
+    ean?: string;
+    reasons: string[];
+    a: CompareProduct;
+    b: CompareProduct;
+    aId: number;
+    bId: number;
   }>;
 };
 

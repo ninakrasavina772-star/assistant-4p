@@ -218,7 +218,7 @@ async function writeSingleSheet(
   XLSX.writeFile(wb, fileName);
 }
 
-/** Один Excel с тремя листами: все новинки, дубли, чистые+не проверено. */
+/** Один Excel с четырьмя листами: все новинки, дубли с A, чистые, дубли внутри B. */
 export async function downloadCleanNoveltiesExcel(
   result: TwoFeedsCleanNoveltiesResult,
   nameLocale: NameLocale
@@ -229,6 +229,7 @@ export async function downloadCleanNoveltiesExcel(
   const s1 = buildSheet1Rows(result, nameLocale);
   const s2 = buildSheet2Rows(result, nameLocale);
   const s3 = buildSheet3Rows(result, nameLocale, "all");
+  const s4 = buildInternalDupRows(result, nameLocale);
   XLSX.utils.book_append_sheet(
     wb,
     XLSX.utils.json_to_sheet(s1.length > 0 ? s1 : [{ Сообщение: "Новинки не найдены" }]),
@@ -237,12 +238,19 @@ export async function downloadCleanNoveltiesExcel(
   XLSX.utils.book_append_sheet(
     wb,
     XLSX.utils.json_to_sheet(s2.length > 0 ? s2 : [{ Сообщение: "Дубли не найдены" }]),
-    "2. Найденные дубли"
+    "2. Дубли с A"
   );
   XLSX.utils.book_append_sheet(
     wb,
     XLSX.utils.json_to_sheet(s3.length > 0 ? s3 : [{ Сообщение: "Чистых новинок нет" }]),
     "3. Чистые + не проверено"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(
+      s4.length > 0 ? s4 : [{ Сообщение: "Внутренних дублей не найдено" }]
+    ),
+    "4. Дубли среди новинок"
   );
   XLSX.writeFile(wb, `чистый_фид_${fileBase(result)}.xlsx`);
 }
@@ -296,6 +304,83 @@ export async function downloadUnverifiableOnlyExcel(
     "Не проверено",
     `не_проверено_${fileBase(result)}.xlsx`,
     "Нет позиций «не удалось проверить»"
+  );
+}
+
+function buildInternalDupRows(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Record<string, string>[] {
+  const idToNovelty = new Map<number, FpProduct>();
+  for (const p of result.noveltiesAll) idToNovelty.set(p.id, p);
+  const pairs = result.internalDuplicatePairs ?? [];
+  return pairs.map((pair) => {
+    const fpA = idToNovelty.get(pair.aId);
+    const fpB = idToNovelty.get(pair.bId);
+    const aBlock = fpA
+      ? baseColsForB(fpA, nameLocale)
+      : {
+          "ID товара": String(pair.aId),
+          Артикул: pair.a.articleKey ?? "",
+          Название: nameFromCompare(pair.a, nameLocale),
+          Бренд: pair.a.brand,
+          Объём: pair.a.attrVolume ?? "",
+          "EAN (все)": pair.a.eans.join(", "),
+          Ссылка: pair.a.link,
+          "Фото (первое)": pair.a.firstImage ?? "",
+          Цена: "",
+          Остаток: "",
+          Описание: ""
+        };
+    const bBlock = fpB
+      ? baseColsForB(fpB, nameLocale)
+      : {
+          "ID товара": String(pair.bId),
+          Артикул: pair.b.articleKey ?? "",
+          Название: nameFromCompare(pair.b, nameLocale),
+          Бренд: pair.b.brand,
+          Объём: pair.b.attrVolume ?? "",
+          "EAN (все)": pair.b.eans.join(", "),
+          Ссылка: pair.b.link,
+          "Фото (первое)": pair.b.firstImage ?? "",
+          Цена: "",
+          Остаток: "",
+          Описание: ""
+        };
+    const renamed = (
+      block: Record<string, string>,
+      tag: "A" | "B"
+    ): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(block)) {
+        const key =
+          k === "ID товара"
+            ? `ID товара (${tag} / ${result.siteBLabel})`
+            : `${k} (${tag} / ${result.siteBLabel})`;
+        out[key] = v;
+      }
+      return out;
+    };
+    return clipRow({
+      "Тип совпадения": kindRu(pair.kind),
+      "Общий EAN": pair.ean ?? "",
+      "Причины совпадения": pair.reasons.join(" + "),
+      ...renamed(aBlock, "A"),
+      ...renamed(bBlock, "B")
+    });
+  });
+}
+
+/** Только лист «Дубли среди новинок» (внутренние дубли B ↔ B). */
+export async function downloadInternalDupsOnlyExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Promise<void> {
+  await writeSingleSheet(
+    buildInternalDupRows(result, nameLocale),
+    "Дубли среди новинок",
+    `дубли_среди_новинок_${fileBase(result)}.xlsx`,
+    "Внутренних дублей не найдено"
   );
 }
 

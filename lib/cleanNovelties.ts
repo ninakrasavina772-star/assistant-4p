@@ -93,6 +93,135 @@ export type CleanNoveltiesResult = {
 };
 
 /**
+ * Пара внутренних дублей среди новинок B (один товар под разными id).
+ * `aId < bId` по соглашению.
+ */
+export type InternalNoveltyDupPair = {
+  kind: "ean" | "name_photo";
+  ean?: string;
+  reasons: string[];
+  a: CompareProduct;
+  b: CompareProduct;
+  aId: number;
+  bId: number;
+};
+
+/**
+ * Ищет дубли **внутри** списка новинок B (один и тот же товар под разными id).
+ *
+ * Логика:
+ * - EAN: одинаковый штрихкод у двух новинок → пара kind="ean".
+ * - Название/фото: тот же нормализованный бренд + порог сходства из dupTiers
+ *   (используем `resolveNameTabPair`). Запускается только для пар, не попавших
+ *   в EAN-дубли (чтобы не дублировать одну пару с разными kind).
+ *
+ * Кэш phash переиспользуется из основной проверки (B vs A), а недостающие
+ * URL внутри B дополнительно прогреваются.
+ */
+export async function findInternalNoveltyDuplicates(
+  noveltiesB: FpProduct[],
+  nameLocale: NameLocale,
+  cache: PhashCache = new Map()
+): Promise<InternalNoveltyDupPair[]> {
+  if (noveltiesB.length < 2) return [];
+
+  /** id → FpProduct для быстрого доступа */
+  const byId = new Map<number, FpProduct>();
+  for (const p of noveltiesB) byId.set(p.id, p);
+
+  /** EAN индекс среди новинок */
+  const eanIndex = new Map<string, number[]>();
+  for (const p of noveltiesB) {
+    for (const k of collectEanIndexKeys(p)) {
+      const arr = eanIndex.get(k) ?? [];
+      arr.push(p.id);
+      eanIndex.set(k, arr);
+    }
+  }
+
+  const pairs: InternalNoveltyDupPair[] = [];
+  const seenKeys = new Set<string>();
+  const pairKey = (x: number, y: number) =>
+    x < y ? `${x}-${y}` : `${y}-${x}`;
+
+  /** 1) EAN-группы */
+  for (const [ean, ids] of eanIndex) {
+    if (ids.length < 2) continue;
+    /** уникальные id */
+    const uniq = [...new Set(ids)].sort((a, b) => a - b);
+    for (let i = 0; i < uniq.length; i++) {
+      for (let j = i + 1; j < uniq.length; j++) {
+        const aId = uniq[i]!;
+        const bId = uniq[j]!;
+        const k = pairKey(aId, bId);
+        if (seenKeys.has(k)) continue;
+        seenKeys.add(k);
+        const a = byId.get(aId)!;
+        const b = byId.get(bId)!;
+        pairs.push({
+          kind: "ean",
+          ean,
+          reasons: [`общий EAN ${ean}`],
+          a: toCompareProduct(a),
+          b: toCompareProduct(b),
+          aId,
+          bId
+        });
+      }
+    }
+  }
+
+  /** 2) Название + фото — только для пар, у которых ещё нет EAN-совпадения. */
+  const byBrand = new Map<string, FpProduct[]>();
+  for (const p of noveltiesB) {
+    const k = normBrand(productBrandName(p)) || "__empty_brand__";
+    const arr = byBrand.get(k) ?? [];
+    arr.push(p);
+    byBrand.set(k, arr);
+  }
+  /** Прогреем phash для тех URL, что ещё не в кэше. */
+  const urls = new Set<string>();
+  for (const list of byBrand.values()) {
+    if (list.length < 2) continue;
+    for (const p of list) {
+      const cp = toCompareProduct(p);
+      if (cp.firstImage) urls.add(cp.firstImage.trim());
+    }
+  }
+  await prefetchPhashes(urls, cache);
+  const photoPhashSkipped = urls.size > 0 && cache.size === 0;
+
+  for (const [_brand, list] of byBrand) {
+    void _brand;
+    if (list.length < 2) continue;
+    const sorted = [...list].sort((a, b) => a.id - b.id);
+    for (let i = 0; i < sorted.length; i++) {
+      const pa = sorted[i]!;
+      const ca = toCompareProduct(pa);
+      for (let j = i + 1; j < sorted.length; j++) {
+        const pb = sorted[j]!;
+        const k = pairKey(pa.id, pb.id);
+        if (seenKeys.has(k)) continue;
+        const cb = toCompareProduct(pb);
+        const res = resolveNameTabPair(ca, cb, nameLocale, cache, photoPhashSkipped);
+        if ("reject" in res) continue;
+        seenKeys.add(k);
+        pairs.push({
+          kind: "name_photo",
+          reasons: res.reasons,
+          a: ca,
+          b: cb,
+          aId: pa.id,
+          bId: pb.id
+        });
+      }
+    }
+  }
+
+  return pairs;
+}
+
+/**
  * Классификация новинок B по сравнению с каталогом A.
  *
  * - EAN: один штрихкод у B и A (с учётом ведущих нулей) → дубль.

@@ -618,10 +618,14 @@ export default function ComparePage() {
     useState<TwoFeedsCleanNoveltiesResult | null>(null);
   /** Какую часть отчёта «Чистый фид» сейчас показываем под плитками. */
   const [cleanNoveltiesView, setCleanNoveltiesView] = useState<
-    "duplicates" | "clean" | "unverifiable" | "all"
+    "duplicates" | "clean" | "unverifiable" | "all" | "internalDups"
   >("duplicates");
   /** Доп. фильтр внутри плитки «Найдено дублей» — все / EAN / название+фото. */
   const [cleanDupKindFilter, setCleanDupKindFilter] = useState<
+    "all" | "ean" | "name_photo"
+  >("all");
+  /** Фильтр внутри плитки «Дубли среди новинок» — все / EAN / название+фото. */
+  const [internalDupKindFilter, setInternalDupKindFilter] = useState<
     "all" | "ean" | "name_photo"
   >("all");
 
@@ -775,7 +779,7 @@ export default function ComparePage() {
     }
   }, [cleanNoveltiesData]);
 
-  /** Скачивание отдельных листов «Чистого фида»: новинки / дубли / чистые / не проверено. */
+  /** Скачивание отдельных листов «Чистого фида»: новинки / дубли с A / чистые / не проверено / дубли среди новинок. */
   const downloadCleanNoveltiesPart = useCallback(
     async (
       part:
@@ -783,6 +787,7 @@ export default function ComparePage() {
         | "duplicatesOnly"
         | "cleanOnly"
         | "unverifiableOnly"
+        | "internalDupsOnly"
     ) => {
       if (!cleanNoveltiesData) return;
       setError(null);
@@ -795,7 +800,9 @@ export default function ComparePage() {
               ? mod.downloadDuplicatesOnlyExcel
               : part === "cleanOnly"
                 ? mod.downloadCleanOnlyExcel
-                : mod.downloadUnverifiableOnlyExcel;
+                : part === "unverifiableOnly"
+                  ? mod.downloadUnverifiableOnlyExcel
+                  : mod.downloadInternalDupsOnlyExcel;
         await fn(cleanNoveltiesData, cleanNoveltiesData.nameLocale);
       } catch (e) {
         setError(
@@ -3437,8 +3444,11 @@ export default function ComparePage() {
                 Только для CSV-фидов. За один запуск: 1) новинки B (нет того же id на A),
                 2) поиск дублей среди новинок на A — по EAN и по{" "}
                 <strong className="font-semibold text-slate-800">бренду + модели + фото</strong>,
-                3) Excel из трёх листов: новинки, дубли, чистый фид (с пометкой
-                «не удалось проверить», если нет EAN и фото).
+                3) поиск дублей{" "}
+                <strong className="font-semibold text-slate-800">внутри списка новинок</strong>{" "}
+                (один товар под разными id), 4) Excel из четырёх листов: новинки,
+                дубли с A, чистый фид (с пометкой «не удалось проверить»), дубли
+                среди новинок.
               </p>
             </button>
           </div>
@@ -5197,8 +5207,9 @@ export default function ComparePage() {
               <p className="font-semibold">Выбран сценарий: «Чистый фид B без дублей на A»</p>
               <p className="mt-1 text-xs text-emerald-900/80">
                 Заполните URL фидов A и B (или вставьте CSV-текст), при желании добавьте список брендов
-                и нажмите кнопку ниже. Сервер сам отсеет совпадения по id, найдёт дубли по EAN
-                и названию/фото и предложит Excel из трёх листов.
+                и нажмите кнопку ниже. Сервер отсеет совпадения по id, найдёт дубли B↔A по EAN
+                и названию/фото, а также дубли B↔B внутри списка новинок (один товар под разными id),
+                и предложит Excel из четырёх листов.
               </p>
               {catalogSource !== "feeds" && (
                 <p className="mt-1 text-xs text-red-700">
@@ -7505,14 +7516,14 @@ export default function ComparePage() {
               onClick={() => void downloadCleanNoveltiesXlsx()}
               className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 transition"
             >
-              Скачать Excel (3 листа)
+              Скачать Excel (4 листа)
             </button>
           </div>
           <p className="text-xs text-slate-500 mb-2">
             Кликайте по плиткам, чтобы переключать список ниже. Кнопка «Excel» —
             скачать соответствующий список отдельным файлом.
           </p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 mb-4">
             <button
               type="button"
               onClick={() => setCleanNoveltiesView("all")}
@@ -7668,6 +7679,56 @@ export default function ComparePage() {
                 Excel: не проверено
               </span>
             </button>
+            {(() => {
+              const internalCount =
+                cleanNoveltiesData.stats.internalDupNovelties ?? 0;
+              const internalPairs =
+                cleanNoveltiesData.stats.internalDupPairsCount ?? 0;
+              return (
+                <button
+                  type="button"
+                  onClick={() => setCleanNoveltiesView("internalDups")}
+                  className={`text-left rounded-xl border bg-white px-3 py-2 flex flex-col transition ${
+                    cleanNoveltiesView === "internalDups"
+                      ? "border-rose-700 ring-2 ring-rose-200"
+                      : "border-rose-300 hover:border-rose-500"
+                  }`}
+                >
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                    Дубли среди новинок (B ↔ B)
+                  </p>
+                  <p className="text-lg font-bold text-rose-900 tabular-nums">
+                    {internalCount}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    {internalPairs} пар · разные id, тот же товар
+                  </p>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void downloadCleanNoveltiesPart("internalDupsOnly");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void downloadCleanNoveltiesPart("internalDupsOnly");
+                      }
+                    }}
+                    aria-disabled={internalPairs === 0}
+                    className={`mt-auto text-center rounded-md border border-rose-400 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-900 hover:bg-rose-100 ${
+                      internalPairs === 0
+                        ? "opacity-50 pointer-events-none"
+                        : ""
+                    }`}
+                  >
+                    Excel: дубли среди новинок
+                  </span>
+                </button>
+              );
+            })()}
           </div>
           {(() => {
             const cleanCandidatesCount = cleanNoveltiesData.cleanNovelties.filter(
@@ -7788,7 +7849,8 @@ export default function ComparePage() {
               duplicates: `Пары «новинка ${cleanNoveltiesData.siteBLabel} ↔ дубль на ${cleanNoveltiesData.siteALabel}» (до 100)`,
               clean: `Чистые новинки ${cleanNoveltiesData.siteBLabel} (до 100)`,
               unverifiable: `Не удалось проверить — нет EAN и фото (до 100)`,
-              all: `Все новинки ${cleanNoveltiesData.siteBLabel} со статусом (до 100)`
+              all: `Все новинки ${cleanNoveltiesData.siteBLabel} со статусом (до 100)`,
+              internalDups: `Дубли среди новинок ${cleanNoveltiesData.siteBLabel} (один товар под разными id, до 100)`
             };
             const noveltyIdToStatus = new Map<
               number,
@@ -8067,6 +8129,117 @@ export default function ComparePage() {
                       )}
                     </>
                   )}
+                  {cleanNoveltiesView === "internalDups" && (() => {
+                    const allPairs =
+                      cleanNoveltiesData.internalDuplicatePairs ?? [];
+                    const countEan = allPairs.filter((p) => p.kind === "ean").length;
+                    const countName = allPairs.filter(
+                      (p) => p.kind === "name_photo"
+                    ).length;
+                    const filtered =
+                      internalDupKindFilter === "ean"
+                        ? allPairs.filter((p) => p.kind === "ean")
+                        : internalDupKindFilter === "name_photo"
+                          ? allPairs.filter((p) => p.kind === "name_photo")
+                          : allPairs;
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                            Тип:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setInternalDupKindFilter("all")}
+                            className={`rounded-md border px-2 py-1 text-xs font-semibold transition ${
+                              internalDupKindFilter === "all"
+                                ? "border-slate-700 bg-slate-800 text-white"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-500"
+                            }`}
+                          >
+                            Все ({allPairs.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setInternalDupKindFilter("ean")}
+                            disabled={countEan === 0}
+                            className={`rounded-md border px-2 py-1 text-xs font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                              internalDupKindFilter === "ean"
+                                ? "border-amber-700 bg-amber-700 text-white"
+                                : "border-amber-300 bg-white text-amber-900 hover:border-amber-500"
+                            }`}
+                          >
+                            Только EAN ({countEan})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setInternalDupKindFilter("name_photo")
+                            }
+                            disabled={countName === 0}
+                            className={`rounded-md border px-2 py-1 text-xs font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                              internalDupKindFilter === "name_photo"
+                                ? "border-sky-700 bg-sky-700 text-white"
+                                : "border-sky-300 bg-white text-sky-900 hover:border-sky-500"
+                            }`}
+                          >
+                            Только название+фото ({countName})
+                          </button>
+                        </div>
+                        {filtered.length === 0 && (
+                          <p className="text-sm text-slate-500">
+                            {allPairs.length === 0
+                              ? "Внутренних дублей среди новинок не найдено."
+                              : "Нет пар по выбранному типу."}
+                          </p>
+                        )}
+                        {filtered.slice(0, 100).map((pair, idx) => (
+                          <div
+                            key={`int-${pair.aId}-${pair.bId}-${idx}`}
+                            className={`p-2 space-y-1 rounded-lg border bg-white ${
+                              pair.kind === "ean"
+                                ? "border-amber-100 bg-amber-50/30"
+                                : "border-sky-100 bg-sky-50/30"
+                            }`}
+                          >
+                            <p
+                              className={`text-[10px] uppercase tracking-wide font-medium ${
+                                pair.kind === "ean"
+                                  ? "text-amber-900"
+                                  : "text-sky-900"
+                              }`}
+                            >
+                              {pair.kind === "ean"
+                                ? `EAN ${pair.ean ?? ""}`
+                                : "название + фото"}{" "}
+                              · B ↔ B (id {pair.aId} ↔ id {pair.bId})
+                            </p>
+                            <div className="grid sm:grid-cols-2 gap-2">
+                              <ProductCell
+                                c={pair.a}
+                                siteLabel={cleanNoveltiesData.siteBLabel}
+                              />
+                              <ProductCell
+                                c={pair.b}
+                                siteLabel={cleanNoveltiesData.siteBLabel}
+                              />
+                            </div>
+                            {pair.reasons.length > 0 && (
+                              <p className="text-xs text-slate-600">
+                                {pair.reasons.join(" + ")}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                        {filtered.length > 100 && (
+                          <p className="text-xs text-slate-500">
+                            Показаны первые 100 пар из {filtered.length}. Полная
+                            таблица в Excel (кнопка «Дубли среди новинок»).
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             );
