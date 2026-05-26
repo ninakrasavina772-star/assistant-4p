@@ -51,6 +51,11 @@ export type FpProduct = {
   /** Иногда бренд дублируется в manufacturer / vendor (строка или объект как brand) */
   manufacturer?: string | { name?: string; title?: string; label?: string } | null;
   vendor?: string | { name?: string; title?: string; label?: string } | null;
+  /**
+   * Вариации из CSV-фида (на каждую строку фида — свой артикул + EAN).
+   * Используется для пометки «дубль по EAN — вариация ABC» в выгрузке чистого фида.
+   */
+  feedVariants?: Array<{ article?: string; ean?: string }>;
 };
 
 export type NameLocale = "en" | "ru";
@@ -253,6 +258,62 @@ export type NoveltiesFullExportResult = {
   nameLocale: NameLocale;
 };
 
+/** Результат «новинки B (по id) + поиск дублей на A» — для CSV-фидов A и B */
+export type TwoFeedsCleanNoveltiesResult = {
+  resultKind: "twoFeedsCleanNovelties";
+  siteALabel: string;
+  siteBLabel: string;
+  nameLocale: NameLocale;
+  brandFilter?: CompareBrandFilterInfo;
+  modelFilter?: CompareModelFilterInfo;
+  excludeIdsA?: CompareExcludeIdsAInfo;
+  stats: {
+    /** Размер каталога A после фильтров */
+    countA: number;
+    /** Размер каталога B после фильтров */
+    countB: number;
+    /** id в B без совпадения id в A — новинки */
+    noveltyCountById: number;
+    /** Найдено дублей B↔A (среди новинок) */
+    duplicates: number;
+    /** Пар совпадений (новинка → A): больше или равно `duplicates` */
+    dupPairsCount: number;
+    /** Чистые новинки (нет дубля, есть EAN или фото) */
+    clean: number;
+    /** Не проверено (нет EAN и нет фото) */
+    unverifiable: number;
+  };
+  /** Сами найденные пары (новинка ↔ дубль на A) для отчёта */
+  duplicatePairs: Array<{
+    novelty: CompareProduct;
+    productOnA: CompareProduct;
+    productOnAId: number;
+    kind: "ean" | "name_photo";
+    ean?: string;
+    reasons: string[];
+    /** Если найдена вариация B с этим EAN */
+    variantArticleOnB?: string;
+  }>;
+  /** Полные FpProduct новинок B — для скачивания Excel («все характеристики из фида B») */
+  noveltiesAll: FpProduct[];
+  /** Чистые новинки B — без дублей на A (включая «не удалось проверить» с пометкой) */
+  cleanNovelties: Array<{
+    product: FpProduct;
+    unverifiable: boolean;
+  }>;
+  /** Новинки B, у которых нашёлся дубль на A — для отдельного листа Excel */
+  duplicateNovelties: Array<{
+    novelty: FpProduct;
+    matches: Array<{
+      kind: "ean" | "name_photo";
+      ean?: string;
+      productOnAId: number;
+      reasons: string[];
+      variantArticleOnB?: string;
+    }>;
+  }>;
+};
+
 /** Мастер: id новинок без пересечения EAN с выгрузкой рубрики A */
 export type NoveltyIdsNoEanOnAResult = {
   resultKind: "noveltyIdsNoEanOnA";
@@ -267,58 +328,6 @@ export type NoveltyIdsNoEanOnAResult = {
 };
 
 /** Результат «один сайт, одна рубрика» — дубли внутри выгрузки */
-/**
- * Сценарий «фид A vs фид B»: новинки на B по id + дубли на пуле (A ∪ новинки B).
- *
- * Логика дублей повторяет {@link SingleSiteDupsResult} (EAN-кластеры и пары «бренд+модель+объём+фото»),
- * только пул собран из товаров A + позиций B, которых нет на A по «Id товара». Метка `side`
- * у каждой карточки показывает, с какой витрины она пришла.
- */
-export type NoveltiesB2BDupsResult = {
-  resultKind: "noveltiesB2BDups";
-  siteALabel: string;
-  siteBLabel: string;
-  nameLocale: NameLocale;
-  brandFilter?: CompareBrandFilterInfo;
-  modelFilter?: CompareModelFilterInfo;
-  excludeIdsA?: CompareExcludeIdsAInfo;
-  stats: {
-    countA: number;
-    countB: number;
-    /** B \\ A по «Id товара» */
-    noveltiesBCount: number;
-    /** Сколько новинок B попали в EAN-группу или пару «по названию» */
-    noveltiesWithDupCount: number;
-    /** Сколько новинок B без дублей — это «чистый» список для выгрузки */
-    noveltiesCleanCount: number;
-    eanGroupsCount: number;
-    namePairsCount: number;
-    nameTabStats?: import("./dupTiers").NameTabStats;
-  };
-  /** Все новинки на B (полные объекты для Excel-экспорта) */
-  noveltiesB: FpProduct[];
-  /** Id новинок B, у которых есть хотя бы один дубль (с A или с другой новинкой B) */
-  noveltyIdsWithDup: number[];
-  /** Дубли по EAN (карточки помечены side: "A" | "B") */
-  eanGroups: NoveltyB2BEanGroupRow[];
-  /** Дубли по названию: бренд + модель + объём + фото */
-  namePhotoPairs: NoveltyB2BNamePairRow[];
-};
-
-export type NoveltyB2BCompareProduct = CompareProduct & { side: "A" | "B" };
-
-export type NoveltyB2BEanGroupRow = {
-  ean: string;
-  products: NoveltyB2BCompareProduct[];
-};
-
-export type NoveltyB2BNamePairRow = {
-  a: NoveltyB2BCompareProduct;
-  b: NoveltyB2BCompareProduct;
-  score: number;
-  matchReasons: string[];
-};
-
 export type SingleSiteDupsResult = {
   resultKind: "singleSiteDups";
   siteLabel: string;

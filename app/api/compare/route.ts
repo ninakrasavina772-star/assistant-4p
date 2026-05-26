@@ -13,13 +13,14 @@ import {
   fetchProductsByIds,
   type RubricFetchPipeline
 } from "@/lib/fourpartners";
+import { classifyNoveltiesAgainstA } from "@/lib/cleanNovelties";
 import { findIntraSiteDuplicates } from "@/lib/intraSiteDups";
 import { filterFpProductsByModels, mergeModelLists, type ModelMatchMode } from "@/lib/model-filter";
 import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
 import { MAX_RUBRICS_B } from "@/lib/rubricIds";
 import { parsePartnersFeedCsv } from "@/lib/partnersFeedCsv";
 import { runCompare } from "@/lib/match";
-import { collectEanIndexKeys, countProductsWithEanIndexKeys } from "@/lib/product";
+import { collectEanIndexKeys, countProductsWithEanIndexKeys, toCompareProduct } from "@/lib/product";
 import type {
   AttrMatchOptions,
   CompareBrandFilterInfo,
@@ -28,15 +29,12 @@ import type {
   CompareResult,
   FpProduct,
   NameLocale,
-  NoveltiesB2BDupsResult,
   NoveltiesFullExportResult,
-  NoveltyB2BCompareProduct,
-  NoveltyB2BEanGroupRow,
-  NoveltyB2BNamePairRow,
   NoveltyIdsNoEanOnAResult,
   NoveltyIdsSliceResult,
   NoveltyIdsStageResult,
   SingleSiteDupsResult,
+  TwoFeedsCleanNoveltiesResult,
   UnlikelySearchInfo
 } from "@/lib/types";
 
@@ -502,6 +500,109 @@ export async function POST(req: NextRequest) {
     }
 
     const singleDupsMode = body.mode === "singleDups" || body.mode === "singleSiteDups";
+    const cleanNoveltiesMode = body.mode === "twoFeedsCleanNovelties";
+
+    if (feedsMode && cleanNoveltiesMode) {
+      const csvA = await resolveFeedCsvInput("Сайт A", body.feedUrlA, body.feedCsvTextA);
+      const csvB = await resolveFeedCsvInput("Сайт B", body.feedUrlB, body.feedCsvTextB);
+      const rawA = await parsePartnersFeedCsv(csvA);
+      const rawB = await parsePartnersFeedCsv(csvB);
+      const idsSeenA = new Set(rawA.map((p) => p.id));
+      let nfA = 0;
+      for (const id of excludeIdsRaw) {
+        if (!idsSeenA.has(id)) nfA++;
+      }
+      const appliedA = applyRubricFetchPipeline(rawA, pipeA, "A");
+      const excludeMetaA =
+        excludeIdsRaw.length > 0
+          ? { removedFromA: appliedA.excludeRemovedFromA, listIdsNotFoundInRubric: nfA }
+          : undefined;
+      let productsA = appliedA.out;
+      const appliedB = applyRubricFetchPipeline(rawB, pipeShared, "B");
+      let productsB = appliedB.out;
+
+      const feedToken = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
+      if (feedToken.length >= MIN_TOKEN_LEN) {
+        const enrichedA = await enrichFeedProductsFromApi(feedToken, siteVariation, productsA);
+        productsA = enrichedA.products;
+        const enrichedB = await enrichFeedProductsFromApi(feedToken, siteVariation, productsB);
+        productsB = enrichedB.products;
+      }
+
+      const idSetA = new Set(productsA.map((p) => p.id));
+      const noveltiesAll = productsB.filter((p) => !idSetA.has(p.id));
+
+      const cls = await classifyNoveltiesAgainstA(productsA, noveltiesAll, nameLocale, attrMatch);
+
+      const duplicatePairs: TwoFeedsCleanNoveltiesResult["duplicatePairs"] = [];
+      const duplicateNovelties: TwoFeedsCleanNoveltiesResult["duplicateNovelties"] = [];
+      const cleanNoveltiesOut: TwoFeedsCleanNoveltiesResult["cleanNovelties"] = [];
+
+      for (const c of cls.classifications) {
+        if (c.status === "duplicate") {
+          const matches = c.dups.map((d) => ({
+            kind: d.kind,
+            ...(d.ean ? { ean: d.ean } : {}),
+            productOnAId: d.productOnAId,
+            reasons: d.reasons,
+            ...(d.variantArticleOnB ? { variantArticleOnB: d.variantArticleOnB } : {})
+          }));
+          duplicateNovelties.push({ novelty: c.novelty, matches });
+          const cB = toCompareProduct(c.novelty);
+          for (const d of c.dups) {
+            duplicatePairs.push({
+              novelty: cB,
+              productOnA: d.productOnA,
+              productOnAId: d.productOnAId,
+              kind: d.kind,
+              ...(d.ean ? { ean: d.ean } : {}),
+              reasons: d.reasons,
+              ...(d.variantArticleOnB ? { variantArticleOnB: d.variantArticleOnB } : {})
+            });
+          }
+        } else if (c.status === "clean") {
+          cleanNoveltiesOut.push({ product: c.novelty, unverifiable: false });
+        } else {
+          cleanNoveltiesOut.push({ product: c.novelty, unverifiable: true });
+        }
+      }
+
+      const result: TwoFeedsCleanNoveltiesResult = {
+        resultKind: "twoFeedsCleanNovelties",
+        siteALabel,
+        siteBLabel,
+        nameLocale,
+        brandFilter: buildBrandFilterInfo(
+          brandsRaw,
+          brandMatch,
+          appliedA.brandExcludedMissing,
+          appliedA.brandExcludedNotInList,
+          appliedB.brandExcludedMissing,
+          appliedB.brandExcludedNotInList
+        ),
+        modelFilter: buildModelFilterInfo(
+          modelsRaw,
+          modelMatch,
+          appliedA.modelExcludedNotInList,
+          appliedB.modelExcludedNotInList
+        ),
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, excludeMetaA),
+        stats: {
+          countA: productsA.length,
+          countB: productsB.length,
+          noveltyCountById: noveltiesAll.length,
+          duplicates: cls.summary.duplicates,
+          dupPairsCount: cls.summary.dupPairsCount,
+          clean: cls.summary.clean,
+          unverifiable: cls.summary.unverifiable
+        },
+        duplicatePairs,
+        noveltiesAll,
+        cleanNovelties: cleanNoveltiesOut,
+        duplicateNovelties
+      };
+      return NextResponse.json(result);
+    }
 
     if (feedsMode) {
       if (singleDupsMode) {
@@ -588,66 +689,7 @@ export async function POST(req: NextRequest) {
       const productsA = appliedA.out;
       const appliedB = applyRubricFetchPipeline(rawB, pipeShared, "B");
       const productsB = appliedB.out;
-
-      const idsOnA = new Set(productsA.map((p) => p.id));
-      const noveltiesB = productsB.filter((p) => !idsOnA.has(p.id));
-
-      /** Уникализируем id в пуле: один и тот же id мог встретиться, но мы уже отсекли B \\ A.
-       *  На стороне A берём первый встретившийся объект. */
-      const poolMap = new Map<number, FpProduct>();
-      for (const p of productsA) poolMap.set(p.id, p);
-      for (const p of noveltiesB) {
-        if (!poolMap.has(p.id)) poolMap.set(p.id, p);
-      }
-      const pool = [...poolMap.values()];
-
-      const sideById = new Map<number, "A" | "B">();
-      for (const p of productsA) sideById.set(p.id, "A");
-      for (const p of noveltiesB) {
-        if (!sideById.has(p.id)) sideById.set(p.id, "B");
-      }
-
-      const dups = await findIntraSiteDuplicates(pool, nameLocale, attrMatch);
-
-      const annotate = (c: import("@/lib/types").CompareProduct): NoveltyB2BCompareProduct => ({
-        ...c,
-        side: sideById.get(c.id) ?? "A"
-      });
-
-      const eanGroups: NoveltyB2BEanGroupRow[] = dups.eanGroups
-        .filter((g) => {
-          const sides = new Set(g.products.map((c) => sideById.get(c.id)));
-          /** Оставляем только группы, в которых есть хотя бы одна B-новинка
-           *  (иначе это «дубли только внутри A», они и так есть в одиночном режиме). */
-          return sides.has("B");
-        })
-        .map((g) => ({
-          ean: g.ean,
-          products: g.products.map(annotate)
-        }));
-
-      const namePhotoPairs: NoveltyB2BNamePairRow[] = dups.namePhotoPairs
-        .filter(
-          (r) => sideById.get(r.a.id) === "B" || sideById.get(r.b.id) === "B"
-        )
-        .map((r) => ({
-          a: annotate(r.a),
-          b: annotate(r.b),
-          score: r.score,
-          matchReasons: r.matchReasons
-        }));
-
-      const novIdsWithDup = new Set<number>();
-      for (const g of eanGroups) {
-        for (const c of g.products) {
-          if (c.side === "B") novIdsWithDup.add(c.id);
-        }
-      }
-      for (const r of namePhotoPairs) {
-        if (r.a.side === "B") novIdsWithDup.add(r.a.id);
-        if (r.b.side === "B") novIdsWithDup.add(r.b.id);
-      }
-
+      const cmp = await runCompare(productsA, productsB, nameLocale, siteALabel, siteBLabel, attrMatch);
       const brandFilter = buildBrandFilterInfo(
         brandsRaw,
         brandMatch,
@@ -662,29 +704,13 @@ export async function POST(req: NextRequest) {
         appliedA.modelExcludedNotInList,
         appliedB.modelExcludedNotInList
       );
-
-      const result: NoveltiesB2BDupsResult = {
-        resultKind: "noveltiesB2BDups",
-        siteALabel,
-        siteBLabel,
-        nameLocale,
+      const result: CompareResult = {
+        ...cmp,
         brandFilter,
         modelFilter,
         excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, excludeMetaA),
-        stats: {
-          countA: productsA.length,
-          countB: productsB.length,
-          noveltiesBCount: noveltiesB.length,
-          noveltiesWithDupCount: novIdsWithDup.size,
-          noveltiesCleanCount: Math.max(0, noveltiesB.length - novIdsWithDup.size),
-          eanGroupsCount: eanGroups.length,
-          namePairsCount: namePhotoPairs.length,
-          ...(dups.nameTabStats ? { nameTabStats: dups.nameTabStats } : {})
-        },
-        noveltiesB,
-        noveltyIdsWithDup: [...novIdsWithDup].sort((a, b) => a - b),
-        eanGroups,
-        namePhotoPairs
+        unlikelySearch: buildUnlikelySearch(attrMatch),
+        catalogFromFeeds: true
       };
       return NextResponse.json(result);
     }

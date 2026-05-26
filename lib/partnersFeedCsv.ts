@@ -77,6 +77,8 @@ type Agg = {
   article: string;
   eans: Set<string>;
   images: string[];
+  /** Сырые строки из CSV: каждая строка = одна вариация (свой артикул + EAN). */
+  variants: { article: string; ean: string }[];
 };
 
 function parseImageUrls(cell: string): string[] {
@@ -108,6 +110,12 @@ function mergeAggs(aggs: Map<number, Agg>): FpProduct[] {
             }
           }
         : undefined;
+    const feedVariants = a.variants
+      .map((v) => ({
+        ...(v.article ? { article: v.article } : {}),
+        ...(v.ean ? { ean: v.ean } : {})
+      }))
+      .filter((v) => v.article || v.ean);
     list.push({
       id: a.id,
       name: a.name || `Товар ${a.id}`,
@@ -115,7 +123,8 @@ function mergeAggs(aggs: Map<number, Agg>): FpProduct[] {
       brand: a.brand ? { name: a.brand } : undefined,
       article: a.article || undefined,
       ...(eans.length ? { eans } : {}),
-      ...(pv ? { product_variation: pv as FpProduct["product_variation"] } : {})
+      ...(pv ? { product_variation: pv as FpProduct["product_variation"] } : {}),
+      ...(feedVariants.length ? { feedVariants } : {})
     });
   }
   list.sort((x, y) => x.id - y.id);
@@ -209,7 +218,8 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
         brand,
         article,
         eans: new Set<string>(),
-        images: []
+        images: [],
+        variants: []
       };
       aggs.set(id, agg);
     }
@@ -219,6 +229,13 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
     if (brand && !agg.brand) agg.brand = brand;
     if (article && !agg.article) agg.article = article;
     if (ean) agg.eans.add(ean);
+    /** Каждая строка фида — это вариант с собственным артикулом и EAN. Дубли (та же пара) не повторяем. */
+    if (article || ean) {
+      const exists = agg.variants.some(
+        (v) => v.article === article && v.ean === ean
+      );
+      if (!exists) agg.variants.push({ article, ean });
+    }
     for (const im of imgs) {
       if (!agg.images.includes(im)) agg.images.push(im);
     }

@@ -444,7 +444,7 @@ function checkVolumesForNameTab(
   return "one_unknown";
 }
 
-type NameTabReject =
+export type NameTabReject =
   | "brand_or_ean"
   | "name_words"
   | "model_sim"
@@ -454,7 +454,7 @@ type NameTabReject =
   | "model_line_distinct"
   | "photo_not_similar";
 
-function resolveNameTabPair(
+export function resolveNameTabPair(
   cI: CompareProduct,
   cJ: CompareProduct,
   nameLocale: NameLocale,

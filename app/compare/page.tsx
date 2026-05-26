@@ -107,13 +107,12 @@ import type {
   CompareProduct,
   CompareResult,
   FpProduct,
-  NoveltiesB2BDupsResult,
   NoveltiesFullExportResult,
-  NoveltyB2BCompareProduct,
   NoveltyIdsNoEanOnAResult,
   NoveltyIdsSliceResult,
   NoveltyIdsStageResult,
-  SingleSiteDupsResult
+  SingleSiteDupsResult,
+  TwoFeedsCleanNoveltiesResult
 } from "@/lib/types";
 import { ProductCell } from "@/components/ProductCell";
 import { AssistantBrand } from "@/components/AssistantBrand";
@@ -397,7 +396,7 @@ export default function ComparePage() {
   );
   /** После двух магазинов: только «новинки по id» на B или дубли новинок по артикулу против A */
   const [twoSiteGoal, setTwoSiteGoal] = useState<
-    "noveltiesById" | "dupContourAgainstA"
+    "noveltiesById" | "dupContourAgainstA" | "cleanNovelties"
   >("noveltiesById");
   /** Вместе с «название+фото»: учитывать объём / оттенок / цвет в JSON товара */
   const [attrMatch, setAttrMatch] = useState({
@@ -472,7 +471,7 @@ export default function ComparePage() {
     setModelText("");
     setError(null);
   }, []);
-  const [data, setData] = useState<CompareResult | SingleSiteDupsResult | NoveltiesB2BDupsResult | null>(null);
+  const [data, setData] = useState<CompareResult | SingleSiteDupsResult | null>(null);
   const compareAbortRef = useRef<AbortController | null>(null);
   const noveltyPreviewAbortRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
@@ -612,6 +611,136 @@ export default function ComparePage() {
     compareAbortRef.current?.abort();
   }, []);
 
+  /** Результат сценария «Чистый фид B vs A» — отдельно от основного `data`. */
+  const [cleanNoveltiesData, setCleanNoveltiesData] =
+    useState<TwoFeedsCleanNoveltiesResult | null>(null);
+
+  const runCleanNovelties = useCallback(async () => {
+    userCancelledRef.current = false;
+    setError(null);
+    setCleanNoveltiesData(null);
+    setData(null);
+    setLoading(true);
+    const ac = new AbortController();
+    compareAbortRef.current = ac;
+    const timeoutId = window.setTimeout(() => {
+      ac.abort();
+    }, COMPARE_FETCH_TIMEOUT_MS);
+    try {
+      if (rememberKeys) {
+        persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
+      }
+      const brandList = parseBrandListFromText(brandText);
+      const modelList = parseModelListFromText(modelText);
+      const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
+      const res = await fetch("/api/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ac.signal,
+        body: JSON.stringify({
+          mode: "twoFeedsCleanNovelties",
+          dataSource: "feeds",
+          feedUrlA: feedUrlA.trim() || undefined,
+          feedUrlB: feedUrlB.trim() || undefined,
+          feedCsvTextA:
+            !feedUrlA.trim() && feedCsvTextA.trim() ? feedCsvTextA : undefined,
+          feedCsvTextB:
+            !feedUrlB.trim() && feedCsvTextB.trim() ? feedCsvTextB : undefined,
+          nameLocale,
+          siteVariation,
+          tokenA: tokenA.trim() || undefined,
+          tokenB: tokenB.trim() || undefined,
+          siteALabel: siteLabelA.trim() || undefined,
+          siteBLabel: siteLabelB.trim() || undefined,
+          brands: brandList.length > 0 ? brandList : undefined,
+          brandMatch: brandMatchContains ? "contains" : "exact",
+          models: modelList.length > 0 ? modelList : undefined,
+          modelMatch: modelMatchContains ? "contains" : "exact",
+          excludeIdsA: excludeList.length > 0 ? excludeList : undefined,
+          attrMatch:
+            attrMatch.volume || attrMatch.shade || attrMatch.color
+              ? attrMatch
+              : undefined
+        })
+      });
+      const raw = await res.text();
+      let json: (TwoFeedsCleanNoveltiesResult & { error?: string }) | { error?: string };
+      try {
+        json = (raw ? JSON.parse(raw) : {}) as typeof json;
+      } catch {
+        const oneLine = raw.replace(/\s+/g, " ").trim();
+        setError(
+          `Ответ сервера не JSON (HTTP ${res.status}). Фрагмент: ${oneLine.slice(0, 220) || "—"}`
+        );
+        return;
+      }
+      if (!res.ok || ("error" in json && json.error)) {
+        setError(("error" in json && json.error) || `Ошибка ${res.status}`);
+        return;
+      }
+      setCleanNoveltiesData(json as TwoFeedsCleanNoveltiesResult);
+      window.setTimeout(() => {
+        const el = document.getElementById("rep-clean-novelties");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    } catch (e) {
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (isAbort) {
+        setError(
+          userCancelledRef.current
+            ? "Запрос отменён."
+            : "Слишком долго: запрос остановлен (тайм‑аут 30 мин). Сузьте бренды или повторите позже."
+        );
+      } else {
+        setError(e instanceof Error ? e.message : "Сеть");
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      compareAbortRef.current = null;
+      userCancelledRef.current = false;
+      setLoading(false);
+    }
+  }, [
+    rememberKeys,
+    persistKeys,
+    tokenA,
+    tokenB,
+    siteLabelA,
+    siteLabelB,
+    brandText,
+    modelText,
+    excludeIdsText,
+    feedUrlA,
+    feedUrlB,
+    feedCsvTextA,
+    feedCsvTextB,
+    nameLocale,
+    siteVariation,
+    brandMatchContains,
+    modelMatchContains,
+    attrMatch
+  ]);
+
+  const downloadCleanNoveltiesXlsx = useCallback(async () => {
+    if (!cleanNoveltiesData) return;
+    setError(null);
+    try {
+      const { downloadCleanNoveltiesExcel } = await import(
+        "@/lib/exportCleanNovelties"
+      );
+      await downloadCleanNoveltiesExcel(
+        cleanNoveltiesData,
+        cleanNoveltiesData.nameLocale
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Не удалось сформировать Excel (нужен пакет xlsx)"
+      );
+    }
+  }, [cleanNoveltiesData]);
+
   const run = useCallback(async () => {
     userCancelledRef.current = false;
     setError(null);
@@ -720,10 +849,12 @@ export default function ComparePage() {
         setError(String(json.error));
         return;
       }
-      const cmp = json as CompareResult | SingleSiteDupsResult | NoveltiesB2BDupsResult;
+      const cmp = json as CompareResult | SingleSiteDupsResult;
       setData(cmp);
-      const kind = "resultKind" in cmp ? cmp.resultKind : undefined;
-      if (compareMode === "twoSite" && kind !== "singleSiteDups" && kind !== "noveltiesB2BDups") {
+      if (
+        compareMode === "twoSite" &&
+        !("resultKind" in cmp && cmp.resultKind === "singleSiteDups")
+      ) {
         selectReportView(
           twoSiteGoal === "noveltiesById" ? "notOnA" : "crossBvsA",
           {
@@ -733,14 +864,6 @@ export default function ComparePage() {
                 : "rep-cross-b-vs-a"
           }
         );
-      }
-      if (kind === "noveltiesB2BDups") {
-        setTimeout(() => {
-          document.getElementById("rep-novelties-b2b")?.scrollIntoView({
-            behavior: "smooth",
-            block: "start"
-          });
-        }, 0);
       }
     } catch (e) {
       const isAbort = e instanceof Error && e.name === "AbortError";
@@ -1420,11 +1543,8 @@ export default function ComparePage() {
         setError(String(json.error));
         return;
       }
-      const cmp = json as CompareResult | SingleSiteDupsResult | NoveltiesB2BDupsResult;
-      if (
-        "resultKind" in cmp &&
-        (cmp.resultKind === "singleSiteDups" || cmp.resultKind === "noveltiesB2BDups")
-      ) {
+      const cmp = json as CompareResult | SingleSiteDupsResult;
+      if ("resultKind" in cmp && cmp.resultKind === "singleSiteDups") {
         setError("Неожиданный режим ответа.");
         return;
       }
@@ -1470,23 +1590,26 @@ export default function ComparePage() {
     selectReportView
   ]);
 
-  /** Основная задача страницы (три понятных сценария для контента) */
+  /** Основная задача страницы (четыре понятных сценария для контента) */
   type CatalogMainTask =
     | "singleDups"
     | "twoSite_noveltiesById"
-    | "twoSite_dupContour";
+    | "twoSite_dupContour"
+    | "twoSite_cleanNovelties";
 
   const catalogMainTask: CatalogMainTask = useMemo(() => {
     if (compareMode === "singleDups") return "singleDups";
-    return twoSiteGoal === "noveltiesById"
-      ? "twoSite_noveltiesById"
-      : "twoSite_dupContour";
+    if (twoSiteGoal === "noveltiesById") return "twoSite_noveltiesById";
+    if (twoSiteGoal === "cleanNovelties") return "twoSite_cleanNovelties";
+    return "twoSite_dupContour";
   }, [compareMode, twoSiteGoal]);
 
   /** Текст главной кнопки запуска (без «Загрузка…») */
   const primaryRunButtonLabel = useMemo(() => {
     if (compareMode === "singleDups") return "Найти дубли";
-    return twoSiteGoal === "noveltiesById" ? "Найти новинки" : "Сравнить витрины";
+    if (twoSiteGoal === "noveltiesById") return "Найти новинки";
+    if (twoSiteGoal === "cleanNovelties") return "Найти новинки и дубли с A";
+    return "Сравнить витрины";
   }, [compareMode, twoSiteGoal]);
 
   const applyCatalogMainTask = useCallback((t: CatalogMainTask) => {
@@ -1496,10 +1619,14 @@ export default function ComparePage() {
       return;
     }
     setCompareMode("twoSite");
-    const goal =
-      t === "twoSite_noveltiesById" ? "noveltiesById" : "dupContourAgainstA";
+    const goal: "noveltiesById" | "dupContourAgainstA" | "cleanNovelties" =
+      t === "twoSite_noveltiesById"
+        ? "noveltiesById"
+        : t === "twoSite_cleanNovelties"
+          ? "cleanNovelties"
+          : "dupContourAgainstA";
     setTwoSiteGoal(goal);
-    if (goal === "noveltiesById") {
+    if (goal === "noveltiesById" || goal === "cleanNovelties") {
       setUseNoveltyIdsForSiteB(false);
     }
   }, []);
@@ -1512,6 +1639,8 @@ export default function ComparePage() {
         return "Товары-новинки на второй витрине (нет того же id на A)";
       case "twoSite_dupContour":
         return "Кандидаты в дубль между витринами";
+      case "twoSite_cleanNovelties":
+        return "Чистый фид B: новинки без дублей на A (по EAN и названию/фото)";
       default:
         return "";
     }
@@ -1736,22 +1865,15 @@ export default function ComparePage() {
   }, [assistantSteps, loading, primaryRunButtonLabel]);
 
   const isSingleDups = (
-    d: CompareResult | SingleSiteDupsResult | NoveltiesB2BDupsResult | null
+    d: CompareResult | SingleSiteDupsResult | null
   ): d is SingleSiteDupsResult =>
     d != null && "resultKind" in d && d.resultKind === "singleSiteDups";
-
-  const isNoveltiesB2BDups = (
-    d: CompareResult | SingleSiteDupsResult | NoveltiesB2BDupsResult | null
-  ): d is NoveltiesB2BDupsResult =>
-    d != null && "resultKind" in d && d.resultKind === "noveltiesB2BDups";
 
   /** Подписи A/B для панели отчётов до и после загрузки результата */
   const reportLabels = useMemo(() => {
     const defA = siteLabelA.trim() || "Сайт A";
     const defB = siteLabelB.trim() || "Сайт B";
-    if (data && !isSingleDups(data) && !isNoveltiesB2BDups(data))
-      return { siteA: data.siteALabel, siteB: data.siteBLabel };
-    if (data && isNoveltiesB2BDups(data))
+    if (data && !isSingleDups(data))
       return { siteA: data.siteALabel, siteB: data.siteBLabel };
     return { siteA: defA, siteB: defB };
   }, [data, siteLabelA, siteLabelB]);
@@ -1810,7 +1932,7 @@ export default function ComparePage() {
 
   /** Строки толькоBCrossWithA по слоям (для счётчиков переключателей второго контура). */
   const crossRowKindCounts = useMemo(() => {
-    if (!data || isSingleDups(data) || isNoveltiesB2BDups(data)) {
+    if (!data || isSingleDups(data)) {
       return { codeLayer: 0, nameAttr: 0, unlikely: 0, total: 0 };
     }
     let codeLayer = 0;
@@ -1918,10 +2040,7 @@ export default function ComparePage() {
   }, [data, aiDupPassesSoftDup]);
 
   const algorithmPairKeysForReport = useMemo(
-    () =>
-      data && !isNoveltiesB2BDups(data)
-        ? buildAlgorithmPairKeys(data)
-        : new Set<string>(),
+    () => (data ? buildAlgorithmPairKeys(data) : new Set<string>()),
     [data]
   );
 
@@ -1943,7 +2062,7 @@ export default function ComparePage() {
     key: string;
     inReport: boolean;
   }[] => {
-    if (!data || isNoveltiesB2BDups(data)) {
+    if (!data) {
       return [];
     }
     const byId = collectProductsForAiLookup(data);
@@ -2099,10 +2218,6 @@ export default function ComparePage() {
 
   const runOpenAiDupRefine = useCallback(async () => {
     if (!data) return;
-    if (isNoveltiesB2BDups(data)) {
-      setAiDupErr("AI-проверка пока недоступна в режиме «Новинки B + дубли с A»");
-      return;
-    }
     const key = openAiKey.trim();
     if (!looksLikeOpenAiApiKey(key)) {
       setAiDupErr("Нужен ключ OpenAI API (sk-… или sk-proj-…)");
@@ -3025,7 +3140,7 @@ export default function ComparePage() {
           <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
             Что хотим сделать?
           </p>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <button
               type="button"
               onClick={() => applyCatalogMainTask("singleDups")}
@@ -3076,6 +3191,26 @@ export default function ComparePage() {
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
                 Две витрины: таблица «карточка на A — похожая на B» (код, название, фото). Внутри могут быть
                 и надёжные совпадения по штрихкоду — смотреть нужно каждую строку.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => applyCatalogMainTask("twoSite_cleanNovelties")}
+              className={`rounded-xl border-2 p-4 text-left transition ${
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? "border-emerald-600 bg-emerald-50/70 shadow-sm ring-1 ring-emerald-200/60"
+                  : "border-slate-200 bg-white hover:border-amber-300/80"
+              }`}
+            >
+              <p className="text-sm font-bold text-slate-900 leading-snug">
+                Чистый фид B: новинки без дублей на A
+              </p>
+              <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                Только для CSV-фидов. За один запуск: 1) новинки B (нет того же id на A),
+                2) поиск дублей среди новинок на A — по EAN и по{" "}
+                <strong className="font-semibold text-slate-800">бренду + модели + фото</strong>,
+                3) Excel из трёх листов: новинки, дубли, чистый фид (с пометкой
+                «не удалось проверить», если нет EAN и фото).
               </p>
             </button>
           </div>
@@ -4688,7 +4823,7 @@ export default function ComparePage() {
                 </span>
               </p>
             )}
-            {data && !isSingleDups(data) && !isNoveltiesB2BDups(data) && (
+            {data && !isSingleDups(data) && (
               <p className="text-sm text-emerald-900 rounded-xl bg-emerald-50/80 border border-emerald-200 px-4 py-3 leading-relaxed flex flex-col gap-2">
                 <span className="block">Расчёт готов.</span>
                 <span className="block">
@@ -4696,14 +4831,6 @@ export default function ComparePage() {
                   отчёты».
                 </span>
                 <span className="block text-emerald-950/90">Заново загружать каталоги не нужно.</span>
-              </p>
-            )}
-            {data && isNoveltiesB2BDups(data) && (
-              <p className="text-sm text-emerald-900 rounded-xl bg-emerald-50/80 border border-emerald-200 px-4 py-3 leading-relaxed flex flex-col gap-2">
-                <span className="block">Новинки на B и дубли посчитаны.</span>
-                <span className="block">
-                  Скачайте полный список новинок или только «чистый» список без дублей — кнопки ниже.
-                </span>
               </p>
             )}
           </section>
@@ -4760,12 +4887,24 @@ export default function ComparePage() {
             <div className="flex flex-col gap-3 items-center px-4 pb-6 pt-2 rounded-b-2xl border-t border-slate-200/80 bg-gradient-to-b from-amber-50/40 via-white to-slate-50/30 shadow-inner sm:px-6">
           <button
               type="button"
-              onClick={run}
-              disabled={comparePrimaryDisabled}
+              onClick={
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? runCleanNovelties
+                  : run
+              }
+              disabled={
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? loading || catalogSource !== "feeds"
+                  : comparePrimaryDisabled
+              }
               title={
-                comparePrimaryDisabled
-                  ? "Сначала укажите id рубрик (см. поля выше) или дождитесь загрузки"
-                  : "Запустить расчёт"
+                catalogMainTask === "twoSite_cleanNovelties"
+                  ? catalogSource !== "feeds"
+                    ? "Доступно только в режиме CSV-фидов. Переключите источник на «Фиды»."
+                    : "Запустить расчёт чистого фида B"
+                  : comparePrimaryDisabled
+                    ? "Сначала укажите id рубрик (см. поля выше) или дождитесь загрузки"
+                    : "Запустить расчёт"
               }
               className="min-w-[min(100%,18rem)] rounded-2xl bg-[#ffd740] text-[#0a0a0a] border border-black/10 px-8 py-3.5 text-base font-bold shadow-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#f5cd38] cursor-pointer ring-2 ring-amber-200/30 hover:ring-amber-400/40 transition"
             >
@@ -5646,194 +5785,7 @@ export default function ComparePage() {
         );
       })()}
 
-      {data && isNoveltiesB2BDups(data) && (() => {
-        const d = data;
-        const s = d.stats;
-        const novIdsWithDup = new Set(d.noveltyIdsWithDup);
-        const cleanNovelties = d.noveltiesB.filter((p) => !novIdsWithDup.has(p.id));
-        const fileBase = (d.siteBLabel || "B").replace(/\s+/g, "_");
-        const sideBadge = (c: NoveltyB2BCompareProduct) => (
-          <span
-            className={
-              "inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold mr-2 align-middle " +
-              (c.side === "A"
-                ? "bg-slate-200 text-slate-800"
-                : "bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300")
-            }
-          >
-            {c.side === "A" ? d.siteALabel : d.siteBLabel}
-          </span>
-        );
-        return (
-          <div id="rep-novelties-b2b" className="space-y-6">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5">
-              <h2 className="text-lg font-semibold text-slate-900 mb-3">
-                Новинки на {d.siteBLabel} и дубли с {d.siteALabel}
-              </h2>
-              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-700 mb-4">
-                <span>
-                  {d.siteALabel}: <strong className="tabular-nums">{s.countA}</strong>
-                </span>
-                <span>
-                  {d.siteBLabel}: <strong className="tabular-nums">{s.countB}</strong>
-                </span>
-                <span>
-                  Новинок на {d.siteBLabel} (нет id на {d.siteALabel}):{" "}
-                  <strong className="tabular-nums text-emerald-900">{s.noveltiesBCount}</strong>
-                </span>
-                <span>
-                  С дублями:{" "}
-                  <strong className="tabular-nums text-amber-800">{s.noveltiesWithDupCount}</strong>
-                </span>
-                <span>
-                  Чистые (без дублей):{" "}
-                  <strong className="tabular-nums text-emerald-900">
-                    {s.noveltiesCleanCount}
-                  </strong>
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm hover:bg-slate-800 disabled:opacity-50"
-                  disabled={!d.noveltiesB.length}
-                  onClick={async () => {
-                    const { downloadFullFpProductsExcel } = await import("@/lib/exportOnlyB");
-                    await downloadFullFpProductsExcel(d.noveltiesB, d.nameLocale, fileBase);
-                  }}
-                >
-                  Скачать все новинки {d.siteBLabel} ({s.noveltiesBCount})
-                </button>
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-sm hover:bg-emerald-800 disabled:opacity-50"
-                  disabled={!cleanNovelties.length}
-                  onClick={async () => {
-                    const { downloadFullFpProductsExcel } = await import("@/lib/exportOnlyB");
-                    await downloadFullFpProductsExcel(
-                      cleanNovelties,
-                      d.nameLocale,
-                      `${fileBase}_без_дублей`
-                    );
-                  }}
-                  title="Только новинки B, у которых нет ни одного дубля с A и между собой"
-                >
-                  Скачать новинки {d.siteBLabel} без дублей ({s.noveltiesCleanCount})
-                </button>
-              </div>
-            </div>
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-5">
-              <h3 className="text-base font-semibold text-slate-900 mb-2">
-                Дубли по EAN{" "}
-                <span className="text-amber-800 tabular-nums">({s.eanGroupsCount})</span>
-              </h3>
-              <p className="text-xs text-slate-500 mb-3">
-                Группа = один EAN, в которой пересекаются товары с {d.siteALabel} и/или с новинками{" "}
-                {d.siteBLabel}. Группы только из {d.siteALabel} скрыты — это «внутренние» дубли A.
-              </p>
-              {s.eanGroupsCount === 0 ? (
-                <p className="text-sm text-slate-500">Нет</p>
-              ) : (
-                <div className="space-y-4">
-                  {d.eanGroups.map((g) => (
-                    <div
-                      key={g.ean}
-                      className="rounded-xl border border-slate-200 bg-white p-4"
-                    >
-                      <p className="text-xs font-mono text-slate-600 mb-3">EAN {g.ean}</p>
-                      <div className="grid sm:grid-cols-2 gap-4">
-                        {g.products.map((c) => (
-                          <div key={c.id} className="min-w-0">
-                            <div className="mb-1">{sideBadge(c)}</div>
-                            <ProductCell
-                              c={c}
-                              siteLabel={c.side === "A" ? d.siteALabel : d.siteBLabel}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-5">
-              <h3 className="text-base font-semibold text-slate-900 mb-2">
-                Дубли по названию: бренд + модель + объём + фото{" "}
-                <span className="text-amber-800 tabular-nums">({s.namePairsCount})</span>
-              </h3>
-              <p className="text-xs text-slate-500 mb-3">
-                Пары показываются только если хотя бы одна карточка — новинка с {d.siteBLabel}.
-              </p>
-              {s.nameTabStats && (
-                <div className="text-xs text-slate-600 mb-3 px-3 py-2 rounded border border-slate-200 bg-slate-50">
-                  <span className="font-medium text-slate-800">Диагностика:</span>{" "}
-                  кандидатов в брендах{" "}
-                  <strong className="tabular-nums">
-                    {s.nameTabStats.pairsInBrandBuckets}
-                  </strong>
-                  , отсев — другой бренд/EAN:{" "}
-                  <strong className="tabular-nums">{s.nameTabStats.droppedBrandOrEan}</strong>
-                  , нет фото:{" "}
-                  <strong className="tabular-nums">{s.nameTabStats.droppedNoPhoto}</strong>
-                  , низкое сходство модели:{" "}
-                  <strong className="tabular-nums">{s.nameTabStats.droppedModelSim}</strong>
-                  , конфликт объёма:{" "}
-                  <strong className="tabular-nums">{s.nameTabStats.droppedVolume}</strong>
-                  , непохожее фото:{" "}
-                  <strong className="tabular-nums">{s.nameTabStats.droppedPhoto}</strong>
-                  , осталось:{" "}
-                  <strong className="tabular-nums text-amber-800">
-                    {s.nameTabStats.kept}
-                  </strong>
-                  {s.nameTabStats.photoPhashSkipped ? (
-                    <span className="text-rose-700">
-                      {" "}
-                      · превышен лимит загрузок фото — phash отключён
-                    </span>
-                  ) : null}
-                  .
-                </div>
-              )}
-              {s.namePairsCount === 0 ? (
-                <p className="text-sm text-slate-500">Нет</p>
-              ) : (
-                <div className="space-y-3">
-                  {d.namePhotoPairs.map((row, i) => (
-                    <div
-                      key={`${row.a.id}-${row.b.id}-${i}`}
-                      className="grid sm:grid-cols-2 gap-4 p-4 rounded-xl border border-slate-200 bg-amber-50/40"
-                    >
-                      <div>
-                        <div className="mb-1">{sideBadge(row.a)}</div>
-                        <ProductCell
-                          c={row.a}
-                          siteLabel={row.a.side === "A" ? d.siteALabel : d.siteBLabel}
-                        />
-                      </div>
-                      <div>
-                        <div className="mb-1">{sideBadge(row.b)}</div>
-                        <ProductCell
-                          c={row.b}
-                          siteLabel={row.b.side === "A" ? d.siteALabel : d.siteBLabel}
-                        />
-                      </div>
-                      <div className="sm:col-span-2 text-xs text-slate-600">
-                        балл: <strong>{(row.score * 100).toFixed(0)}%</strong>{" "}
-                        {row.matchReasons.length ? `(${row.matchReasons.join(" + ")})` : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        );
-      })()}
-
-      {data && !isSingleDups(data) && !isNoveltiesB2BDups(data) && (
+      {data && !isSingleDups(data) && (
         <>
           <div
             className="mb-6 rounded-2xl border border-sky-200/90 bg-gradient-to-br from-sky-50/90 via-white to-slate-50/40 p-5 shadow-sm ring-1 ring-sky-100/60"
@@ -7281,6 +7233,81 @@ export default function ComparePage() {
             </>
           )}
         </>
+      )}
+
+      {cleanNoveltiesData && (
+        <section
+          id="rep-clean-novelties"
+          className="mt-6 rounded-2xl border border-emerald-300/80 bg-emerald-50/40 p-4 sm:p-6 scroll-mt-24"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 className="text-base font-bold text-emerald-950">
+              Чистый фид {cleanNoveltiesData.siteBLabel} (без дублей на {cleanNoveltiesData.siteALabel})
+            </h2>
+            <button
+              type="button"
+              onClick={() => void downloadCleanNoveltiesXlsx()}
+              className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 transition"
+            >
+              Скачать Excel (3 листа)
+            </button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Новинки на {cleanNoveltiesData.siteBLabel} (нет id на A)</p>
+              <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.noveltyCountById}</p>
+              <p className="text-[11px] text-slate-500">из {cleanNoveltiesData.stats.countB} на B / {cleanNoveltiesData.stats.countA} на A</p>
+            </div>
+            <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Найдено дублей с {cleanNoveltiesData.siteALabel}</p>
+              <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.duplicates}</p>
+              <p className="text-[11px] text-slate-500">{cleanNoveltiesData.stats.dupPairsCount} пар</p>
+            </div>
+            <div className="rounded-xl border border-emerald-300 bg-white px-3 py-2">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Чистые (нет дубля)</p>
+              <p className="text-lg font-bold text-emerald-900 tabular-nums">{cleanNoveltiesData.stats.clean}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Не удалось проверить</p>
+              <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.unverifiable}</p>
+              <p className="text-[11px] text-slate-500">нет EAN и фото</p>
+            </div>
+          </div>
+          {cleanNoveltiesData.duplicatePairs.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-white p-3">
+              <h3 className="text-sm font-semibold text-slate-800 mb-2">
+                Пары «новинка {cleanNoveltiesData.siteBLabel} ↔ дубль на {cleanNoveltiesData.siteALabel}» (до 100)
+              </h3>
+              <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
+                {cleanNoveltiesData.duplicatePairs.slice(0, 100).map((pair, i) => (
+                  <div
+                    key={`cln-${i}-${pair.novelty.id}-${pair.productOnAId}-${pair.kind}`}
+                    className="p-3 rounded-lg border border-amber-100 bg-amber-50/30 space-y-2"
+                  >
+                    <p className="text-[10px] uppercase tracking-wide text-amber-900 font-medium">
+                      {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
+                      {pair.variantArticleOnB
+                        ? ` · вариация B арт. ${pair.variantArticleOnB}`
+                        : ""}
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      <ProductCell c={pair.productOnA} siteLabel={cleanNoveltiesData.siteALabel} />
+                      <ProductCell c={pair.novelty} siteLabel={cleanNoveltiesData.siteBLabel} />
+                    </div>
+                    {pair.reasons.length > 0 && (
+                      <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {cleanNoveltiesData.duplicatePairs.length > 100 && (
+                <p className="text-xs text-slate-500 mt-2">
+                  Показаны первые 100 пар. Полная таблица в Excel (лист «Найденные дубли»).
+                </p>
+              )}
+            </div>
+          )}
+        </section>
       )}
 
       <nav className="fixed bottom-0 left-0 right-0 border-t border-slate-200/90 bg-white/95 backdrop-blur text-sm flex flex-wrap justify-center gap-4 sm:gap-6 py-2 px-2 text-slate-600 shadow-[0_-4px_20px_rgba(15,23,42,0.04)]">
