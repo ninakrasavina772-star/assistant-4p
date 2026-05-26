@@ -741,6 +741,39 @@ export default function ComparePage() {
     }
   }, [cleanNoveltiesData]);
 
+  /** Скачивание отдельных листов «Чистого фида»: новинки / дубли / чистые / не проверено. */
+  const downloadCleanNoveltiesPart = useCallback(
+    async (
+      part:
+        | "noveltiesAll"
+        | "duplicatesOnly"
+        | "cleanOnly"
+        | "unverifiableOnly"
+    ) => {
+      if (!cleanNoveltiesData) return;
+      setError(null);
+      try {
+        const mod = await import("@/lib/exportCleanNovelties");
+        const fn =
+          part === "noveltiesAll"
+            ? mod.downloadNoveltiesAllOnlyExcel
+            : part === "duplicatesOnly"
+              ? mod.downloadDuplicatesOnlyExcel
+              : part === "cleanOnly"
+                ? mod.downloadCleanOnlyExcel
+                : mod.downloadUnverifiableOnlyExcel;
+        await fn(cleanNoveltiesData, cleanNoveltiesData.nameLocale);
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Не удалось сформировать Excel (нужен пакет xlsx)"
+        );
+      }
+    },
+    [cleanNoveltiesData]
+  );
+
   const run = useCallback(async () => {
     userCancelledRef.current = false;
     setError(null);
@@ -7277,24 +7310,57 @@ export default function ComparePage() {
             </button>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
-            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
+            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2 flex flex-col">
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Новинки на {cleanNoveltiesData.siteBLabel} (нет id на A)</p>
               <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.noveltyCountById}</p>
-              <p className="text-[11px] text-slate-500">из {cleanNoveltiesData.stats.countB} на B / {cleanNoveltiesData.stats.countA} на A</p>
+              <p className="text-[11px] text-slate-500 mb-2">из {cleanNoveltiesData.stats.countB} на B / {cleanNoveltiesData.stats.countA} на A</p>
+              <button
+                type="button"
+                onClick={() => void downloadCleanNoveltiesPart("noveltiesAll")}
+                disabled={cleanNoveltiesData.stats.noveltyCountById === 0}
+                className="mt-auto rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Excel: все новинки
+              </button>
             </div>
-            <div className="rounded-xl border border-amber-200 bg-white px-3 py-2">
+            <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 flex flex-col">
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Найдено дублей с {cleanNoveltiesData.siteALabel}</p>
               <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.duplicates}</p>
-              <p className="text-[11px] text-slate-500">{cleanNoveltiesData.stats.dupPairsCount} пар</p>
+              <p className="text-[11px] text-slate-500 mb-2">{cleanNoveltiesData.stats.dupPairsCount} пар</p>
+              <button
+                type="button"
+                onClick={() => void downloadCleanNoveltiesPart("duplicatesOnly")}
+                disabled={cleanNoveltiesData.stats.duplicates === 0}
+                className="mt-auto rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Excel: дубли (пары)
+              </button>
             </div>
-            <div className="rounded-xl border border-emerald-300 bg-white px-3 py-2">
+            <div className="rounded-xl border border-emerald-300 bg-white px-3 py-2 flex flex-col">
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Чистые (нет дубля)</p>
               <p className="text-lg font-bold text-emerald-900 tabular-nums">{cleanNoveltiesData.stats.clean}</p>
+              <p className="text-[11px] text-slate-500 mb-2">можно лить на A</p>
+              <button
+                type="button"
+                onClick={() => void downloadCleanNoveltiesPart("cleanOnly")}
+                disabled={cleanNoveltiesData.stats.clean === 0}
+                className="mt-auto rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Excel: чистые
+              </button>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex flex-col">
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Не удалось проверить</p>
               <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.unverifiable}</p>
-              <p className="text-[11px] text-slate-500">нет EAN и фото</p>
+              <p className="text-[11px] text-slate-500 mb-2">нет EAN и фото</p>
+              <button
+                type="button"
+                onClick={() => void downloadCleanNoveltiesPart("unverifiableOnly")}
+                disabled={cleanNoveltiesData.stats.unverifiable === 0}
+                className="mt-auto rounded-md border border-slate-300 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Excel: не проверено
+              </button>
             </div>
           </div>
           {cleanNoveltiesData.duplicatePairs.length > 0 && (

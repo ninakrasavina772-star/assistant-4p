@@ -82,33 +82,22 @@ function kindRu(kind: "ean" | "name_photo"): string {
   return kind === "ean" ? "EAN (один штрихкод)" : "название + фото";
 }
 
-/**
- * Один Excel с тремя листами:
- *  1) Новинки B — все товары B, нет id на A. С колонкой «Статус» (дубль/чистая/не проверено).
- *  2) Найденные дубли — одна строка на пару (новинка B ↔ карточка A).
- *  3) Чистые + не проверено — товары B без дубля на A. Колонка «Статус проверки».
- */
-export async function downloadCleanNoveltiesExcel(
-  result: TwoFeedsCleanNoveltiesResult,
-  nameLocale: NameLocale
-): Promise<void> {
-  if (typeof window === "undefined") return;
-  const XLSX = await import("xlsx");
-
-  /** id → статус (дубль/чистая/не проверено) и список id на A. */
-  const statusById = new Map<
+function statusByIdMap(
+  result: TwoFeedsCleanNoveltiesResult
+): Map<number, { status: string; aIds: number[]; kinds: Set<string> }> {
+  const m = new Map<
     number,
     { status: string; aIds: number[]; kinds: Set<string> }
   >();
   for (const dn of result.duplicateNovelties) {
-    statusById.set(dn.novelty.id, {
+    m.set(dn.novelty.id, {
       status: "дубль на A",
-      aIds: dn.matches.map((m) => m.productOnAId),
-      kinds: new Set(dn.matches.map((m) => kindRu(m.kind)))
+      aIds: dn.matches.map((mm) => mm.productOnAId),
+      kinds: new Set(dn.matches.map((mm) => kindRu(mm.kind)))
     });
   }
   for (const cn of result.cleanNovelties) {
-    statusById.set(cn.product.id, {
+    m.set(cn.product.id, {
       status: cn.unverifiable
         ? "не удалось проверить (нет EAN и фото)"
         : "чистая (нет дубля на A)",
@@ -116,9 +105,15 @@ export async function downloadCleanNoveltiesExcel(
       kinds: new Set()
     });
   }
+  return m;
+}
 
-  // --- Лист 1: все новинки B ---
-  const sheet1Rows = result.noveltiesAll.map((p) => {
+function buildSheet1Rows(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Record<string, string>[] {
+  const statusById = statusByIdMap(result);
+  return result.noveltiesAll.map((p) => {
     const st = statusById.get(p.id);
     return clipRow({
       Статус: st?.status ?? "—",
@@ -129,12 +124,15 @@ export async function downloadCleanNoveltiesExcel(
       ...baseColsForB(p, nameLocale)
     });
   });
+}
 
-  // --- Лист 2: найденные дубли (одна строка на пару) ---
+function buildSheet2Rows(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Record<string, string>[] {
   const idToNovelty = new Map<number, FpProduct>();
   for (const p of result.noveltiesAll) idToNovelty.set(p.id, p);
-
-  const sheet2Rows = result.duplicatePairs.map((pair) => {
+  return result.duplicatePairs.map((pair) => {
     const noveltyFp = idToNovelty.get(pair.novelty.id);
     const bBlock = noveltyFp
       ? baseColsForB(noveltyFp, nameLocale)
@@ -151,7 +149,6 @@ export async function downloadCleanNoveltiesExcel(
           Остаток: "",
           Описание: ""
         };
-    /** На листе «Дубли» — префикс «B» к id, чтобы не путать с A. */
     const bWithPrefix: Record<string, string> = {};
     for (const [k, v] of Object.entries(bBlock)) {
       const key =
@@ -169,44 +166,135 @@ export async function downloadCleanNoveltiesExcel(
       ...colsForA(pair.productOnA, nameLocale, result.siteALabel)
     });
   });
+}
 
-  // --- Лист 3: чистые + не проверено ---
-  const sheet3Rows = result.cleanNovelties.map((c) =>
-    clipRow({
-      "Статус проверки": c.unverifiable
-        ? "⚠ не удалось проверить (нет EAN и нет фото)"
-        : "✓ дубля на A не найдено",
-      ...baseColsForB(c.product, nameLocale)
+function buildSheet3Rows(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale,
+  filter: "all" | "clean_only" | "unverifiable_only"
+): Record<string, string>[] {
+  return result.cleanNovelties
+    .filter((c) => {
+      if (filter === "clean_only") return !c.unverifiable;
+      if (filter === "unverifiable_only") return c.unverifiable;
+      return true;
     })
-  );
+    .map((c) =>
+      clipRow({
+        "Статус проверки": c.unverifiable
+          ? "⚠ не удалось проверить (нет EAN и нет фото)"
+          : "✓ дубля на A не найдено",
+        ...baseColsForB(c.product, nameLocale)
+      })
+    );
+}
 
+function sanitize(s: string): string {
+  return (s || "").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 40);
+}
+
+function dateStamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function fileBase(result: TwoFeedsCleanNoveltiesResult): string {
+  return `${sanitize(result.siteBLabel || "B")}_vs_${sanitize(result.siteALabel || "A")}_${dateStamp()}`;
+}
+
+async function writeSingleSheet(
+  rows: Record<string, string>[],
+  sheetName: string,
+  fileName: string,
+  emptyMessage: string
+): Promise<void> {
+  if (typeof window === "undefined") return;
+  const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     wb,
-    XLSX.utils.json_to_sheet(
-      sheet1Rows.length > 0 ? sheet1Rows : [{ Сообщение: "Новинки не найдены" }]
-    ),
+    XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ Сообщение: emptyMessage }]),
+    sheetName.slice(0, 28)
+  );
+  XLSX.writeFile(wb, fileName);
+}
+
+/** Один Excel с тремя листами: все новинки, дубли, чистые+не проверено. */
+export async function downloadCleanNoveltiesExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Promise<void> {
+  if (typeof window === "undefined") return;
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  const s1 = buildSheet1Rows(result, nameLocale);
+  const s2 = buildSheet2Rows(result, nameLocale);
+  const s3 = buildSheet3Rows(result, nameLocale, "all");
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(s1.length > 0 ? s1 : [{ Сообщение: "Новинки не найдены" }]),
     "1. Новинки B"
   );
   XLSX.utils.book_append_sheet(
     wb,
-    XLSX.utils.json_to_sheet(
-      sheet2Rows.length > 0 ? sheet2Rows : [{ Сообщение: "Дубли не найдены" }]
-    ),
+    XLSX.utils.json_to_sheet(s2.length > 0 ? s2 : [{ Сообщение: "Дубли не найдены" }]),
     "2. Найденные дубли"
   );
   XLSX.utils.book_append_sheet(
     wb,
-    XLSX.utils.json_to_sheet(
-      sheet3Rows.length > 0 ? sheet3Rows : [{ Сообщение: "Чистых новинок нет" }]
-    ),
+    XLSX.utils.json_to_sheet(s3.length > 0 ? s3 : [{ Сообщение: "Чистых новинок нет" }]),
     "3. Чистые + не проверено"
   );
+  XLSX.writeFile(wb, `чистый_фид_${fileBase(result)}.xlsx`);
+}
 
-  const sanitize = (s: string) =>
-    (s || "").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 40);
-  XLSX.writeFile(
-    wb,
-    `чистый_фид_${sanitize(result.siteBLabel || "B")}_vs_${sanitize(result.siteALabel || "A")}_${new Date().toISOString().slice(0, 10)}.xlsx`
+/** Только лист «Все новинки B (по id)». */
+export async function downloadNoveltiesAllOnlyExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Promise<void> {
+  await writeSingleSheet(
+    buildSheet1Rows(result, nameLocale),
+    "Новинки B",
+    `новинки_B_${fileBase(result)}.xlsx`,
+    "Новинки не найдены"
+  );
+}
+
+/** Только лист «Найденные дубли». */
+export async function downloadDuplicatesOnlyExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Promise<void> {
+  await writeSingleSheet(
+    buildSheet2Rows(result, nameLocale),
+    "Дубли",
+    `дубли_${fileBase(result)}.xlsx`,
+    "Дубли не найдены"
+  );
+}
+
+/** Только «Чистые новинки» (без «не удалось проверить»). */
+export async function downloadCleanOnlyExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Promise<void> {
+  await writeSingleSheet(
+    buildSheet3Rows(result, nameLocale, "clean_only"),
+    "Чистые",
+    `чистые_${fileBase(result)}.xlsx`,
+    "Нет чистых новинок"
+  );
+}
+
+/** Только «Не удалось проверить». */
+export async function downloadUnverifiableOnlyExcel(
+  result: TwoFeedsCleanNoveltiesResult,
+  nameLocale: NameLocale
+): Promise<void> {
+  await writeSingleSheet(
+    buildSheet3Rows(result, nameLocale, "unverifiable_only"),
+    "Не проверено",
+    `не_проверено_${fileBase(result)}.xlsx`,
+    "Нет позиций «не удалось проверить»"
   );
 }
