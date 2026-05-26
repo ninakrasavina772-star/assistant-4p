@@ -7872,11 +7872,11 @@ export default function ComparePage() {
               });
             }
             return (
-              <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-3 sticky top-2 z-30 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-800 mb-2">
                   {titleByView[cleanNoveltiesView]}
                 </h3>
-                <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
+                <div className="max-h-[min(60vh,900px)] overflow-y-auto space-y-3 pr-1">
                   {cleanNoveltiesView === "duplicates" && (() => {
                     const allPairs = cleanNoveltiesData.duplicatePairs;
                     const countEan = allPairs.filter((p) => p.kind === "ean").length;
@@ -7889,7 +7889,7 @@ export default function ComparePage() {
                           : allPairs;
                     return (
                       <>
-                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <div className="sticky top-0 z-10 -mx-1 -mt-1 px-1 pt-1 pb-2 bg-white border-b border-slate-100 flex flex-wrap items-center gap-2 mb-2">
                           <span className="text-[11px] uppercase tracking-wide text-slate-500">
                             Тип:
                           </span>
@@ -8144,7 +8144,7 @@ export default function ComparePage() {
                           : allPairs;
                     return (
                       <>
-                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <div className="sticky top-0 z-10 -mx-1 -mt-1 px-1 pt-1 pb-2 bg-white border-b border-slate-100 flex flex-wrap items-center gap-2 mb-2">
                           <span className="text-[11px] uppercase tracking-wide text-slate-500">
                             Тип:
                           </span>
