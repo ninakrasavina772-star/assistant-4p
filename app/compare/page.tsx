@@ -614,6 +614,10 @@ export default function ComparePage() {
   /** Результат сценария «Чистый фид B vs A» — отдельно от основного `data`. */
   const [cleanNoveltiesData, setCleanNoveltiesData] =
     useState<TwoFeedsCleanNoveltiesResult | null>(null);
+  /** Какую часть отчёта «Чистый фид» сейчас показываем под плитками. */
+  const [cleanNoveltiesView, setCleanNoveltiesView] = useState<
+    "duplicates" | "clean" | "unverifiable" | "all"
+  >("duplicates");
 
   const runCleanNovelties = useCallback(async () => {
     userCancelledRef.current = false;
@@ -7309,94 +7313,304 @@ export default function ComparePage() {
               Скачать Excel (3 листа)
             </button>
           </div>
+          <p className="text-xs text-slate-500 mb-2">
+            Кликайте по плиткам, чтобы переключать список ниже. Кнопка «Excel» —
+            скачать соответствующий список отдельным файлом.
+          </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
-            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2 flex flex-col">
+            <button
+              type="button"
+              onClick={() => setCleanNoveltiesView("all")}
+              className={`text-left rounded-xl border bg-white px-3 py-2 flex flex-col transition ${
+                cleanNoveltiesView === "all"
+                  ? "border-emerald-600 ring-2 ring-emerald-200"
+                  : "border-emerald-200 hover:border-emerald-400"
+              }`}
+            >
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Новинки на {cleanNoveltiesData.siteBLabel} (нет id на A)</p>
               <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.noveltyCountById}</p>
               <p className="text-[11px] text-slate-500 mb-2">из {cleanNoveltiesData.stats.countB} на B / {cleanNoveltiesData.stats.countA} на A</p>
-              <button
-                type="button"
-                onClick={() => void downloadCleanNoveltiesPart("noveltiesAll")}
-                disabled={cleanNoveltiesData.stats.noveltyCountById === 0}
-                className="mt-auto rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void downloadCleanNoveltiesPart("noveltiesAll");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void downloadCleanNoveltiesPart("noveltiesAll");
+                  }
+                }}
+                aria-disabled={cleanNoveltiesData.stats.noveltyCountById === 0}
+                className={`mt-auto text-center rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 ${
+                  cleanNoveltiesData.stats.noveltyCountById === 0
+                    ? "opacity-50 pointer-events-none"
+                    : ""
+                }`}
               >
                 Excel: все новинки
-              </button>
-            </div>
-            <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 flex flex-col">
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCleanNoveltiesView("duplicates")}
+              className={`text-left rounded-xl border bg-white px-3 py-2 flex flex-col transition ${
+                cleanNoveltiesView === "duplicates"
+                  ? "border-amber-600 ring-2 ring-amber-200"
+                  : "border-amber-200 hover:border-amber-400"
+              }`}
+            >
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Найдено дублей с {cleanNoveltiesData.siteALabel}</p>
               <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.duplicates}</p>
               <p className="text-[11px] text-slate-500 mb-2">{cleanNoveltiesData.stats.dupPairsCount} пар</p>
-              <button
-                type="button"
-                onClick={() => void downloadCleanNoveltiesPart("duplicatesOnly")}
-                disabled={cleanNoveltiesData.stats.duplicates === 0}
-                className="mt-auto rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void downloadCleanNoveltiesPart("duplicatesOnly");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void downloadCleanNoveltiesPart("duplicatesOnly");
+                  }
+                }}
+                aria-disabled={cleanNoveltiesData.stats.duplicates === 0}
+                className={`mt-auto text-center rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 ${
+                  cleanNoveltiesData.stats.duplicates === 0
+                    ? "opacity-50 pointer-events-none"
+                    : ""
+                }`}
               >
                 Excel: дубли (пары)
-              </button>
-            </div>
-            <div className="rounded-xl border border-emerald-300 bg-white px-3 py-2 flex flex-col">
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCleanNoveltiesView("clean")}
+              className={`text-left rounded-xl border bg-white px-3 py-2 flex flex-col transition ${
+                cleanNoveltiesView === "clean"
+                  ? "border-emerald-700 ring-2 ring-emerald-200"
+                  : "border-emerald-300 hover:border-emerald-500"
+              }`}
+            >
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Чистые (нет дубля)</p>
               <p className="text-lg font-bold text-emerald-900 tabular-nums">{cleanNoveltiesData.stats.clean}</p>
               <p className="text-[11px] text-slate-500 mb-2">можно лить на A</p>
-              <button
-                type="button"
-                onClick={() => void downloadCleanNoveltiesPart("cleanOnly")}
-                disabled={cleanNoveltiesData.stats.clean === 0}
-                className="mt-auto rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void downloadCleanNoveltiesPart("cleanOnly");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void downloadCleanNoveltiesPart("cleanOnly");
+                  }
+                }}
+                aria-disabled={cleanNoveltiesData.stats.clean === 0}
+                className={`mt-auto text-center rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 ${
+                  cleanNoveltiesData.stats.clean === 0
+                    ? "opacity-50 pointer-events-none"
+                    : ""
+                }`}
               >
                 Excel: чистые
-              </button>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 flex flex-col">
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCleanNoveltiesView("unverifiable")}
+              className={`text-left rounded-xl border bg-white px-3 py-2 flex flex-col transition ${
+                cleanNoveltiesView === "unverifiable"
+                  ? "border-slate-700 ring-2 ring-slate-300"
+                  : "border-slate-200 hover:border-slate-400"
+              }`}
+            >
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Не удалось проверить</p>
               <p className="text-lg font-bold text-slate-900 tabular-nums">{cleanNoveltiesData.stats.unverifiable}</p>
               <p className="text-[11px] text-slate-500 mb-2">нет EAN и фото</p>
-              <button
-                type="button"
-                onClick={() => void downloadCleanNoveltiesPart("unverifiableOnly")}
-                disabled={cleanNoveltiesData.stats.unverifiable === 0}
-                className="mt-auto rounded-md border border-slate-300 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void downloadCleanNoveltiesPart("unverifiableOnly");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void downloadCleanNoveltiesPart("unverifiableOnly");
+                  }
+                }}
+                aria-disabled={cleanNoveltiesData.stats.unverifiable === 0}
+                className={`mt-auto text-center rounded-md border border-slate-300 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100 ${
+                  cleanNoveltiesData.stats.unverifiable === 0
+                    ? "opacity-50 pointer-events-none"
+                    : ""
+                }`}
               >
                 Excel: не проверено
-              </button>
-            </div>
+              </span>
+            </button>
           </div>
-          {cleanNoveltiesData.duplicatePairs.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-white p-3">
-              <h3 className="text-sm font-semibold text-slate-800 mb-2">
-                Пары «новинка {cleanNoveltiesData.siteBLabel} ↔ дубль на {cleanNoveltiesData.siteALabel}» (до 100)
-              </h3>
-              <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
-                {cleanNoveltiesData.duplicatePairs.slice(0, 100).map((pair, i) => (
-                  <div
-                    key={`cln-${i}-${pair.novelty.id}-${pair.productOnAId}-${pair.kind}`}
-                    className="p-3 rounded-lg border border-amber-100 bg-amber-50/30 space-y-2"
-                  >
-                    <p className="text-[10px] uppercase tracking-wide text-amber-900 font-medium">
-                      {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
-                      {pair.variantArticleOnB
-                        ? ` · вариация B арт. ${pair.variantArticleOnB}`
-                        : ""}
-                    </p>
-                    <div className="grid sm:grid-cols-2 gap-2">
-                      <ProductCell c={pair.productOnA} siteLabel={cleanNoveltiesData.siteALabel} />
-                      <ProductCell c={pair.novelty} siteLabel={cleanNoveltiesData.siteBLabel} />
-                    </div>
-                    {pair.reasons.length > 0 && (
-                      <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
-                    )}
-                  </div>
-                ))}
+          {(() => {
+            const titleByView: Record<typeof cleanNoveltiesView, string> = {
+              duplicates: `Пары «новинка ${cleanNoveltiesData.siteBLabel} ↔ дубль на ${cleanNoveltiesData.siteALabel}» (до 100)`,
+              clean: `Чистые новинки ${cleanNoveltiesData.siteBLabel} (до 100)`,
+              unverifiable: `Не удалось проверить — нет EAN и фото (до 100)`,
+              all: `Все новинки ${cleanNoveltiesData.siteBLabel} со статусом (до 100)`
+            };
+            const noveltyIdToStatus = new Map<
+              number,
+              {
+                status: "duplicate" | "clean" | "unverifiable";
+                aIds: number[];
+              }
+            >();
+            for (const dn of cleanNoveltiesData.duplicateNovelties) {
+              noveltyIdToStatus.set(dn.novelty.id, {
+                status: "duplicate",
+                aIds: dn.matches.map((m) => m.productOnAId)
+              });
+            }
+            for (const cn of cleanNoveltiesData.cleanNovelties) {
+              noveltyIdToStatus.set(cn.product.id, {
+                status: cn.unverifiable ? "unverifiable" : "clean",
+                aIds: []
+              });
+            }
+            return (
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <h3 className="text-sm font-semibold text-slate-800 mb-2">
+                  {titleByView[cleanNoveltiesView]}
+                </h3>
+                <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
+                  {cleanNoveltiesView === "duplicates" && (
+                    <>
+                      {cleanNoveltiesData.duplicatePairs.length === 0 && (
+                        <p className="text-sm text-slate-500">Дубли не найдены.</p>
+                      )}
+                      {cleanNoveltiesData.duplicatePairs.slice(0, 100).map((pair, i) => (
+                        <div
+                          key={`cln-${i}-${pair.novelty.id}-${pair.productOnAId}-${pair.kind}`}
+                          className="p-3 rounded-lg border border-amber-100 bg-amber-50/30 space-y-2"
+                        >
+                          <p className="text-[10px] uppercase tracking-wide text-amber-900 font-medium">
+                            {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
+                            {pair.variantArticleOnB
+                              ? ` · вариация B арт. ${pair.variantArticleOnB}`
+                              : ""}
+                          </p>
+                          <div className="grid sm:grid-cols-2 gap-2">
+                            <ProductCell c={pair.productOnA} siteLabel={cleanNoveltiesData.siteALabel} />
+                            <ProductCell c={pair.novelty} siteLabel={cleanNoveltiesData.siteBLabel} />
+                          </div>
+                          {pair.reasons.length > 0 && (
+                            <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
+                          )}
+                        </div>
+                      ))}
+                      {cleanNoveltiesData.duplicatePairs.length > 100 && (
+                        <p className="text-xs text-slate-500">
+                          Показаны первые 100 пар. Полная таблица в Excel (кнопка «Дубли (пары)»).
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {(cleanNoveltiesView === "clean" || cleanNoveltiesView === "unverifiable") && (() => {
+                    const items = cleanNoveltiesData.cleanNovelties.filter((c) =>
+                      cleanNoveltiesView === "clean" ? !c.unverifiable : c.unverifiable
+                    );
+                    if (items.length === 0) {
+                      return <p className="text-sm text-slate-500">Нет позиций.</p>;
+                    }
+                    return (
+                      <>
+                        {items.slice(0, 100).map((cn) => {
+                          const cp = toCompareProduct(cn.product);
+                          return (
+                            <div
+                              key={`cn-${cn.product.id}`}
+                              className={`p-2 rounded-lg border bg-white ${
+                                cn.unverifiable
+                                  ? "border-slate-200"
+                                  : "border-emerald-100"
+                              }`}
+                            >
+                              <ProductCell c={cp} siteLabel={cleanNoveltiesData.siteBLabel} />
+                              {cn.unverifiable && (
+                                <p className="mt-1 text-[11px] text-amber-800">
+                                  ⚠ не удалось проверить — нет EAN и нет фото
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {items.length > 100 && (
+                          <p className="text-xs text-slate-500">
+                            Показаны первые 100. Полный список в Excel.
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {cleanNoveltiesView === "all" && (
+                    <>
+                      {cleanNoveltiesData.noveltiesAll.length === 0 && (
+                        <p className="text-sm text-slate-500">Новинок нет.</p>
+                      )}
+                      {cleanNoveltiesData.noveltiesAll.slice(0, 100).map((p) => {
+                        const st = noveltyIdToStatus.get(p.id);
+                        const cp = toCompareProduct(p);
+                        return (
+                          <div
+                            key={`all-${p.id}`}
+                            className="p-2 rounded-lg border border-slate-200 bg-white"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <p
+                                className={`text-[10px] uppercase tracking-wide font-medium ${
+                                  st?.status === "duplicate"
+                                    ? "text-amber-900"
+                                    : st?.status === "unverifiable"
+                                      ? "text-slate-700"
+                                      : "text-emerald-900"
+                                }`}
+                              >
+                                {st?.status === "duplicate"
+                                  ? `дубль на A · id A: ${st.aIds.join(", ")}`
+                                  : st?.status === "unverifiable"
+                                    ? "не удалось проверить (нет EAN и фото)"
+                                    : "чистая (нет дубля на A)"}
+                              </p>
+                            </div>
+                            <div className="mt-1">
+                              <ProductCell c={cp} siteLabel={cleanNoveltiesData.siteBLabel} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {cleanNoveltiesData.noveltiesAll.length > 100 && (
+                        <p className="text-xs text-slate-500">
+                          Показаны первые 100. Полный список в Excel.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
-              {cleanNoveltiesData.duplicatePairs.length > 100 && (
-                <p className="text-xs text-slate-500 mt-2">
-                  Показаны первые 100 пар. Полная таблица в Excel (лист «Найденные дубли»).
-                </p>
-              )}
-            </div>
-          )}
+            );
+          })()}
         </section>
       )}
 
