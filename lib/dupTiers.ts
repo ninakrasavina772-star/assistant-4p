@@ -44,7 +44,12 @@ export const PARTIAL_NAME_MIN_90 = 0.42;
 /** Выше минимум — меньше ложных пар вроде разных линеек Hermes при похожем флаконе. */
 export const PARTIAL_NAME_MIN_60 = 0.46;
 /** Вкладка «по названию» (intra): сходство модельной строки после снятия бренда/типа. */
-export const NAME_TAB_MODEL_MIN = 0.6;
+export const NAME_TAB_MODEL_MIN = 0.5;
+/** То же, но порог aHash для intra: мягче (разные ракурсы/превью одной модели). */
+export const NAME_TAB_VISUAL_HAMMING_MAX = 18;
+/** Если phash отключён (превышен лимит) или картинки не качаются, и модель ≥ этого порога —
+ *  допускаем пару с пометкой «без подтверждения фото» (бренд+модель строгие, объём не противоречит). */
+export const NAME_TAB_MODEL_NO_PHOTO_MIN = 0.72;
 /** Маловероятный: тот же бренд (fuzzy), слабее название */
 export const SLIGHT_NAME_UNLIKELY = 0.24;
 
@@ -453,7 +458,8 @@ function resolveNameTabPair(
   cI: CompareProduct,
   cJ: CompareProduct,
   nameLocale: NameLocale,
-  cache: PhashCache
+  cache: PhashCache,
+  photoPhashSkipped: boolean
 ): { score: number; reasons: string[] } | { reject: NameTabReject } {
   if (softDupBlockedByDisjointEans(cI, cJ)) return { reject: "brand_or_ean" };
   if (!brandsExactForDup(cI, cJ)) return { reject: "brand_or_ean" };
@@ -478,12 +484,31 @@ function resolveNameTabPair(
 
   const imgI = cI.firstImage || "";
   const imgJ = cJ.firstImage || "";
-  if (!imgI || !imgJ) return { reject: "no_photo" };
-  const urlEq = firstImageRefEquivalent(imgI, imgJ);
+  const haveBothImgs = Boolean(imgI && imgJ);
+  const urlEq = haveBothImgs ? firstImageRefEquivalent(imgI, imgJ) : false;
   if (softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)) {
     return { reject: "model_line_distinct" };
   }
-  if (!urlEq && !visualFromCache(imgI, imgJ, cache, DEFAULT_VISUAL_HAMMING_MAX)) {
+
+  let photoNote = "";
+  if (urlEq) {
+    photoNote = "одинаковая ссылка на первое фото";
+  } else if (
+    haveBothImgs &&
+    !photoPhashSkipped &&
+    visualFromCache(imgI, imgJ, cache, NAME_TAB_VISUAL_HAMMING_MAX)
+  ) {
+    photoNote = "похожее фото (визуально)";
+  } else if (modelSim >= NAME_TAB_MODEL_NO_PHOTO_MIN) {
+    /** Без подтверждения по фото: модель совпадает почти точно, бренд точен, объём не конфликтует. */
+    photoNote = haveBothImgs
+      ? photoPhashSkipped
+        ? "фото не сравнили (превышен лимит загрузок)"
+        : "фото не похожи, но модель почти совпадает"
+      : "у одного из товаров нет фото";
+  } else if (!haveBothImgs) {
+    return { reject: "no_photo" };
+  } else {
     return { reject: "photo_not_similar" };
   }
 
@@ -494,10 +519,11 @@ function resolveNameTabPair(
   return {
     score: 0.85,
     reasons: [
-      "дубль по названию: бренд (точно) + модель + похожее фото (API/выбранный язык)",
+      "дубль по названию: бренд (точно) + модель + фото (API/выбранный язык)",
       `модель~${Math.round(modelSim * 100)}%`,
+      photoNote,
       ...volBits
-    ]
+    ].filter(Boolean)
   };
 }
 
@@ -547,10 +573,6 @@ export async function computeIntraNameTabDupPairs(
         }
         const imgI = cI.firstImage || "";
         const imgJ = cJ.firstImage || "";
-        if (!imgI || !imgJ) {
-          stats.droppedNoPhoto++;
-          continue;
-        }
         work.push({
           pa: pi,
           pb: pj,
@@ -559,7 +581,7 @@ export async function computeIntraNameTabDupPairs(
           comb: 0,
           imgI,
           imgJ,
-          urlEq: firstImageRefEquivalent(imgI, imgJ)
+          urlEq: imgI && imgJ ? firstImageRefEquivalent(imgI, imgJ) : false
         });
       }
     }
@@ -569,18 +591,23 @@ export async function computeIntraNameTabDupPairs(
   const uniqueUrls = new Set<string>();
   for (const p of work) {
     if (p.urlEq) continue;
-    uniqueUrls.add(p.imgI.trim());
-    uniqueUrls.add(p.imgJ.trim());
+    if (p.imgI) uniqueUrls.add(p.imgI.trim());
+    if (p.imgJ) uniqueUrls.add(p.imgJ.trim());
   }
   stats.photoUrlsToDownload = uniqueUrls.size;
-  const before = cache.size;
   await prefetchPhashes(uniqueUrls, cache);
-  /** Если prefetch ничего не положил, а URL были — сработал лимит MAX_PHASH_DOWNLOADS. */
-  stats.photoPhashSkipped = uniqueUrls.size > 0 && cache.size === before;
+  /** Если prefetch ничего не положил для непустого набора URL — сработал лимит MAX_PHASH_DOWNLOADS. */
+  stats.photoPhashSkipped = uniqueUrls.size > 0 && cache.size === 0;
 
   const rows: IntraNamePhotoPairRow[] = [];
   for (const p of work) {
-    const res = resolveNameTabPair(p.cI, p.cJ, nameLocale, cache);
+    const res = resolveNameTabPair(
+      p.cI,
+      p.cJ,
+      nameLocale,
+      cache,
+      stats.photoPhashSkipped
+    );
     if ("reject" in res) {
       switch (res.reject) {
         case "brand_or_ean":
