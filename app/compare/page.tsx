@@ -616,7 +616,7 @@ export default function ComparePage() {
     useState<TwoFeedsCleanNoveltiesResult | null>(null);
   /** Какую часть отчёта «Чистый фид» сейчас показываем под плитками. */
   const [cleanNoveltiesView, setCleanNoveltiesView] = useState<
-    "duplicates" | "clean" | "unverifiable" | "all" | "internalDups"
+    "duplicates" | "clean" | "unverifiable" | "all" | "internalDups" | "aiDups"
   >("duplicates");
   /** Доп. фильтр внутри плитки «Найдено дублей» — все / EAN / название+фото. */
   const [cleanDupKindFilter, setCleanDupKindFilter] = useState<
@@ -825,7 +825,7 @@ export default function ComparePage() {
     [cleanNoveltiesData]
   );
 
-  /** Excel: только AI-дубли (положительные вердикты). */
+  /** Excel: только AI-дубли (положительные вердикты), не пересекающиеся с автоматикой. */
   const downloadCleanAiDuplicatesXlsx = useCallback(async () => {
     if (!cleanNoveltiesData) return;
     setError(null);
@@ -833,13 +833,28 @@ export default function ComparePage() {
       const { downloadAiDuplicatesOnlyExcel } = await import(
         "@/lib/exportCleanNovelties"
       );
-      const verdicts = Object.values(cleanAiVerdicts).map((v) => ({
-        noveltyBId: v.noveltyBId,
-        productOnAId: v.productOnAId,
-        duplicate: v.duplicate,
-        confidence: v.confidence,
-        note: v.note
-      }));
+      const autoPairKeys = new Set<string>();
+      for (const p of cleanNoveltiesData.duplicatePairs) {
+        const x = p.novelty.id;
+        const y = p.productOnAId;
+        autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
+      }
+      const verdicts = Object.values(cleanAiVerdicts)
+        .filter((v) => {
+          if (!v.duplicate) return false;
+          const k =
+            v.noveltyBId < v.productOnAId
+              ? `${v.noveltyBId}-${v.productOnAId}`
+              : `${v.productOnAId}-${v.noveltyBId}`;
+          return !autoPairKeys.has(k);
+        })
+        .map((v) => ({
+          noveltyBId: v.noveltyBId,
+          productOnAId: v.productOnAId,
+          duplicate: v.duplicate,
+          confidence: v.confidence,
+          note: v.note
+        }));
       await downloadAiDuplicatesOnlyExcel(
         cleanNoveltiesData,
         cleanNoveltiesData.nameLocale,
@@ -7549,7 +7564,7 @@ export default function ComparePage() {
             Кликайте по плиткам, чтобы переключать список ниже. Кнопка «Excel» —
             скачать соответствующий список отдельным файлом.
           </p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 mb-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-4">
             <button
               type="button"
               onClick={() => setCleanNoveltiesView("all")}
@@ -7635,9 +7650,21 @@ export default function ComparePage() {
               <p className="text-lg font-bold text-emerald-900 tabular-nums">{cleanNoveltiesData.stats.clean}</p>
               <p className="text-[11px] text-slate-500 mb-2">можно лить на A</p>
               {(() => {
+                const autoPairKeys = new Set<string>();
+                for (const p of cleanNoveltiesData.duplicatePairs) {
+                  const x = p.novelty.id;
+                  const y = p.productOnAId;
+                  autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
+                }
                 const aiPositiveNovelties = new Set<number>();
                 for (const v of Object.values(cleanAiVerdicts)) {
-                  if (v.duplicate) aiPositiveNovelties.add(v.noveltyBId);
+                  if (!v.duplicate) continue;
+                  const k =
+                    v.noveltyBId < v.productOnAId
+                      ? `${v.noveltyBId}-${v.productOnAId}`
+                      : `${v.productOnAId}-${v.noveltyBId}`;
+                  if (autoPairKeys.has(k)) continue;
+                  aiPositiveNovelties.add(v.noveltyBId);
                 }
                 return aiPositiveNovelties.size > 0 ? (
                   <p className="text-[11px] text-purple-800 mb-2 font-semibold">
@@ -7755,14 +7782,101 @@ export default function ComparePage() {
                 </button>
               );
             })()}
+            {(() => {
+              /**
+               * Кол-во "новых" AI-дублей — позитивных вердиктов, чьи пары
+               * ещё не отображены в "Найдено дублей с A" автоматикой.
+               */
+              const autoPairKeys = new Set<string>();
+              for (const p of cleanNoveltiesData.duplicatePairs) {
+                const x = p.novelty.id;
+                const y = p.productOnAId;
+                autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
+              }
+              const newAiPairs = Object.values(cleanAiVerdicts).filter(
+                (v) => {
+                  if (!v.duplicate) return false;
+                  const k =
+                    v.noveltyBId < v.productOnAId
+                      ? `${v.noveltyBId}-${v.productOnAId}`
+                      : `${v.productOnAId}-${v.noveltyBId}`;
+                  return !autoPairKeys.has(k);
+                }
+              );
+              const aiNoveltyIds = new Set(
+                newAiPairs.map((v) => v.noveltyBId)
+              );
+              const aiActive = newAiPairs.length > 0;
+              return (
+                <button
+                  type="button"
+                  onClick={() => setCleanNoveltiesView("aiDups")}
+                  className={`text-left rounded-xl border bg-white px-3 py-2 flex flex-col transition ${
+                    cleanNoveltiesView === "aiDups"
+                      ? "border-purple-700 ring-2 ring-purple-200"
+                      : aiActive
+                        ? "border-purple-400 hover:border-purple-600"
+                        : "border-purple-200 hover:border-purple-400"
+                  }`}
+                >
+                  <p className="text-[11px] uppercase tracking-wide text-slate-500">
+                    🤖 AI-дубли (новые)
+                  </p>
+                  <p className="text-lg font-bold text-purple-900 tabular-nums">
+                    {newAiPairs.length}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    {aiNoveltyIds.size} новинок · сверх автоматики
+                  </p>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (newAiPairs.length > 0) {
+                        void downloadCleanAiDuplicatesXlsx();
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (newAiPairs.length > 0) {
+                          void downloadCleanAiDuplicatesXlsx();
+                        }
+                      }
+                    }}
+                    aria-disabled={newAiPairs.length === 0}
+                    className={`mt-auto text-center rounded-md border border-purple-400 bg-purple-50 px-2 py-1 text-xs font-semibold text-purple-900 hover:bg-purple-100 ${
+                      newAiPairs.length === 0
+                        ? "opacity-50 pointer-events-none"
+                        : ""
+                    }`}
+                  >
+                    Excel: AI-дубли
+                  </span>
+                </button>
+              );
+            })()}
           </div>
           {(() => {
             const cleanCandidatesCount = cleanNoveltiesData.cleanNovelties.filter(
               (c) => !c.unverifiable && (c.aiCandidates?.length ?? 0) > 0
             ).length;
-            const positiveAi = Object.values(cleanAiVerdicts).filter(
-              (v) => v.duplicate
-            ).length;
+            const autoPairKeys = new Set<string>();
+            for (const p of cleanNoveltiesData.duplicatePairs) {
+              const x = p.novelty.id;
+              const y = p.productOnAId;
+              autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
+            }
+            const positiveAi = Object.values(cleanAiVerdicts).filter((v) => {
+              if (!v.duplicate) return false;
+              const k =
+                v.noveltyBId < v.productOnAId
+                  ? `${v.noveltyBId}-${v.productOnAId}`
+                  : `${v.productOnAId}-${v.noveltyBId}`;
+              return !autoPairKeys.has(k);
+            }).length;
             const checkedAi = Object.keys(cleanAiVerdicts).length;
             return (
               <div className="rounded-xl border border-purple-300 bg-purple-50 p-3 space-y-2">
@@ -7898,7 +8012,8 @@ export default function ComparePage() {
               clean: `Чистые новинки ${cleanNoveltiesData.siteBLabel} (до 100)`,
               unverifiable: `Не удалось проверить — нет EAN и фото (до 100)`,
               all: `Все новинки ${cleanNoveltiesData.siteBLabel} со статусом (до 100)`,
-              internalDups: `Дубли среди новинок ${cleanNoveltiesData.siteBLabel} (один товар под разными id, до 100)`
+              internalDups: `Дубли среди новинок ${cleanNoveltiesData.siteBLabel} (один товар под разными id, до 100)`,
+              aiDups: `AI-дубли: новые пары «новинка ${cleanNoveltiesData.siteBLabel} ↔ кандидат на ${cleanNoveltiesData.siteALabel}» (до 100)`
             };
             const noveltyIdToStatus = new Map<
               number,
@@ -8177,6 +8292,98 @@ export default function ComparePage() {
                       )}
                     </>
                   )}
+                  {cleanNoveltiesView === "aiDups" && (() => {
+                    /** Все пары AI-дублей, исключая пересечения с автоматикой. */
+                    const autoPairKeys = new Set<string>();
+                    for (const p of cleanNoveltiesData.duplicatePairs) {
+                      const x = p.novelty.id;
+                      const y = p.productOnAId;
+                      autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
+                    }
+                    const positives = Object.values(cleanAiVerdicts)
+                      .filter((v) => v.duplicate)
+                      .filter((v) => {
+                        const k =
+                          v.noveltyBId < v.productOnAId
+                            ? `${v.noveltyBId}-${v.productOnAId}`
+                            : `${v.productOnAId}-${v.noveltyBId}`;
+                        return !autoPairKeys.has(k);
+                      })
+                      .sort((a, b) => b.confidence - a.confidence);
+                    if (Object.keys(cleanAiVerdicts).length === 0) {
+                      return (
+                        <p className="text-sm text-slate-500">
+                          AI-проверка ещё не запускалась. Заполните ключ
+                          OpenAI выше и нажмите «Запустить AI-проверку».
+                        </p>
+                      );
+                    }
+                    if (positives.length === 0) {
+                      return (
+                        <p className="text-sm text-slate-500">
+                          AI не нашёл дублей сверх тех, что уже определила
+                          автоматика.
+                        </p>
+                      );
+                    }
+                    /** Карты для подтягивания CompareProduct по id. */
+                    const noveltyById = new Map<number, CompareProduct>();
+                    for (const cn of cleanNoveltiesData.cleanNovelties) {
+                      noveltyById.set(
+                        cn.product.id,
+                        toCompareProduct(cn.product)
+                      );
+                    }
+                    const productAById = new Map<number, CompareProduct>();
+                    for (const cn of cleanNoveltiesData.cleanNovelties) {
+                      for (const cand of cn.aiCandidates ?? []) {
+                        productAById.set(cand.productOnAId, cand.productOnA);
+                      }
+                    }
+                    return (
+                      <>
+                        <p className="text-xs text-purple-800 mb-2">
+                          Показаны только новые пары, найденные AI и не
+                          совпадающие с уже определёнными автоматикой
+                          (EAN / название+фото). Сортировка — по уверенности
+                          модели.
+                        </p>
+                        {positives.slice(0, 100).map((v, idx) => {
+                          const novelty = noveltyById.get(v.noveltyBId);
+                          const productA = productAById.get(v.productOnAId);
+                          if (!novelty || !productA) return null;
+                          return (
+                            <div
+                              key={`aid-${v.noveltyBId}-${v.productOnAId}-${idx}`}
+                              className="p-2 space-y-1 rounded-lg border border-purple-200 bg-purple-50/40"
+                            >
+                              <p className="text-[10px] uppercase tracking-wide font-medium text-purple-900">
+                                AI: дубль · уверенность{" "}
+                                {Math.round(v.confidence * 100)}%
+                                {v.note ? ` · ${v.note}` : ""}
+                              </p>
+                              <div className="grid sm:grid-cols-2 gap-2">
+                                <ProductCell
+                                  c={productA}
+                                  siteLabel={cleanNoveltiesData.siteALabel}
+                                />
+                                <ProductCell
+                                  c={novelty}
+                                  siteLabel={cleanNoveltiesData.siteBLabel}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {positives.length > 100 && (
+                          <p className="text-xs text-slate-500">
+                            Показаны первые 100 пар из {positives.length}.
+                            Полный список — кнопка «Excel: AI-дубли».
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                   {cleanNoveltiesView === "internalDups" && (() => {
                     const allPairs =
                       cleanNoveltiesData.internalDuplicatePairs ?? [];
