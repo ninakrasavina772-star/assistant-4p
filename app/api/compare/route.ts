@@ -28,7 +28,11 @@ import type {
   CompareResult,
   FpProduct,
   NameLocale,
+  NoveltiesB2BDupsResult,
   NoveltiesFullExportResult,
+  NoveltyB2BCompareProduct,
+  NoveltyB2BEanGroupRow,
+  NoveltyB2BNamePairRow,
   NoveltyIdsNoEanOnAResult,
   NoveltyIdsSliceResult,
   NoveltyIdsStageResult,
@@ -584,7 +588,66 @@ export async function POST(req: NextRequest) {
       const productsA = appliedA.out;
       const appliedB = applyRubricFetchPipeline(rawB, pipeShared, "B");
       const productsB = appliedB.out;
-      const cmp = await runCompare(productsA, productsB, nameLocale, siteALabel, siteBLabel, attrMatch);
+
+      const idsOnA = new Set(productsA.map((p) => p.id));
+      const noveltiesB = productsB.filter((p) => !idsOnA.has(p.id));
+
+      /** Уникализируем id в пуле: один и тот же id мог встретиться, но мы уже отсекли B \\ A.
+       *  На стороне A берём первый встретившийся объект. */
+      const poolMap = new Map<number, FpProduct>();
+      for (const p of productsA) poolMap.set(p.id, p);
+      for (const p of noveltiesB) {
+        if (!poolMap.has(p.id)) poolMap.set(p.id, p);
+      }
+      const pool = [...poolMap.values()];
+
+      const sideById = new Map<number, "A" | "B">();
+      for (const p of productsA) sideById.set(p.id, "A");
+      for (const p of noveltiesB) {
+        if (!sideById.has(p.id)) sideById.set(p.id, "B");
+      }
+
+      const dups = await findIntraSiteDuplicates(pool, nameLocale, attrMatch);
+
+      const annotate = (c: import("@/lib/types").CompareProduct): NoveltyB2BCompareProduct => ({
+        ...c,
+        side: sideById.get(c.id) ?? "A"
+      });
+
+      const eanGroups: NoveltyB2BEanGroupRow[] = dups.eanGroups
+        .filter((g) => {
+          const sides = new Set(g.products.map((c) => sideById.get(c.id)));
+          /** Оставляем только группы, в которых есть хотя бы одна B-новинка
+           *  (иначе это «дубли только внутри A», они и так есть в одиночном режиме). */
+          return sides.has("B");
+        })
+        .map((g) => ({
+          ean: g.ean,
+          products: g.products.map(annotate)
+        }));
+
+      const namePhotoPairs: NoveltyB2BNamePairRow[] = dups.namePhotoPairs
+        .filter(
+          (r) => sideById.get(r.a.id) === "B" || sideById.get(r.b.id) === "B"
+        )
+        .map((r) => ({
+          a: annotate(r.a),
+          b: annotate(r.b),
+          score: r.score,
+          matchReasons: r.matchReasons
+        }));
+
+      const novIdsWithDup = new Set<number>();
+      for (const g of eanGroups) {
+        for (const c of g.products) {
+          if (c.side === "B") novIdsWithDup.add(c.id);
+        }
+      }
+      for (const r of namePhotoPairs) {
+        if (r.a.side === "B") novIdsWithDup.add(r.a.id);
+        if (r.b.side === "B") novIdsWithDup.add(r.b.id);
+      }
+
       const brandFilter = buildBrandFilterInfo(
         brandsRaw,
         brandMatch,
@@ -599,13 +662,29 @@ export async function POST(req: NextRequest) {
         appliedA.modelExcludedNotInList,
         appliedB.modelExcludedNotInList
       );
-      const result: CompareResult = {
-        ...cmp,
+
+      const result: NoveltiesB2BDupsResult = {
+        resultKind: "noveltiesB2BDups",
+        siteALabel,
+        siteBLabel,
+        nameLocale,
         brandFilter,
         modelFilter,
         excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, excludeMetaA),
-        unlikelySearch: buildUnlikelySearch(attrMatch),
-        catalogFromFeeds: true
+        stats: {
+          countA: productsA.length,
+          countB: productsB.length,
+          noveltiesBCount: noveltiesB.length,
+          noveltiesWithDupCount: novIdsWithDup.size,
+          noveltiesCleanCount: Math.max(0, noveltiesB.length - novIdsWithDup.size),
+          eanGroupsCount: eanGroups.length,
+          namePairsCount: namePhotoPairs.length,
+          ...(dups.nameTabStats ? { nameTabStats: dups.nameTabStats } : {})
+        },
+        noveltiesB,
+        noveltyIdsWithDup: [...novIdsWithDup].sort((a, b) => a - b),
+        eanGroups,
+        namePhotoPairs
       };
       return NextResponse.json(result);
     }
