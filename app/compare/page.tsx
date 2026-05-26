@@ -618,6 +618,10 @@ export default function ComparePage() {
   const [cleanNoveltiesView, setCleanNoveltiesView] = useState<
     "duplicates" | "clean" | "unverifiable" | "all"
   >("duplicates");
+  /** Доп. фильтр внутри плитки «Найдено дублей» — все / EAN / название+фото. */
+  const [cleanDupKindFilter, setCleanDupKindFilter] = useState<
+    "all" | "ean" | "name_photo"
+  >("all");
 
   const runCleanNovelties = useCallback(async () => {
     userCancelledRef.current = false;
@@ -7495,38 +7499,102 @@ export default function ComparePage() {
                   {titleByView[cleanNoveltiesView]}
                 </h3>
                 <div className="max-h-[min(70vh,1200px)] overflow-y-auto space-y-3 pr-1">
-                  {cleanNoveltiesView === "duplicates" && (
-                    <>
-                      {cleanNoveltiesData.duplicatePairs.length === 0 && (
-                        <p className="text-sm text-slate-500">Дубли не найдены.</p>
-                      )}
-                      {cleanNoveltiesData.duplicatePairs.slice(0, 100).map((pair, i) => (
-                        <div
-                          key={`cln-${i}-${pair.novelty.id}-${pair.productOnAId}-${pair.kind}`}
-                          className="p-3 rounded-lg border border-amber-100 bg-amber-50/30 space-y-2"
-                        >
-                          <p className="text-[10px] uppercase tracking-wide text-amber-900 font-medium">
-                            {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
-                            {pair.variantArticleOnB
-                              ? ` · вариация B арт. ${pair.variantArticleOnB}`
-                              : ""}
-                          </p>
-                          <div className="grid sm:grid-cols-2 gap-2">
-                            <ProductCell c={pair.productOnA} siteLabel={cleanNoveltiesData.siteALabel} />
-                            <ProductCell c={pair.novelty} siteLabel={cleanNoveltiesData.siteBLabel} />
-                          </div>
-                          {pair.reasons.length > 0 && (
-                            <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
-                          )}
+                  {cleanNoveltiesView === "duplicates" && (() => {
+                    const allPairs = cleanNoveltiesData.duplicatePairs;
+                    const countEan = allPairs.filter((p) => p.kind === "ean").length;
+                    const countName = allPairs.filter((p) => p.kind === "name_photo").length;
+                    const filtered =
+                      cleanDupKindFilter === "ean"
+                        ? allPairs.filter((p) => p.kind === "ean")
+                        : cleanDupKindFilter === "name_photo"
+                          ? allPairs.filter((p) => p.kind === "name_photo")
+                          : allPairs;
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                            Тип:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setCleanDupKindFilter("all")}
+                            className={`rounded-md border px-2 py-1 text-xs font-semibold transition ${
+                              cleanDupKindFilter === "all"
+                                ? "border-slate-700 bg-slate-800 text-white"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-500"
+                            }`}
+                          >
+                            Все ({allPairs.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCleanDupKindFilter("ean")}
+                            disabled={countEan === 0}
+                            className={`rounded-md border px-2 py-1 text-xs font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                              cleanDupKindFilter === "ean"
+                                ? "border-amber-700 bg-amber-700 text-white"
+                                : "border-amber-300 bg-white text-amber-900 hover:border-amber-500"
+                            }`}
+                          >
+                            Только EAN ({countEan})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCleanDupKindFilter("name_photo")}
+                            disabled={countName === 0}
+                            className={`rounded-md border px-2 py-1 text-xs font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                              cleanDupKindFilter === "name_photo"
+                                ? "border-sky-700 bg-sky-700 text-white"
+                                : "border-sky-300 bg-white text-sky-900 hover:border-sky-500"
+                            }`}
+                          >
+                            Только название+фото ({countName})
+                          </button>
                         </div>
-                      ))}
-                      {cleanNoveltiesData.duplicatePairs.length > 100 && (
-                        <p className="text-xs text-slate-500">
-                          Показаны первые 100 пар. Полная таблица в Excel (кнопка «Дубли (пары)»).
-                        </p>
-                      )}
-                    </>
-                  )}
+                        {filtered.length === 0 && (
+                          <p className="text-sm text-slate-500">
+                            {allPairs.length === 0
+                              ? "Дубли не найдены."
+                              : "В выбранной категории нет пар. Переключите фильтр выше."}
+                          </p>
+                        )}
+                        {filtered.slice(0, 100).map((pair, i) => (
+                          <div
+                            key={`cln-${i}-${pair.novelty.id}-${pair.productOnAId}-${pair.kind}`}
+                            className={`p-3 rounded-lg border space-y-2 ${
+                              pair.kind === "ean"
+                                ? "border-amber-100 bg-amber-50/30"
+                                : "border-sky-100 bg-sky-50/30"
+                            }`}
+                          >
+                            <p
+                              className={`text-[10px] uppercase tracking-wide font-medium ${
+                                pair.kind === "ean" ? "text-amber-900" : "text-sky-900"
+                              }`}
+                            >
+                              {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
+                              {pair.variantArticleOnB
+                                ? ` · вариация B арт. ${pair.variantArticleOnB}`
+                                : ""}
+                            </p>
+                            <div className="grid sm:grid-cols-2 gap-2">
+                              <ProductCell c={pair.productOnA} siteLabel={cleanNoveltiesData.siteALabel} />
+                              <ProductCell c={pair.novelty} siteLabel={cleanNoveltiesData.siteBLabel} />
+                            </div>
+                            {pair.reasons.length > 0 && (
+                              <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
+                            )}
+                          </div>
+                        ))}
+                        {filtered.length > 100 && (
+                          <p className="text-xs text-slate-500">
+                            Показаны первые 100 пар из {filtered.length}. Полная таблица в Excel
+                            (кнопка «Дубли (пары)»).
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                   {(cleanNoveltiesView === "clean" || cleanNoveltiesView === "unverifiable") && (() => {
                     const items = cleanNoveltiesData.cleanNovelties.filter((c) =>
                       cleanNoveltiesView === "clean" ? !c.unverifiable : c.unverifiable
