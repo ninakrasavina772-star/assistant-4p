@@ -346,9 +346,10 @@ function resolveTierForPair(
     imgI &&
     imgJ
   ) {
-    if (visualFromCache(imgI, imgJ, cache, visualMaxMain)) {
+    /** Пробуем все фото обеих карточек, а не только первое. */
+    if (visualSimilarAcrossAllPhotos(cI, cJ, cache, visualMaxMain)) {
       const g = applyAttrGate(cI, cJ, attrOpts, 0.6, [
-        "~60% дубль: бренд (точно) + модельная линия + похожее фото (визуально)",
+        "~60% дубль: бренд (точно) + модельная линия + похожее фото среди всех ракурсов",
         `модель~${Math.round(modelSim * 100)}%${full >= PARTIAL_NAME_MIN_60 ? ` · полное название~${Math.round(full * 100)}%` : ""}`
       ]);
       if (g.score >= 0.59 && g.reasons.length) {
@@ -360,11 +361,15 @@ function resolveTierForPair(
   if (sameBrandForFuzzy(cI, cJ) && comb >= SLIGHT_NAME_UNLIKELY && imgI && imgJ) {
     if (substantialModelConflict(mA, mB, modelSim)) return null;
     if (softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq)) return null;
-    if (visualFromCache(imgI, imgJ, cache, visualMaxUnlikely)) {
+    /**
+     * «Маловероятно» — порог явно жёстче (UNLIKELY_VISUAL_HAMMING_MAX),
+     * но всё равно проверяем все фото — например, разные ракурсы туши.
+     */
+    if (visualSimilarAcrossAllPhotos(cI, cJ, cache, visualMaxUnlikely)) {
       return {
         kind: "un",
         reasons: [
-          "~45% кандидат: бренд + слабее название + узкое сходство превью первого фото (строже, чем ~60%)",
+          "~45% кандидат: бренд + слабее название + узкое сходство превью среди всех ракурсов",
           `сходство названия~${Math.round(comb * 100)}%`
         ],
         score: 0.45
@@ -435,6 +440,11 @@ function collectPairWork(
   return out;
 }
 
+function imagesOf(c: CompareProduct): string[] {
+  if (c.allImages && c.allImages.length > 0) return c.allImages;
+  return c.firstImage ? [c.firstImage] : [];
+}
+
 function urlsNeedingPhash(pairs: PairWork[]): string[] {
   const urls: string[] = [];
   for (const p of pairs) {
@@ -445,7 +455,9 @@ function urlsNeedingPhash(pairs: PairWork[]): string[] {
     const needUn =
       sameBrandForFuzzy(p.cI, p.cJ) && p.comb >= SLIGHT_NAME_UNLIKELY;
     if (need60 || needUn) {
-      urls.push(p.imgI, p.imgJ);
+      /** Грузим все фото обеих карточек: матчим «открытое vs в коробке». */
+      for (const u of imagesOf(p.cI)) urls.push(u);
+      for (const u of imagesOf(p.cJ)) urls.push(u);
     }
   }
   return urls;
@@ -631,10 +643,11 @@ export async function computeIntraNameTabDupPairs(
 
   const cache: PhashCache = new Map();
   const uniqueUrls = new Set<string>();
+  /** Грузим все фото обеих карточек, чтобы матчить «тушь в коробке vs открытая тушь». */
   for (const p of work) {
     if (p.urlEq) continue;
-    if (p.imgI) uniqueUrls.add(p.imgI.trim());
-    if (p.imgJ) uniqueUrls.add(p.imgJ.trim());
+    for (const u of imagesOf(p.cI)) uniqueUrls.add(u.trim());
+    for (const u of imagesOf(p.cJ)) uniqueUrls.add(u.trim());
   }
   stats.photoUrlsToDownload = uniqueUrls.size;
   await prefetchPhashes(uniqueUrls, cache);
@@ -812,7 +825,9 @@ export function collectCrossPhashUrls(
       const needUn =
         sameBrandForFuzzy(cA, cB) && comb >= SLIGHT_NAME_UNLIKELY;
       if (need60 || needUn) {
-        urls.push(imgI, imgJ);
+        /** Грузим все фото обеих карточек: разные ракурсы → совпадение по phash. */
+        for (const u of imagesOf(cA)) urls.push(u);
+        for (const u of imagesOf(cB)) urls.push(u);
       }
     }
   }
