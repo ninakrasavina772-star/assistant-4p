@@ -146,6 +146,39 @@ const SK_NOVELTY_IDS_B = "fp_compare_novelty_ids_b";
 const SK_OPENAI_KEY = "fp_compare_openai_key";
 const SK_OPENAI_REM = "fp_compare_openai_key_remember";
 
+function cleanProcessedStorageKey(siteA: string, siteB: string): string {
+  return `fp_compare_clean_processed_${siteA}|${siteB}`;
+}
+
+/** Галочка «обработано» для пары дублей (контент-менеджер). */
+function CleanPairProcessedCheckbox({
+  checked,
+  onChange
+}: {
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs cursor-pointer select-none shrink-0">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        className="rounded border-slate-400"
+      />
+      <span
+        className={
+          checked
+            ? "font-semibold text-emerald-800"
+            : "text-slate-600 hover:text-slate-900"
+        }
+      >
+        {checked ? "Обработано" : "Отметить обработано"}
+      </span>
+    </label>
+  );
+}
+
 /** Как в RubricCascadeSelect — для запроса /api/rubrics */
 const MIN_API_TOKEN = 12;
 
@@ -626,6 +659,12 @@ export default function ComparePage() {
   const [internalDupKindFilter, setInternalDupKindFilter] = useState<
     "all" | "ean" | "name_photo"
   >("all");
+  /** Пары, отмеченные контентом как просмотренные (ключ = dupPairKey). */
+  const [cleanProcessedKeys, setCleanProcessedKeys] = useState<Set<string>>(
+    () => new Set()
+  );
+  /** Скрывать уже обработанные пары в списках дублей / AI / B↔B. */
+  const [cleanHideProcessed, setCleanHideProcessed] = useState(false);
 
   /** AI-проверка чистых новинок (по фото + названию, БЕЗ EAN). */
   type CleanAiVerdict = {
@@ -869,6 +908,76 @@ export default function ComparePage() {
     }
   }, [cleanNoveltiesData, cleanAiVerdicts]);
 
+  useEffect(() => {
+    if (!cleanNoveltiesData) {
+      setCleanProcessedKeys(new Set());
+      return;
+    }
+    const sk = cleanProcessedStorageKey(
+      cleanNoveltiesData.siteALabel,
+      cleanNoveltiesData.siteBLabel
+    );
+    try {
+      const raw = sessionStorage.getItem(sk);
+      if (!raw) {
+        setCleanProcessedKeys(new Set());
+        return;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        setCleanProcessedKeys(new Set());
+        return;
+      }
+      setCleanProcessedKeys(
+        new Set(parsed.filter((x): x is string => typeof x === "string"))
+      );
+    } catch {
+      setCleanProcessedKeys(new Set());
+    }
+  }, [
+    cleanNoveltiesData?.siteALabel,
+    cleanNoveltiesData?.siteBLabel,
+    cleanNoveltiesData?.stats.noveltyCountById
+  ]);
+
+  const toggleCleanProcessed = useCallback(
+    (idA: number, idB: number) => {
+      if (!cleanNoveltiesData) return;
+      const pk = dupPairKey(idA, idB);
+      setCleanProcessedKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(pk)) next.delete(pk);
+        else next.add(pk);
+        try {
+          sessionStorage.setItem(
+            cleanProcessedStorageKey(
+              cleanNoveltiesData.siteALabel,
+              cleanNoveltiesData.siteBLabel
+            ),
+            JSON.stringify([...next])
+          );
+        } catch {
+          /** ignore */
+        }
+        return next;
+      });
+    },
+    [cleanNoveltiesData]
+  );
+
+  const scrollToCleanPairsList = useCallback(() => {
+    window.setTimeout(() => {
+      document
+        .getElementById("rep-clean-novelties-list")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }, []);
+
+  const openCleanAiDupsView = useCallback(() => {
+    setCleanNoveltiesView("aiDups");
+    scrollToCleanPairsList();
+  }, [scrollToCleanPairsList]);
+
   /**
    * AI-проверка чистых новинок: смотрим на пары «новинка B ↔ кандидат на A того же бренда»
    * (формирует сервер при подсчёте чистых) и спрашиваем gpt-4o-mini как «квалифицированного
@@ -991,7 +1100,24 @@ export default function ComparePage() {
         const wave = requests.slice(i, i + CLIENT_PARALLEL);
         await Promise.all(wave.map((r) => sendOne(r.pairs)));
       }
-      setCleanAiVerdicts((prev) => ({ ...prev, ...merged }));
+      const allVerdicts = { ...cleanAiVerdicts, ...merged };
+      setCleanAiVerdicts(allVerdicts);
+      const autoPairKeys = new Set<string>();
+      for (const p of cleanNoveltiesData.duplicatePairs) {
+        autoPairKeys.add(dupPairKey(p.novelty.id, p.productOnAId));
+      }
+      const newAiPos = Object.values(allVerdicts).filter((v) => {
+        if (!v.duplicate) return false;
+        return !autoPairKeys.has(dupPairKey(v.noveltyBId, v.productOnAId));
+      }).length;
+      if (newAiPos > 0) {
+        setCleanNoveltiesView("aiDups");
+        window.setTimeout(() => {
+          document
+            .getElementById("rep-clean-novelties-list")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 120);
+      }
       try {
         if (rememberOpenAiKey && typeof window !== "undefined") {
           sessionStorage.setItem(SK_OPENAI_KEY, key);
@@ -1007,6 +1133,7 @@ export default function ComparePage() {
     }
   }, [
     cleanNoveltiesData,
+    cleanAiVerdicts,
     openAiKey,
     cleanAiUseVision,
     cleanAiNoveltyLimit,
@@ -8004,18 +8131,27 @@ export default function ComparePage() {
                       {positiveAi > 0 && (
                         <span>
                           {" "}
-                          Положительные подсвечены ниже в плитке «Чистые».
+                          Смотрите во вкладке «AI-дубли (новые)» или кнопке ниже.
                         </span>
                       )}
                     </p>
                     {positiveAi > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => void downloadCleanAiDuplicatesXlsx()}
-                        className="rounded-md border border-purple-400 bg-white px-2 py-1 text-xs font-semibold text-purple-900 hover:bg-purple-50"
-                      >
-                        Excel: AI-дубли ({positiveAi})
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={openCleanAiDupsView}
+                          className="rounded-md border border-purple-700 bg-purple-700 px-2 py-1 text-xs font-semibold text-white hover:bg-purple-800"
+                        >
+                          Смотреть в списке ({positiveAi})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void downloadCleanAiDuplicatesXlsx()}
+                          className="rounded-md border border-purple-400 bg-white px-2 py-1 text-xs font-semibold text-purple-900 hover:bg-purple-50"
+                        >
+                          Excel: AI-дубли ({positiveAi})
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
@@ -8050,22 +8186,39 @@ export default function ComparePage() {
                 aIds: []
               });
             }
+            const processedCount = cleanProcessedKeys.size;
             return (
-              <div className="rounded-xl border border-slate-200 bg-white p-3 sticky top-2 z-30 shadow-sm">
+              <div
+                id="rep-clean-novelties-list"
+                className="rounded-xl border border-slate-200 bg-white p-3 sticky top-2 z-30 shadow-sm scroll-mt-24"
+              >
                 <h3 className="text-sm font-semibold text-slate-800 mb-2">
                   {titleByView[cleanNoveltiesView]}
+                  {processedCount > 0 && (
+                    <span className="ml-2 text-xs font-normal text-emerald-700">
+                      · обработано {processedCount}
+                    </span>
+                  )}
                 </h3>
                 <div className="max-h-[min(60vh,900px)] overflow-y-auto space-y-3 pr-1">
                   {cleanNoveltiesView === "duplicates" && (() => {
                     const allPairs = cleanNoveltiesData.duplicatePairs;
                     const countEan = allPairs.filter((p) => p.kind === "ean").length;
                     const countName = allPairs.filter((p) => p.kind === "name_photo").length;
-                    const filtered =
+                    const byKind =
                       cleanDupKindFilter === "ean"
                         ? allPairs.filter((p) => p.kind === "ean")
                         : cleanDupKindFilter === "name_photo"
                           ? allPairs.filter((p) => p.kind === "name_photo")
                           : allPairs;
+                    const filtered = cleanHideProcessed
+                      ? byKind.filter(
+                          (p) =>
+                            !cleanProcessedKeys.has(
+                              dupPairKey(p.novelty.id, p.productOnAId)
+                            )
+                        )
+                      : byKind;
                     return (
                       <>
                         <div className="sticky top-0 z-10 -mx-1 -mt-1 px-1 pt-1 pb-2 bg-white border-b border-slate-100 flex flex-wrap items-center gap-2 mb-2">
@@ -8107,33 +8260,64 @@ export default function ComparePage() {
                           >
                             Только название+фото ({countName})
                           </button>
+                          <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={cleanHideProcessed}
+                              onChange={(e) =>
+                                setCleanHideProcessed(e.target.checked)
+                              }
+                            />
+                            Скрыть обработанные
+                          </label>
                         </div>
                         {filtered.length === 0 && (
                           <p className="text-sm text-slate-500">
                             {allPairs.length === 0
                               ? "Дубли не найдены."
-                              : "В выбранной категории нет пар. Переключите фильтр выше."}
+                              : cleanHideProcessed && byKind.length > 0
+                                ? "Все пары в этой категории уже отмечены как обработанные. Снимите «Скрыть обработанные»."
+                                : "В выбранной категории нет пар. Переключите фильтр выше."}
                           </p>
                         )}
-                        {filtered.slice(0, 100).map((pair, i) => (
+                        {filtered.slice(0, 100).map((pair, i) => {
+                          const pk = dupPairKey(
+                            pair.novelty.id,
+                            pair.productOnAId
+                          );
+                          const processed = cleanProcessedKeys.has(pk);
+                          return (
                           <div
                             key={`cln-${i}-${pair.novelty.id}-${pair.productOnAId}-${pair.kind}`}
                             className={`p-3 rounded-lg border space-y-2 ${
-                              pair.kind === "ean"
-                                ? "border-amber-100 bg-amber-50/30"
-                                : "border-sky-100 bg-sky-50/30"
+                              processed
+                                ? "border-emerald-300 bg-emerald-50/25 opacity-75"
+                                : pair.kind === "ean"
+                                  ? "border-amber-100 bg-amber-50/30"
+                                  : "border-sky-100 bg-sky-50/30"
                             }`}
                           >
-                            <p
-                              className={`text-[10px] uppercase tracking-wide font-medium ${
-                                pair.kind === "ean" ? "text-amber-900" : "text-sky-900"
-                              }`}
-                            >
-                              {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
-                              {pair.variantArticleOnB
-                                ? ` · вариация B арт. ${pair.variantArticleOnB}`
-                                : ""}
-                            </p>
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <p
+                                className={`text-[10px] uppercase tracking-wide font-medium ${
+                                  pair.kind === "ean" ? "text-amber-900" : "text-sky-900"
+                                }`}
+                              >
+                                {pair.kind === "ean" ? `EAN ${pair.ean ?? ""}` : "название + фото"}
+                                {pair.variantArticleOnB
+                                  ? ` · вариация B арт. ${pair.variantArticleOnB}`
+                                  : ""}
+                              </p>
+                              <CleanPairProcessedCheckbox
+                                checked={processed}
+                                onChange={() =>
+                                  toggleCleanProcessed(
+                                    pair.novelty.id,
+                                    pair.productOnAId
+                                  )
+                                }
+                              />
+                            </div>
                             <div className="grid sm:grid-cols-2 gap-2">
                               <ProductCell c={pair.productOnA} siteLabel={cleanNoveltiesData.siteALabel} />
                               <ProductCell c={pair.novelty} siteLabel={cleanNoveltiesData.siteBLabel} />
@@ -8142,7 +8326,8 @@ export default function ComparePage() {
                               <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                         {filtered.length > 100 && (
                           <p className="text-xs text-slate-500">
                             Показаны первые 100 пар из {filtered.length}. Полная таблица в Excel
@@ -8316,16 +8501,21 @@ export default function ComparePage() {
                       const y = p.productOnAId;
                       autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
                     }
-                    const positives = Object.values(cleanAiVerdicts)
+                    const positivesAll = Object.values(cleanAiVerdicts)
                       .filter((v) => v.duplicate)
                       .filter((v) => {
-                        const k =
-                          v.noveltyBId < v.productOnAId
-                            ? `${v.noveltyBId}-${v.productOnAId}`
-                            : `${v.productOnAId}-${v.noveltyBId}`;
+                        const k = dupPairKey(v.noveltyBId, v.productOnAId);
                         return !autoPairKeys.has(k);
                       })
                       .sort((a, b) => b.confidence - a.confidence);
+                    const positives = cleanHideProcessed
+                      ? positivesAll.filter(
+                          (v) =>
+                            !cleanProcessedKeys.has(
+                              dupPairKey(v.noveltyBId, v.productOnAId)
+                            )
+                        )
+                      : positivesAll;
                     if (Object.keys(cleanAiVerdicts).length === 0) {
                       return (
                         <p className="text-sm text-slate-500">
@@ -8334,7 +8524,7 @@ export default function ComparePage() {
                         </p>
                       );
                     }
-                    if (positives.length === 0) {
+                    if (positivesAll.length === 0) {
                       return (
                         <p className="text-sm text-slate-500">
                           AI не нашёл дублей сверх тех, что уже определила
@@ -8358,26 +8548,59 @@ export default function ComparePage() {
                     }
                     return (
                       <>
-                        <p className="text-xs text-purple-800 mb-2">
-                          Показаны только новые пары, найденные AI и не
-                          совпадающие с уже определёнными автоматикой
-                          (EAN / название+фото). Сортировка — по уверенности
-                          модели.
-                        </p>
+                        <div className="sticky top-0 z-10 -mx-1 -mt-1 px-1 pt-1 pb-2 bg-white border-b border-slate-100 flex flex-wrap items-center gap-2 mb-2">
+                          <p className="text-xs text-purple-800">
+                            Новые пары AI (не в автоматике):{" "}
+                            <b className="tabular-nums">{positivesAll.length}</b>
+                          </p>
+                          <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={cleanHideProcessed}
+                              onChange={(e) =>
+                                setCleanHideProcessed(e.target.checked)
+                              }
+                            />
+                            Скрыть обработанные
+                          </label>
+                        </div>
+                        {positives.length === 0 && (
+                          <p className="text-sm text-slate-500">
+                            Все AI-дубли уже отмечены как обработанные. Снимите
+                            «Скрыть обработанные».
+                          </p>
+                        )}
                         {positives.slice(0, 100).map((v, idx) => {
                           const novelty = noveltyById.get(v.noveltyBId);
                           const productA = productAById.get(v.productOnAId);
                           if (!novelty || !productA) return null;
+                          const pk = dupPairKey(v.noveltyBId, v.productOnAId);
+                          const processed = cleanProcessedKeys.has(pk);
                           return (
                             <div
                               key={`aid-${v.noveltyBId}-${v.productOnAId}-${idx}`}
-                              className="p-2 space-y-1 rounded-lg border border-purple-200 bg-purple-50/40"
+                              className={`p-2 space-y-1 rounded-lg border ${
+                                processed
+                                  ? "border-emerald-300 bg-emerald-50/25 opacity-75"
+                                  : "border-purple-200 bg-purple-50/40"
+                              }`}
                             >
-                              <p className="text-[10px] uppercase tracking-wide font-medium text-purple-900">
-                                AI: дубль · уверенность{" "}
-                                {Math.round(v.confidence * 100)}%
-                                {v.note ? ` · ${v.note}` : ""}
-                              </p>
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <p className="text-[10px] uppercase tracking-wide font-medium text-purple-900">
+                                  AI: дубль · уверенность{" "}
+                                  {Math.round(v.confidence * 100)}%
+                                  {v.note ? ` · ${v.note}` : ""}
+                                </p>
+                                <CleanPairProcessedCheckbox
+                                  checked={processed}
+                                  onChange={() =>
+                                    toggleCleanProcessed(
+                                      v.noveltyBId,
+                                      v.productOnAId
+                                    )
+                                  }
+                                />
+                              </div>
                               <div className="grid sm:grid-cols-2 gap-2">
                                 <ProductCell
                                   c={productA}
@@ -8407,12 +8630,18 @@ export default function ComparePage() {
                     const countName = allPairs.filter(
                       (p) => p.kind === "name_photo"
                     ).length;
-                    const filtered =
+                    const byKind =
                       internalDupKindFilter === "ean"
                         ? allPairs.filter((p) => p.kind === "ean")
                         : internalDupKindFilter === "name_photo"
                           ? allPairs.filter((p) => p.kind === "name_photo")
                           : allPairs;
+                    const filtered = cleanHideProcessed
+                      ? byKind.filter(
+                          (p) =>
+                            !cleanProcessedKeys.has(dupPairKey(p.aId, p.bId))
+                        )
+                      : byKind;
                     return (
                       <>
                         <div className="sticky top-0 z-10 -mx-1 -mt-1 px-1 pt-1 pb-2 bg-white border-b border-slate-100 flex flex-wrap items-center gap-2 mb-2">
@@ -8456,35 +8685,60 @@ export default function ComparePage() {
                           >
                             Только название+фото ({countName})
                           </button>
+                          <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={cleanHideProcessed}
+                              onChange={(e) =>
+                                setCleanHideProcessed(e.target.checked)
+                              }
+                            />
+                            Скрыть обработанные
+                          </label>
                         </div>
                         {filtered.length === 0 && (
                           <p className="text-sm text-slate-500">
                             {allPairs.length === 0
                               ? "Внутренних дублей среди новинок не найдено."
-                              : "Нет пар по выбранному типу."}
+                              : cleanHideProcessed && byKind.length > 0
+                                ? "Все пары уже отмечены как обработанные."
+                                : "Нет пар по выбранному типу."}
                           </p>
                         )}
-                        {filtered.slice(0, 100).map((pair, idx) => (
+                        {filtered.slice(0, 100).map((pair, idx) => {
+                          const pk = dupPairKey(pair.aId, pair.bId);
+                          const processed = cleanProcessedKeys.has(pk);
+                          return (
                           <div
                             key={`int-${pair.aId}-${pair.bId}-${idx}`}
                             className={`p-2 space-y-1 rounded-lg border bg-white ${
-                              pair.kind === "ean"
-                                ? "border-amber-100 bg-amber-50/30"
-                                : "border-sky-100 bg-sky-50/30"
+                              processed
+                                ? "border-emerald-300 bg-emerald-50/25 opacity-75"
+                                : pair.kind === "ean"
+                                  ? "border-amber-100 bg-amber-50/30"
+                                  : "border-sky-100 bg-sky-50/30"
                             }`}
                           >
-                            <p
-                              className={`text-[10px] uppercase tracking-wide font-medium ${
-                                pair.kind === "ean"
-                                  ? "text-amber-900"
-                                  : "text-sky-900"
-                              }`}
-                            >
-                              {pair.kind === "ean"
-                                ? `EAN ${pair.ean ?? ""}`
-                                : "название + фото"}{" "}
-                              · B ↔ B (id {pair.aId} ↔ id {pair.bId})
-                            </p>
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <p
+                                className={`text-[10px] uppercase tracking-wide font-medium ${
+                                  pair.kind === "ean"
+                                    ? "text-amber-900"
+                                    : "text-sky-900"
+                                }`}
+                              >
+                                {pair.kind === "ean"
+                                  ? `EAN ${pair.ean ?? ""}`
+                                  : "название + фото"}{" "}
+                                · B ↔ B (id {pair.aId} ↔ id {pair.bId})
+                              </p>
+                              <CleanPairProcessedCheckbox
+                                checked={processed}
+                                onChange={() =>
+                                  toggleCleanProcessed(pair.aId, pair.bId)
+                                }
+                              />
+                            </div>
                             <div className="grid sm:grid-cols-2 gap-2">
                               <ProductCell
                                 c={pair.a}
@@ -8501,7 +8755,8 @@ export default function ComparePage() {
                               </p>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                         {filtered.length > 100 && (
                           <p className="text-xs text-slate-500">
                             Показаны первые 100 пар из {filtered.length}. Полная
