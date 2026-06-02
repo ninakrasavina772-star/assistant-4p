@@ -121,7 +121,7 @@ export function OzonImageConverter() {
         setProgress(`Преобразуем ${done} / ${total}…`);
       });
 
-      const ws = wb.Sheets[info.sheetName];
+      const ws = wb.getWorksheet(info.sheetName);
       if (!ws) {
         setError("Лист Excel не найден");
         return;
@@ -214,9 +214,8 @@ export function OzonImageConverter() {
             — готовые https-ссылки для Ozon.
           </p>
           <p className="mb-2 text-xs text-slate-500">
-            Рекомендуемое хранилище:{" "}
-            <strong>Yandex Object Storage</strong> — Ozon обычно принимает ссылки вида{" "}
-            <code className="text-[0.7rem]">https://storage.yandexcloud.net/…/file.jpg</code>
+            Добавляется только колонка <strong>Foto 3</strong> после <strong>foto 2</strong> — name, foto, ml и
+            остальные столбцы сохраняются.
           </p>
           <details className="mt-2 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs">
             <summary className="cursor-pointer font-semibold text-slate-700">
@@ -365,9 +364,8 @@ export function OzonImageConverter() {
                 ) : null}
               </div>
               <p className="text-xs text-slate-500">
-                Нужен столбец <strong>foto 2</strong> в шапке. Рядом появится <strong>Foto 3</strong> с
-                https-ссылками. Остальные колонки (name, foto, ml…) сохраняются; встроенные картинки в
-                Excel могут визуально съехать — для Ozon используйте ссылки из Foto 3.
+                Нужен столбец <strong>foto 2</strong>. Рядом появится <strong>Foto 3</strong> с https-ссылками.
+                Все остальные колонки (name, foto, ml, картинки…) остаются на месте.
               </p>
               {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
               {resultBlob && excelStats ? (
