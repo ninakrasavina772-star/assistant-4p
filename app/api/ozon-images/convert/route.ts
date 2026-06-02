@@ -92,9 +92,9 @@ export async function POST(req: Request) {
   if (urls.length === 0) {
     return NextResponse.json({ error: "Вставьте хотя бы одну ссылку" }, { status: 400 });
   }
-  if (urls.length > 100) {
+  if (urls.length > 500) {
     return NextResponse.json(
-      { error: "Не больше 100 ссылок за раз" },
+      { error: "Не больше 500 ссылок за один запрос" },
       { status: 400 }
     );
   }

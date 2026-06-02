@@ -13,9 +13,8 @@ export default function OzonImagesPage() {
       title="Ссылки на картинки для Ozon"
       description={
         <>
-          Вставьте список ссылок с генератора инфографики (например{" "}
-          <code className="rounded bg-slate-100 px-1 text-xs">http://5.35.85.200/…</code>
-          ). Инструмент сделает из них ссылки с <strong>https://</strong>, которые принимает Ozon.
+          Загрузите Excel с колонкой <strong>foto 2</strong> — инструмент добавит рядом{" "}
+          <strong>Foto 3</strong> с https-ссылками для Ozon. Или вставьте список ссылок вручную.
         </>
       }
     >

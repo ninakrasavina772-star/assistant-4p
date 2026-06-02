@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   homeBtnPrimary,
   homeCard,
@@ -9,6 +9,13 @@ import {
   homeCardTitle,
   homeInput
 } from "@/components/homeTheme";
+import { convertUrlsBatch } from "@/lib/ozonImageConvertClient";
+import {
+  analyzeWorkbook,
+  applyFoto3Column,
+  readWorkbookFromFile,
+  writeWorkbookToBlob
+} from "@/lib/ozonImageExcel";
 import type { OzonUrlRow } from "@/lib/ozonImageUrls";
 
 const DEFAULT_OLD = "http://5.35.85.200";
@@ -16,51 +23,122 @@ const EXAMPLE =
   "http://5.35.85.200/api/public/tasks/dd66947c-bfbc-47d3-9cab-98932d0a82d2/7.jpg";
 
 type Mode = "replace" | "rehost";
+type InputKind = "excel" | "list";
 
 export function OzonImageConverter() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [inputKind, setInputKind] = useState<InputKind>("excel");
+  const [fileName, setFileName] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("rehost");
   const [oldBase, setOldBase] = useState(DEFAULT_OLD);
   const [newBase, setNewBase] = useState("");
   const [rows, setRows] = useState<OzonUrlRow[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resultBlob, setResultBlob] = useState<{ blob: Blob; name: string } | null>(null);
+  const [excelStats, setExcelStats] = useState<{ total: number; ok: number } | null>(null);
 
   const okUrls = useMemo(
     () => (rows ?? []).filter((r) => r.ok).map((r) => r.output),
     [rows]
   );
 
-  const run = useCallback(async () => {
+  const convertOptions = useMemo(
+    () => ({
+      mode,
+      oldBase: mode === "replace" ? oldBase : undefined,
+      newBase: mode === "replace" ? newBase : undefined
+    }),
+    [mode, oldBase, newBase]
+  );
+
+  const runList = useCallback(async () => {
     setBusy(true);
     setError(null);
     setRows(null);
+    setResultBlob(null);
+    setExcelStats(null);
+    setProgress(null);
     try {
-      const res = await fetch("/api/ozon-images/convert", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          text,
-          oldBase: mode === "replace" ? oldBase : undefined,
-          newBase: mode === "replace" ? newBase : undefined
-        })
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        rows?: OzonUrlRow[];
-      };
-      if (!res.ok) {
-        setError(data.error ?? `Ошибка ${res.status}`);
-        return;
-      }
-      setRows(data.rows ?? []);
-    } catch {
-      setError("Не удалось связаться с сервером");
+      const urls = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const map = await convertUrlsBatch(urls, convertOptions);
+      setRows(urls.map((u) => map.get(u) ?? { input: u, output: "", ok: false, error: "Нет ответа" }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось связаться с сервером");
     } finally {
       setBusy(false);
+      setProgress(null);
     }
-  }, [mode, text, oldBase, newBase]);
+  }, [text, convertOptions]);
+
+  const runExcel = useCallback(async (file: File) => {
+    setBusy(true);
+    setError(null);
+    setRows(null);
+    setResultBlob(null);
+    setExcelStats(null);
+    setProgress("Читаем Excel…");
+
+    try {
+      const wb = await readWorkbookFromFile(file);
+      const info = analyzeWorkbook(wb);
+      if (!info) {
+        setError('Не найден столбец «foto 2» (или «foto2») в первой строке заголовков');
+        return;
+      }
+      if (info.rows.length === 0) {
+        setError("В столбце foto 2 нет ссылок для преобразования");
+        return;
+      }
+
+      const urls = info.rows.map((r) => r.url);
+      setProgress(`Преобразуем 0 / ${urls.length}…`);
+
+      const map = await convertUrlsBatch(urls, convertOptions, (done, total) => {
+        setProgress(`Преобразуем ${done} / ${total}…`);
+      });
+
+      const ws = wb.Sheets[info.sheetName];
+      if (!ws) {
+        setError("Лист Excel не найден");
+        return;
+      }
+
+      const ok = applyFoto3Column(ws, info, map);
+      const blob = await writeWorkbookToBlob(wb);
+      const outName = file.name.replace(/\.xlsx?$/i, "") + "-foto3.xlsx";
+
+      setResultBlob({ blob, name: outName });
+      setExcelStats({ total: info.rows.length, ok });
+      setRows(
+        info.rows.map(({ url }) => map.get(url) ?? { input: url, output: "", ok: false, error: "Нет ответа" })
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка обработки Excel");
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }, [convertOptions]);
+
+  const onFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      setFileName(file?.name ?? null);
+      setResultBlob(null);
+      setExcelStats(null);
+      setRows(null);
+      setError(null);
+      if (file) void runExcel(file);
+      e.target.value = "";
+    },
+    [runExcel]
+  );
 
   const copyAll = useCallback(async () => {
     if (okUrls.length === 0) return;
@@ -80,6 +158,15 @@ export function OzonImageConverter() {
     URL.revokeObjectURL(a.href);
   }, [rows]);
 
+  const downloadExcel = useCallback(() => {
+    if (!resultBlob) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(resultBlob.blob);
+    a.download = resultBlob.name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, [resultBlob]);
+
   return (
     <div className="space-y-6">
       <section className={homeCard}>
@@ -88,20 +175,11 @@ export function OzonImageConverter() {
         </div>
         <div className={`${homeCardBody} text-sm leading-relaxed text-slate-600`}>
           <p className="mb-2">
-            Ozon принимает только ссылки с <strong className="font-semibold text-slate-800">https://</strong>.
-            Ваши картинки сейчас на <code className="text-xs">http://5.35.85.200</code> — поэтому не
-            грузятся.
+            Загрузите Excel с колонкой <strong className="font-semibold text-slate-800">foto 2</strong>{" "}
+            (ссылки на инфографику с <code className="text-xs">http://5.35.85.200</code>).
+            Инструмент добавит рядом колонку <strong className="font-semibold text-slate-800">Foto 3</strong>{" "}
+            с https-ссылками для Ozon.
           </p>
-          <ul className="list-disc space-y-1 pl-5">
-            <li>
-              <strong className="font-medium text-slate-800">Выложить в облако</strong> — скачиваем
-              картинки и даём новые https-ссылки (нужен Vercel Blob на сервере).
-            </li>
-            <li>
-              <strong className="font-medium text-slate-800">Заменить адрес</strong> — если у вас уже
-              есть HTTPS-домен с теми же путями, просто меняем начало ссылки.
-            </li>
-          </ul>
         </div>
       </section>
 
@@ -120,9 +198,7 @@ export function OzonImageConverter() {
             }`}
           >
             <p className="text-sm font-bold text-slate-900">Выложить в облако</p>
-            <p className="mt-1 text-xs text-slate-600">
-              Рекомендуется: готовые https-ссылки для Ozon
-            </p>
+            <p className="mt-1 text-xs text-slate-600">Рекомендуется для Ozon</p>
           </button>
           <button
             type="button"
@@ -134,9 +210,7 @@ export function OzonImageConverter() {
             }`}
           >
             <p className="text-sm font-bold text-slate-900">Заменить адрес</p>
-            <p className="mt-1 text-xs text-slate-600">
-              Если HTTPS уже настроен на вашем сервере
-            </p>
+            <p className="mt-1 text-xs text-slate-600">Если HTTPS уже на вашем сервере</p>
           </button>
         </div>
       </section>
@@ -171,53 +245,125 @@ export function OzonImageConverter() {
 
       <section className={homeCard}>
         <div className={homeCardHeader}>
-          <h2 className={homeCardTitle}>Ссылки на картинки</h2>
+          <h2 className={homeCardTitle}>Источник</h2>
         </div>
-        <div className={homeCardBody}>
-          <textarea
-            className={`${homeInput} min-h-[180px] font-mono text-xs leading-relaxed`}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={`По одной ссылке на строку, например:\n${EXAMPLE}`}
-            spellCheck={false}
-          />
-          <div className="mt-4 flex flex-wrap gap-3">
+        <div className={`${homeCardBody} space-y-4`}>
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className={homeBtnPrimary}
-              disabled={busy || !text.trim()}
-              onClick={() => void run()}
+              onClick={() => setInputKind("excel")}
+              className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
+                inputKind === "excel"
+                  ? "bg-[#ffd740] text-[#0a0a0a]"
+                  : "border border-slate-200 bg-white text-slate-700"
+              }`}
             >
-              {busy ? "Обрабатываем…" : "Преобразовать"}
+              Excel файл
             </button>
-            {rows && okUrls.length > 0 ? (
-              <>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                  onClick={() => void copyAll()}
-                >
-                  Скопировать {okUrls.length} ссылок
-                </button>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                  onClick={downloadTxt}
-                >
-                  Скачать .txt
-                </button>
-              </>
-            ) : null}
+            <button
+              type="button"
+              onClick={() => setInputKind("list")}
+              className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
+                inputKind === "list"
+                  ? "bg-[#ffd740] text-[#0a0a0a]"
+                  : "border border-slate-200 bg-white text-slate-700"
+              }`}
+            >
+              Список ссылок
+            </button>
           </div>
+
+          {inputKind === "excel" ? (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                onChange={onFileChange}
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  {busy ? "Обрабатываем…" : "Выбрать Excel"}
+                </button>
+                {fileName ? (
+                  <span className="text-sm text-slate-600">{fileName}</span>
+                ) : null}
+              </div>
+              <p className="text-xs text-slate-500">
+                Нужен столбец <strong>foto 2</strong> в шапке. Рядом появится <strong>Foto 3</strong> с
+                https-ссылками. Остальные колонки (name, foto, ml…) сохраняются; встроенные картинки в
+                Excel могут визуально съехать — для Ozon используйте ссылки из Foto 3.
+              </p>
+              {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
+              {resultBlob && excelStats ? (
+                <div className="flex flex-wrap gap-3 pt-1">
+                  <button
+                    type="button"
+                    className={homeBtnPrimary}
+                    onClick={downloadExcel}
+                  >
+                    Скачать Excel с Foto 3
+                  </button>
+                  <span className="self-center text-sm text-emerald-700">
+                    Готово: {excelStats.ok} из {excelStats.total} ссылок
+                  </span>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <textarea
+                className={`${homeInput} min-h-[180px] font-mono text-xs leading-relaxed`}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder={`По одной ссылке на строку, например:\n${EXAMPLE}`}
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy || !text.trim()}
+                onClick={() => void runList()}
+              >
+                {busy ? "Обрабатываем…" : "Преобразовать"}
+              </button>
+            </>
+          )}
+
           {error ? (
-            <p className="mt-3 text-sm text-red-700" role="alert">
+            <p className="text-sm text-red-700" role="alert">
               {error}
             </p>
+          ) : null}
+
+          {inputKind === "list" && rows && okUrls.length > 0 ? (
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={() => void copyAll()}
+              >
+                Скопировать {okUrls.length} ссылок
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={downloadTxt}
+              >
+                Скачать .txt
+              </button>
+            </div>
           ) : null}
         </div>
       </section>
 
-      {rows && rows.length > 0 ? (
+      {rows && rows.length > 0 && inputKind === "list" ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>
