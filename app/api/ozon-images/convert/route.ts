@@ -1,5 +1,10 @@
 import { put } from "@vercel/blob";
+import sharp from "sharp";
 import { NextResponse } from "next/server";
+import {
+  buildOzonPublicImageUrl,
+  blobPathname
+} from "@/lib/ozonImagePublicUrl";
 import {
   assertFetchableImageUrl,
   defaultAllowedHosts,
@@ -42,6 +47,18 @@ async function fetchImageBuffer(url: string, allowedHosts: string[]): Promise<Bu
   return buf;
 }
 
+/** Минимум 900 px по ширине — требование Ozon для части категорий */
+async function ensureMinWidth(buf: Buffer, minWidth = 900): Promise<Buffer> {
+  const img = sharp(buf);
+  const meta = await img.metadata();
+  const w = meta.width ?? 0;
+  if (w >= minWidth) return buf;
+  return img
+    .resize({ width: minWidth, withoutEnlargement: false })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+}
+
 async function rehostOne(
   input: string,
   allowedHosts: string[]
@@ -58,9 +75,13 @@ async function rehostOne(
       };
     }
 
-    const buf = await fetchImageBuffer(input, allowedHosts);
+    let buf = await fetchImageBuffer(input, allowedHosts);
+    buf = await ensureMinWidth(buf);
+
+    const blobId = crypto.randomUUID();
     const name = filenameFromUrl(input);
-    const blob = await put(`ozon-images/${crypto.randomUUID()}/${name}`, buf, {
+    const pathname = blobPathname(blobId, name);
+    const blob = await put(pathname, buf, {
       access: "public",
       contentType: name.toLowerCase().endsWith(".png")
         ? "image/png"
@@ -68,7 +89,10 @@ async function rehostOne(
       token
     });
 
-    return { input, output: blob.url, ok: true };
+    const storedName = blob.pathname.split("/").pop() ?? name;
+    const output = buildOzonPublicImageUrl(blobId, storedName);
+
+    return { input, output, ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка загрузки";
     return { input, output: "", ok: false, error: msg };

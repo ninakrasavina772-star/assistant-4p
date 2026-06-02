@@ -126,12 +126,19 @@ export function applyFoto3Column(
     const conv = conversions.get(url);
     const dstAddr = XLSX.utils.encode_cell({ r, c: foto3Col });
     if (conv?.ok && conv.output) {
-      ws[dstAddr] = { t: "s", v: conv.output, l: { Target: conv.output } };
+      // Только текст — иначе Excel/Ozon могут обрезать длинную гиперссылку
+      ws[dstAddr] = { t: "s", v: conv.output };
       filled += 1;
     } else if (conv?.error) {
       ws[dstAddr] = { t: "s", v: `# ${conv.error}` };
     }
   }
+
+  // Широкая колонка Foto 3 — чтобы видеть полный URL
+  const cols = (ws["!cols"] as { wch?: number }[] | undefined) ?? [];
+  while (cols.length <= foto3Col) cols.push({});
+  cols[foto3Col] = { wch: 120 };
+  ws["!cols"] = cols;
 
   return filled;
 }
