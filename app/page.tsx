@@ -26,7 +26,8 @@ const tools: {
     requiresAuth: true
   },
   { href: "/size-table", title: "Создать размерную таблицу", emoji: "📏" },
-  { href: "/prices-stock", title: "Выгрузка цен и остатков", emoji: "💹" }
+  { href: "/prices-stock", title: "Выгрузка цен и остатков", emoji: "💹" },
+  { href: "/ozon-images", title: "Ссылки на картинки для Ozon", emoji: "🖼️" }
 ];
 
 export default function AssistantHome() {
