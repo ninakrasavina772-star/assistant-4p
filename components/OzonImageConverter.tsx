@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   homeBtnPrimary,
   homeCard,
@@ -39,6 +39,24 @@ export function OzonImageConverter() {
   const [error, setError] = useState<string | null>(null);
   const [resultBlob, setResultBlob] = useState<{ blob: Blob; name: string } | null>(null);
   const [excelStats, setExcelStats] = useState<{ total: number; ok: number } | null>(null);
+  const [storage, setStorage] = useState<{
+    configured: boolean;
+    label: string;
+    backend: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/ozon-images/status")
+      .then((r) => r.json())
+      .then((d: { configured?: boolean; label?: string; backend?: string | null }) => {
+        setStorage({
+          configured: Boolean(d.configured),
+          label: d.label ?? "неизвестно",
+          backend: d.backend ?? null
+        });
+      })
+      .catch(() => setStorage({ configured: false, label: "ошибка проверки", backend: null }));
+  }, []);
 
   const okUrls = useMemo(
     () => (rows ?? []).filter((r) => r.ok).map((r) => r.output),
@@ -174,12 +192,63 @@ export function OzonImageConverter() {
           <h2 className={homeCardTitle}>Как работает</h2>
         </div>
         <div className={`${homeCardBody} text-sm leading-relaxed text-slate-600`}>
+          {storage ? (
+            <p
+              className={`mb-3 rounded-lg px-3 py-2 text-xs font-medium ${
+                storage.configured && storage.backend === "yandex"
+                  ? "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
+                  : storage.configured
+                    ? "bg-amber-50 text-amber-900 ring-1 ring-amber-200"
+                    : "bg-red-50 text-red-800 ring-1 ring-red-200"
+              }`}
+            >
+              Хранилище: {storage.label}
+              {storage.backend === "vercel-blob"
+                ? " — для Ozon лучше подключить Yandex Object Storage (см. ниже)"
+                : null}
+            </p>
+          ) : null}
           <p className="mb-2">
-            Загрузите Excel с колонкой <strong className="font-semibold text-slate-800">foto 2</strong>{" "}
-            (ссылки на инфографику с <code className="text-xs">http://5.35.85.200</code>).
-            Инструмент добавит рядом колонку <strong className="font-semibold text-slate-800">Foto 3</strong>{" "}
-            с https-ссылками для Ozon.
+            Загрузите Excel с колонкой <strong className="font-semibold text-slate-800">foto 2</strong>.
+            Картинки кладём в облако, в колонку <strong className="font-semibold text-slate-800">Foto 3</strong>{" "}
+            — готовые https-ссылки для Ozon.
           </p>
+          <p className="mb-2 text-xs text-slate-500">
+            Рекомендуемое хранилище:{" "}
+            <strong>Yandex Object Storage</strong> — Ozon обычно принимает ссылки вида{" "}
+            <code className="text-[0.7rem]">https://storage.yandexcloud.net/…/file.jpg</code>
+          </p>
+          <details className="mt-2 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs">
+            <summary className="cursor-pointer font-semibold text-slate-700">
+              Как подключить Yandex Object Storage (один раз)
+            </summary>
+            <ol className="mt-2 list-decimal space-y-1 pl-4 text-slate-600">
+              <li>
+                <a
+                  className="text-sky-700 underline"
+                  href="https://console.yandex.cloud/folders"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Yandex Cloud
+                </a>
+                : Object Storage → создать бакет (имя латиницей, например{" "}
+                <code>assistant-4p-ozon</code>).
+              </li>
+              <li>
+                В бакете: доступ → <strong>публичный</strong> на чтение объектов (или ACL
+                public-read).
+              </li>
+              <li>
+                Сервисный аккаунт → статический ключ доступа (Access Key + Secret Key).
+              </li>
+              <li>
+                Vercel → assistant-4p → Settings → Environment Variables → добавить{" "}
+                <code>YANDEX_S3_BUCKET</code>, <code>YANDEX_S3_ACCESS_KEY_ID</code>,{" "}
+                <code>YANDEX_S3_SECRET_ACCESS_KEY</code> → Redeploy.
+              </li>
+            </ol>
+          </details>
         </div>
       </section>
 

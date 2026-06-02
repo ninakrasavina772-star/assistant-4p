@@ -1,10 +1,6 @@
-import { put } from "@vercel/blob";
 import sharp from "sharp";
 import { NextResponse } from "next/server";
-import {
-  buildOzonPublicImageUrl,
-  blobPathname
-} from "@/lib/ozonImagePublicUrl";
+import { uploadOzonImage, getOzonStorageBackend } from "@/lib/ozonImageStorage";
 import {
   assertFetchableImageUrl,
   defaultAllowedHosts,
@@ -64,33 +60,21 @@ async function rehostOne(
   allowedHosts: string[]
 ): Promise<OzonUrlRow> {
   try {
-    const token = process.env.BLOB_READ_WRITE_TOKEN;
-    if (!token) {
+    if (!getOzonStorageBackend()) {
       return {
         input,
         output: "",
         ok: false,
         error:
-          "Облако не настроено: добавьте BLOB_READ_WRITE_TOKEN в Vercel (Storage → Blob)"
+          "Хранилище не настроено: Yandex Object Storage (см. инструкцию на странице)"
       };
     }
 
     let buf = await fetchImageBuffer(input, allowedHosts);
     buf = await ensureMinWidth(buf);
 
-    const blobId = crypto.randomUUID();
     const name = filenameFromUrl(input);
-    const pathname = blobPathname(blobId, name);
-    const blob = await put(pathname, buf, {
-      access: "public",
-      contentType: name.toLowerCase().endsWith(".png")
-        ? "image/png"
-        : "image/jpeg",
-      token
-    });
-
-    const storedName = blob.pathname.split("/").pop() ?? name;
-    const output = buildOzonPublicImageUrl(blobId, storedName);
+    const output = await uploadOzonImage(buf, name);
 
     return { input, output, ok: true };
   } catch (e) {
