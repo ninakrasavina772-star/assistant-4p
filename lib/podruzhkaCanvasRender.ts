@@ -42,6 +42,10 @@ function formatMl(ml: string): string {
   return n ? `${n} мл` : t;
 }
 
+function brandFont(size: number): string {
+  return `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+}
+
 function wrapLines(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   text: string,
@@ -65,6 +69,33 @@ function wrapLines(
   }
   lines.push(line);
   return lines.slice(0, maxLines);
+}
+
+/** Бренд ≤55% ширины и ≤14% высоты макета */
+function resolveBrandFontSize(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  brandName: string
+): { size: number; lines: string[] } {
+  const maxW = L.brand.w;
+  const maxH = L.brand.h;
+  const maxLines = S.fonts.brand.maxLines;
+
+  for (let size = S.fonts.brand.maxSize; size >= S.fonts.brand.minSize; size -= 2) {
+    const font = brandFont(size);
+    const lines = wrapLines(ctx, brandName.toUpperCase(), maxW, font, maxLines);
+    const lineH = Math.round(size * 1.05);
+    const totalH = lines.length * lineH;
+    const widest = Math.max(0, ...lines.map((ln) => ctx.measureText(ln).width));
+    if (widest <= maxW && totalH <= maxH) {
+      return { size, lines };
+    }
+  }
+
+  const size = S.fonts.brand.minSize;
+  return {
+    size,
+    lines: wrapLines(ctx, brandName.toUpperCase(), maxW, brandFont(size), maxLines)
+  };
 }
 
 function drawFilledBar(
@@ -93,57 +124,58 @@ async function drawTemplateBase(
       : await sharp(raw).resize(W, H, { fit: "fill" }).png().toBuffer();
   const base = await loadImage(buf);
   ctx.drawImage(base, 0, 0, W, H);
+
+  ctx.save();
+  ctx.fillStyle = `rgba(247, 247, 247, ${S.ratios.loopFadeOpacity})`;
+  ctx.fillRect(Math.round(W * S.ratios.loopFadeRight), 100, W - Math.round(W * S.ratios.loopFadeRight), H - 100);
+  ctx.restore();
 }
 
-/** Текст по фиксированным координатам макета 1000×1400 */
 function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   data: PodruzhkaInfographicData
 ): void {
-  const fBrand = `800 ${S.fonts.brand.size}px MontserratExtraBold, MontserratBold, sans-serif`;
-  const fType = `400 ${S.fonts.productType.size}px Montserrat, NotoSans, sans-serif`;
-  const fModel = `800 ${S.fonts.model.size}px MontserratExtraBold, MontserratBold, sans-serif`;
-  const fNoteTitle = `700 ${S.fonts.noteTitle.size}px MontserratBold, Montserrat, sans-serif`;
-  const fNoteDesc = `400 ${S.fonts.noteDesc.size}px Montserrat, NotoSans, sans-serif`;
-  const fMl = `500 italic ${S.fonts.ml.size}px MontserratMediumItalic, Montserrat, sans-serif`;
+  const modelSize = S.fonts.model.size;
+  const typeSize = Math.round(modelSize * S.fonts.productTypeRatioOfModel);
 
-  const bx = L.brand.x;
-  let brandY = L.brand.y + S.fonts.brand.size;
-  ctx.fillStyle = C.text;
-  ctx.font = fBrand;
-  for (const line of wrapLines(
+  const { size: brandSize, lines: brandLines } = resolveBrandFontSize(
     ctx,
-    data.brandName.toUpperCase(),
-    L.brand.w,
-    fBrand,
-    S.fonts.brand.maxLines
-  )) {
-    ctx.fillText(line, bx, brandY);
-    brandY += Math.round(S.fonts.brand.size * 1.05);
+    data.brandName
+  );
+  ctx.fillStyle = C.text;
+  ctx.font = brandFont(brandSize);
+  let brandY = L.brand.y + brandSize;
+  for (const line of brandLines) {
+    ctx.fillText(line, L.brand.x, brandY);
+    brandY += Math.round(brandSize * 1.05);
   }
 
-  ctx.fillStyle = C.productType;
-  ctx.font = fType;
+  ctx.fillStyle = C.muted;
+  ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
   const typeLines = wrapLines(
     ctx,
     data.productType.trim(),
     L.productType.w,
-    fType,
-    S.fonts.productType.maxLines
+    ctx.font,
+    1
   );
   if (typeLines[0]) {
-    ctx.fillText(typeLines[0], L.productType.x, L.productType.y + S.fonts.productType.size);
+    ctx.fillText(typeLines[0], L.productType.x, L.productType.y + typeSize);
   }
 
   ctx.fillStyle = C.text;
-  ctx.font = fModel;
-  let modelY = L.model.y + S.fonts.model.size;
-  for (const line of wrapLines(ctx, data.model, L.model.w, fModel, S.fonts.model.maxLines)) {
+  ctx.font = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
+  let modelY = L.model.y + modelSize;
+  for (const line of wrapLines(ctx, data.model, L.model.w, ctx.font, S.fonts.model.maxLines)) {
     ctx.fillText(line, L.model.x, modelY);
-    modelY += Math.round(S.fonts.model.size * 1.08);
+    modelY += Math.round(modelSize * 1.08);
   }
 
   drawFilledBar(ctx, L.accentBar.x, L.accentBar.y, L.accentBar.w, L.accentBar.h, C.accent);
+
+  const fNoteTitle = `700 ${S.fonts.noteTitle.size}px MontserratBold, Montserrat, sans-serif`;
+  const fNoteDesc = `400 ${S.fonts.noteDesc.size}px Montserrat, NotoSans, sans-serif`;
+  const fMl = `500 italic ${S.fonts.ml.size}px MontserratMediumItalic, Montserrat, sans-serif`;
 
   const notes = data.notes.slice(0, 3);
   for (let i = 0; i < notes.length; i++) {
@@ -156,7 +188,7 @@ function overlayDynamicText(
 
     ctx.fillStyle = C.muted;
     ctx.font = fNoteDesc;
-    ctx.fillText(n.desc, L.notes.x, blockY + 40);
+    ctx.fillText(n.desc, L.notes.x, blockY + S.noteDescOffset);
 
     if (i < 2) {
       const sepY = blockY + L.notes.blockH - 1;
@@ -170,7 +202,7 @@ function overlayDynamicText(
   ctx.fillText(formatMl(data.ml), L.ml.x, L.ml.y);
 }
 
-/** Фото: contain, 90% высоты зоны, низ + центр, без белого фона */
+/** Товарный блок 55×58%, contain, низ у строки «мл» */
 async function overlayProductPhoto(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string
@@ -183,12 +215,12 @@ async function overlayProductPhoto(
 
   try {
     const zone = L.product;
-    const maxH = Math.round(zone.h * S.productMaxHeightRatio);
-    const { buffer, width, height } = await fitProductPng(productBuf, zone.w, maxH);
+    const { buffer, width, height } = await fitProductPng(productBuf, zone.w, zone.h);
 
     const prodImg = await loadImage(buffer);
     const drawX = zone.x + (zone.w - width) / 2;
-    const drawY = zone.y + zone.h - height;
+    const bottomTarget = L.ml.y - 6;
+    const drawY = Math.max(zone.y, bottomTarget - height);
 
     ctx.drawImage(prodImg, drawX, drawY, width, height);
     return { loaded: true };

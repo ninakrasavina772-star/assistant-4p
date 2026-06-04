@@ -39,7 +39,7 @@ export async function fitProductPng(
   const meta = await sharp(stripped).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
-  const scale = Math.min(maxW / srcW, maxH / srcH, 1);
+  const scale = Math.min(maxW / srcW, maxH / srcH);
   const width = Math.max(1, Math.round(srcW * scale));
   const height = Math.max(1, Math.round(srcH * scale));
 
