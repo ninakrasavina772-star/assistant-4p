@@ -117,13 +117,6 @@ async function drawTemplateBase(
   ctx.drawImage(base, 0, 0, W, H);
 }
 
-/** Левая колонка под текст — чистый фон, шапку не затираем */
-function clearTextColumn(ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>): void {
-  const top = S.contentClearTop;
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, top, Math.round(W * 0.52), H - top - 100);
-}
-
 /** Фиксированная сетка как в референсе — ноты не «плывут» */
 function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
@@ -280,7 +273,6 @@ export async function renderInfographicDetailed(
   const ctx = canvas.getContext("2d");
 
   await drawTemplateBase(ctx);
-  clearTextColumn(ctx);
   overlayDynamicText(ctx, opts.data);
   const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
   overlayMl(ctx, opts.data.ml);

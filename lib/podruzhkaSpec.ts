@@ -3,8 +3,6 @@ import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 export const PODRUZHKA_SPEC = {
   size: R.size,
   colors: R.colors,
-  header: R.header,
-  contentClearTop: R.contentClearTop,
   margins: { bottom: R.size.h - R.product.bottomY },
   ratios: {
     brandMaxWidth: R.text.brandMaxWidthRatio,
@@ -12,7 +10,6 @@ export const PODRUZHKA_SPEC = {
   },
   product: R.product,
   fixed: R.text,
-  gaps: R.gaps,
   fonts: {
     brand: {
       maxSize: R.text.brandFontMax,
