@@ -4,7 +4,7 @@ export const PODRUZHKA_SPEC = {
   size: R.size,
   colors: R.colors,
   header: R.header,
-  headerMaskHeight: R.headerMaskHeight,
+  contentClearTop: R.contentClearTop,
   margins: { bottom: R.size.h - R.product.bottomY },
   ratios: {
     brandMaxWidth: R.text.brandMaxWidthRatio,

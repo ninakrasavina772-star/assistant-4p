@@ -1,6 +1,5 @@
 /**
- * AI-референс Carolina Herrera 212 Sexy — фиксированная сетка 1000×1400.
- * Все карточки рисуются по одним координатам (не «плывут» от длины текста).
+ * Сетка 1000×1400 — подогнана по reference-target.png (Xerjoff), не Carolina Herrera.
  */
 export const PODRUZHKA_REFERENCE = {
   size: { w: 1000, h: 1400 },
@@ -12,33 +11,34 @@ export const PODRUZHKA_REFERENCE = {
     separator: "#D9D9D9"
   },
   header: { x: 250, y: 35, w: 500, h: 85 },
-  headerMaskHeight: 145,
+  /** Ниже шапки — зона очистки перед текстом (шапку не трогаем) */
+  contentClearTop: 140,
   text: {
     x: 55,
-    brandY: 200,
+    brandY: 195,
     brandMaxWidthRatio: 0.47,
-    brandMaxHeightRatio: 0.12,
-    brandFontMax: 60,
-    brandFontMin: 40,
-    productTypeY: 348,
-    productTypeSize: 30,
-    modelY: 410,
-    modelSize: 60,
-    accentY: 498,
-    notesStartY: 548,
-    noteBlockHeight: 120,
+    brandMaxHeightRatio: 0.08,
+    brandFontMax: 56,
+    brandFontMin: 38,
+    productTypeY: 278,
+    productTypeSize: 26,
+    modelY: 332,
+    modelSize: 52,
+    accentY: 400,
+    notesStartY: 458,
+    noteBlockHeight: 108,
     noteTitleSize: 22,
     noteDescSize: 16,
     noteTitleDy: 22,
-    noteDescDy: 48,
-    mlY: 1255,
-    mlAccentY: 1215
+    noteDescDy: 46,
+    mlY: 1295,
+    mlAccentY: 1255
   },
   product: {
     xRatio: 0.36,
-    topY: 280,
+    topY: 260,
     wRatio: 0.58,
-    bottomY: 1300,
+    bottomY: 1310,
     minHeightRatio: 0.88,
     fillHeight: 0.98
   },

@@ -5,7 +5,7 @@ import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { fitProductPng } from "@/lib/podruzhkaImageProcess";
-import { getTemplateBgBuffer, getHeaderPlaqueBuffer } from "@/lib/podruzhkaTemplateAssets";
+import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { PODRUZHKA_LAYOUT, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 
@@ -108,23 +108,20 @@ function drawFilledBar(
   ctx.fillRect(x, y, w, h);
 }
 
-/** Слой 0: фон + петля без шапки (template-bg.png) */
+/** Слой 0: полный template-base.png (шапка как в макете) */
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
-  const buf = await getTemplateBgBuffer();
+  const buf = await getFullTemplateBuffer();
   const base = await loadImage(buf);
   ctx.drawImage(base, 0, 0, W, H);
 }
 
-/** Слой шапки: PNG из шаблона (header.png), поверх всего */
-async function overlayHeader(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
-): Promise<void> {
-  const hdr = S.header;
-  const buf = await getHeaderPlaqueBuffer();
-  const img = await loadImage(buf);
-  ctx.drawImage(img, hdr.x, hdr.y, hdr.w, hdr.h);
+/** Левая колонка под текст — чистый фон, шапку не затираем */
+function clearTextColumn(ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>): void {
+  const top = S.contentClearTop;
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, top, Math.round(W * 0.52), H - top - 100);
 }
 
 /** Фиксированная сетка как в референсе — ноты не «плывут» */
@@ -283,10 +280,10 @@ export async function renderInfographicDetailed(
   const ctx = canvas.getContext("2d");
 
   await drawTemplateBase(ctx);
+  clearTextColumn(ctx);
   overlayDynamicText(ctx, opts.data);
   const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
   overlayMl(ctx, opts.data.ml);
-  await overlayHeader(ctx);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
