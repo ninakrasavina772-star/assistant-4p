@@ -48,7 +48,7 @@ export const PODRUZHKA_REFERENCE = {
   accentBar: { x: s(55), y: 0, w: s(50), h: sy(6) },
   noteTitleDy: sy(22),
   noteDescDy: sy(46),
-  noteBlockHeight: sy(90),
+  noteBlockHeight: sy(92),
   notesMinHeight: sy(280),
   noteSpacingMin: sy(48),
   noteSpacingMax: sy(60),

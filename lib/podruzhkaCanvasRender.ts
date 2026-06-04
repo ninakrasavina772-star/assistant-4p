@@ -17,8 +17,8 @@ import { PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
 import {
+  eraseReferenceGhostMarks,
   getReferenceFixedTextLayout,
-  REFERENCE_PRODUCT_SHADOW,
   REFERENCE_TEXT_ANCHORS
 } from "@/lib/podruzhkaReferenceAnchors";
 import { computeTextFlowLayout, type TextFlowLayout } from "@/lib/podruzhkaTextFlow";
@@ -237,9 +237,7 @@ function eraseTemplateTextGhost(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): void {
   if (!LAYOUT_RULES.replaceOnly) return;
-  const z = REFERENCE_TEXT_ANCHORS.textColumnErase;
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(z.x, z.y, z.w, z.h);
+  eraseReferenceGhostMarks(ctx, C.bg);
 }
 
 async function drawTemplateBase(
@@ -394,23 +392,6 @@ async function resolveProductPlacement(
   }
 }
 
-function drawReferenceProductShadow(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
-): void {
-  const sh = REFERENCE_PRODUCT_SHADOW;
-  const cy = sh.groundY + Math.round(sh.ry * 0.55);
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
-  ctx.beginPath();
-  ctx.ellipse(sh.centerX, cy, sh.rx, sh.ry, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
-  ctx.beginPath();
-  ctx.ellipse(sh.centerX, cy + 2, sh.rx * 0.9, sh.ry * 0.72, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
 async function drawProductPlacementAsync(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   placement: ResolvedProductPlacement
@@ -419,30 +400,6 @@ async function drawProductPlacementAsync(
   const { drawX, drawY } = placement.metrics;
   const w = placement.fit.width;
   const h = placement.fit.height;
-
-  if (LAYOUT_RULES.replaceOnly) {
-    drawReferenceProductShadow(ctx);
-    ctx.drawImage(prodImg, drawX, drawY, w, h);
-    return;
-  }
-
-  const inset = placement.fit.bottomAlphaInset ?? 0;
-  const visualBaseY = drawY + h - inset;
-  const cx = drawX + w / 2;
-  const ry = Math.max(10, Math.round(w * 0.036));
-  const rx = w * 0.44;
-  const cy = visualBaseY + Math.round(ry * 0.55);
-
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
-  ctx.beginPath();
-  ctx.ellipse(cx, cy + 2, rx * 0.9, ry * 0.72, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
 
   ctx.drawImage(prodImg, drawX, drawY, w, h);
 }
