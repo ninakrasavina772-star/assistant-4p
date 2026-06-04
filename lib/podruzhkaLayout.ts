@@ -44,9 +44,6 @@ export const PODRUZHKA_LAYOUT = {
   accentBeforeMlOffset: 36,
   product: { x: 468, y: 210, w: 572, h: 1080 },
   separator: { width: S.separatorWidth },
-  /** Зоны полной замены (не наложение) */
-  zones: {
-    text: { x: 0, y: PODRUZHKA_CONTENT_TOP - 12, w: 520, h: S.size.h - PODRUZHKA_CONTENT_TOP - 24 },
-    product: { x: 448, y: 188, w: 632, h: S.size.h - 188 }
-  }
+  /** Прямоугольник вставки foto (поверх template-base.png) */
+  productZone: { x: 448, y: 188, w: 632, h: S.size.h - 188 }
 } as const;

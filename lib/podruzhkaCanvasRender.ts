@@ -12,6 +12,8 @@ const L = PODRUZHKA_LAYOUT;
 const C = S.colors;
 const BG_RGB = { r: 247, g: 247, b: 247 };
 
+const TEMPLATE_PATH = path.join(process.cwd(), "public", "podruzhka", "template-base.png");
+
 let fontsReady = false;
 
 function ensureFonts(): void {
@@ -76,94 +78,28 @@ function drawAccentLine(
   ctx.stroke();
 }
 
-/** Петля #EDEDED справа */
-function drawLoopGraphic(ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>): void {
-  ctx.fillStyle = C.loop;
-  ctx.beginPath();
-  ctx.moveTo(520, 80);
-  ctx.bezierCurveTo(720, 40, 980, 120, 1020, 380);
-  ctx.bezierCurveTo(1060, 640, 900, 920, 720, 1100);
-  ctx.bezierCurveTo(580, 1240, 480, 1320, 560, 1340);
-  ctx.bezierCurveTo(640, 1360, 780, 1280, 880, 1080);
-  ctx.bezierCurveTo(980, 880, 1040, 560, 1000, 320);
-  ctx.bezierCurveTo(960, 100, 760, 60, 620, 100);
-  ctx.bezierCurveTo(540, 120, 500, 160, 520, 80);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function redrawLoopInZone(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  zone: { x: number; y: number; w: number; h: number }
-): void {
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(zone.x, zone.y, zone.w, zone.h);
-  ctx.clip();
-  drawLoopGraphic(ctx);
-  ctx.restore();
-}
-
-/** Только фон + шапка + петля (без текста и фото товара) */
-async function drawStaticShell(
+/** Неизменяемый слой: фон, петля, шапка Global (ваш PNG) */
+async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, W, H);
-  drawLoopGraphic(ctx);
-
-  const logoPath = path.join(process.cwd(), "public", "podruzhka", "logo-global.png");
-  if (fs.existsSync(logoPath)) {
-    try {
-      const logoBuf = await fs.promises.readFile(logoPath);
-      const logo = await loadImage(logoBuf);
-      const maxW = L.logo.maxW;
-      const scale = Math.min(maxW / logo.width, L.logo.h / logo.height, 1);
-      const lw = logo.width * scale;
-      const lh = logo.height * scale;
-      ctx.drawImage(logo, (W - lw) / 2, L.logo.y, lw, lh);
-      return;
-    } catch {
-      /* fallback pill */
-    }
+  if (!fs.existsSync(TEMPLATE_PATH)) {
+    throw new Error("Не найден шаблон public/podruzhka/template-base.png");
   }
-
-  const pillW = 464;
-  const pillH = L.logo.h;
-  const pillX = (W - pillW) / 2;
-  const pillY = L.logo.y;
-  const r = pillH / 2;
-  ctx.fillStyle = "#0a0a0a";
-  ctx.beginPath();
-  ctx.moveTo(pillX + r, pillY);
-  ctx.lineTo(pillX + pillW - r, pillY);
-  ctx.quadraticCurveTo(pillX + pillW, pillY, pillX + pillW, pillY + r);
-  ctx.lineTo(pillX + pillW, pillY + pillH - r);
-  ctx.quadraticCurveTo(pillX + pillW, pillY + pillH, pillX + pillW - r, pillY + pillH);
-  ctx.lineTo(pillX + r, pillY + pillH);
-  ctx.quadraticCurveTo(pillX, pillY + pillH, pillX, pillY + pillH - r);
-  ctx.lineTo(pillX, pillY + r);
-  ctx.quadraticCurveTo(pillX, pillY, pillX + r, pillY);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "600 17px MontserratBold, Montserrat, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("✈   подружка Global", W / 2, pillY + pillH / 2 + 2);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "alphabetic";
+  const raw = await fs.promises.readFile(TEMPLATE_PATH);
+  const meta = await sharp(raw).metadata();
+  const buf =
+    meta.width === W && meta.height === H
+      ? raw
+      : await sharp(raw).resize(W, H, { fit: "fill" }).png().toBuffer();
+  const base = await loadImage(buf);
+  ctx.drawImage(base, 0, 0, W, H);
 }
 
-/** Полная замена левого блока: только brand, type, model, ноты, объём из data */
-function replaceTextBlock(
+/** Текст и акценты поверх шаблона — без заливки зон */
+function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   data: PodruzhkaInfographicData
 ): void {
-  const z = L.zones.text;
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(z.x, z.y, z.w, z.h);
-
   const fBrand = `800 ${L.brand.fontSize}px MontserratExtraBold, MontserratBold, sans-serif`;
   const fType = `400 ${L.productType.fontSize}px Montserrat, NotoSans, sans-serif`;
   const fModel = `800 ${L.model.fontSize}px MontserratExtraBold, MontserratBold, sans-serif`;
@@ -231,22 +167,11 @@ function replaceTextBlock(
   ctx.fillText(formatMl(data.ml), x, mlY);
 }
 
-export type RenderInfographicResult = {
-  buffer: Buffer;
-  fotoLoaded: boolean;
-  fotoError?: string;
-};
-
-/** Полная замена правого блока: только foto из строки Excel */
-async function replaceProductBlock(
+/** Фото товара поверх шаблона (петля и фон из PNG не трогаем) */
+async function overlayProductPhoto(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string
 ): Promise<{ loaded: boolean; error?: string }> {
-  const z = L.zones.product;
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(z.x, z.y, z.w, z.h);
-  redrawLoopInZone(ctx, z);
-
   const url = fotoUrl?.trim();
   if (!url) return { loaded: false, error: "Колонка foto пуста" };
 
@@ -276,6 +201,12 @@ async function replaceProductBlock(
   }
 }
 
+export type RenderInfographicResult = {
+  buffer: Buffer;
+  fotoLoaded: boolean;
+  fotoError?: string;
+};
+
 export type RenderInfographicOptions = {
   data: PodruzhkaInfographicData;
 };
@@ -285,8 +216,7 @@ export function isRenderOptions(v: unknown): v is RenderInfographicOptions {
 }
 
 /**
- * Каждая карточка рисуется с нуля: шапка → замена текста → замена фото.
- * Никаких слоёв поверх чужого примера.
+ * Шаблон PNG (фон + петля + шапка) → поверх текст из Excel/AI → поверх foto.
  */
 export async function renderInfographicPng(
   dataOrOpts: PodruzhkaInfographicData | RenderInfographicOptions
@@ -308,9 +238,9 @@ export async function renderInfographicDetailed(
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
-  await drawStaticShell(ctx);
-  replaceTextBlock(ctx, data);
-  const foto = await replaceProductBlock(ctx, data.fotoUrl);
+  await drawTemplateBase(ctx);
+  overlayDynamicText(ctx, data);
+  const foto = await overlayProductPhoto(ctx, data.fotoUrl);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
