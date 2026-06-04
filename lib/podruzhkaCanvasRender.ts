@@ -4,7 +4,10 @@ import path from "path";
 import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
-import { fitProductPng } from "@/lib/podruzhkaImageProcess";
+import {
+  autoCorrectProductLayout,
+  type ResolvedProductPlacement
+} from "@/lib/podruzhkaLayoutValidation";
 import type { VisionLayoutAdjustment } from "@/lib/podruzhkaVisionAdjust";
 import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { buildPodruzhkaLayout, type PodruzhkaRuntimeLayout } from "@/lib/podruzhkaLayout";
@@ -74,13 +77,16 @@ function wrapLines(
 function resolveBrandFontSize(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   brandName: string,
-  L: PodruzhkaRuntimeLayout
+  L: PodruzhkaRuntimeLayout,
+  fontDelta = 0
 ): { size: number; lines: string[] } {
   const maxW = L.brand.w;
   const maxH = L.brand.h;
   const maxLines = S.fonts.brand.maxLines;
+  const maxSize = Math.max(S.fonts.brand.min, S.fonts.brand.max + fontDelta);
+  const minSize = S.fonts.brand.min;
 
-  for (let size = S.fonts.brand.maxSize; size >= S.fonts.brand.minSize; size -= 2) {
+  for (let size = maxSize; size >= minSize; size -= 2) {
     const font = brandFont(size);
     const lines = wrapLines(ctx, brandName.toUpperCase(), maxW, font, maxLines);
     const lineH = Math.round(size * 1.05);
@@ -91,10 +97,42 @@ function resolveBrandFontSize(
     }
   }
 
-  const size = S.fonts.brand.minSize;
+  const size = minSize;
   return {
     size,
     lines: wrapLines(ctx, brandName.toUpperCase(), maxW, brandFont(size), maxLines)
+  };
+}
+
+function resolveModelFontSize(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  model: string,
+  L: PodruzhkaRuntimeLayout,
+  brandSize: number
+): { size: number; lines: string[] } {
+  const maxW = L.model.w;
+  const maxH = L.model.h;
+  const cap = Math.min(S.fonts.model.max, Math.round(brandSize * 0.8));
+  const floor = Math.round(brandSize * 0.7);
+  const minSize = Math.max(S.fonts.model.min, floor);
+
+  for (let size = cap; size >= minSize; size -= 2) {
+    const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+    const lines = wrapLines(ctx, model, maxW, font, S.fonts.model.maxLines);
+    const totalH = lines.length * Math.round(size * 1.08);
+    if (totalH <= maxH) return { size, lines };
+  }
+
+  const size = minSize;
+  return {
+    size,
+    lines: wrapLines(
+      ctx,
+      model,
+      maxW,
+      `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`,
+      S.fonts.model.maxLines
+    )
   };
 }
 
@@ -124,25 +162,23 @@ function overlayDynamicText(
   L: PodruzhkaRuntimeLayout,
   layoutAdj?: VisionLayoutAdjustment
 ): void {
-  const x = L.textX;
-  const modelSize = S.fonts.model.size;
-  const typeSize = S.fonts.productType.size;
+  const fontDelta = layoutAdj?.brandFontDelta ?? 0;
+  const { size: brandSize, lines: brandLines } = resolveBrandFontSize(
+    ctx,
+    data.brandName,
+    L,
+    fontDelta
+  );
 
-  const { size: brandSize, lines: brandLines } = resolveBrandFontSize(ctx, data.brandName, L);
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
-
-  const gapAfterHeader = S.gaps.afterHeader + (layoutAdj?.brandYOffset ?? 0);
-  const gapAfterBrand = S.gaps.afterBrand + (layoutAdj?.productTypeYOffset ?? 0);
-
-  let cursorY = S.headerBottomY + gapAfterHeader;
-  let brandBaseline = cursorY + brandSize;
+  let brandBaseline = L.brand.y + brandSize;
   for (const line of brandLines) {
-    ctx.fillText(line, x, brandBaseline);
+    ctx.fillText(line, L.brand.x, brandBaseline);
     brandBaseline += Math.round(brandSize * 1.05);
   }
-  cursorY = brandBaseline + 4;
 
+  const typeSize = S.fonts.productType.size;
   ctx.fillStyle = C.muted;
   ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
   const typeLine = wrapLines(
@@ -153,14 +189,17 @@ function overlayDynamicText(
     1
   )[0];
   if (typeLine) {
-    cursorY += gapAfterBrand;
-    ctx.fillText(typeLine, L.productType.x, cursorY + typeSize);
-    cursorY += typeSize;
+    ctx.fillText(typeLine, L.productType.x, L.productType.y + typeSize);
   }
 
+  const { size: modelSize, lines: modelLines } = resolveModelFontSize(
+    ctx,
+    data.model,
+    L,
+    brandSize
+  );
   ctx.fillStyle = C.text;
   ctx.font = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
-  const modelLines = wrapLines(ctx, data.model, L.model.w, ctx.font, S.fonts.model.maxLines);
   let modelBaseline = L.model.y + modelSize;
   for (const line of modelLines) {
     ctx.fillText(line, L.model.x, modelBaseline);
@@ -169,8 +208,8 @@ function overlayDynamicText(
 
   drawFilledBar(ctx, L.accent.x, L.accent.y, L.accent.w, L.accent.h, C.accent);
 
-  const fNoteTitle = `700 ${S.fonts.noteTitle.size}px MontserratBold, Montserrat, sans-serif`;
-  const fNoteDesc = `400 ${S.fonts.noteDesc.size}px Montserrat, NotoSans, sans-serif`;
+  const fNoteTitle = `700 ${S.fonts.noteTitle.max}px MontserratBold, Montserrat, sans-serif`;
+  const fNoteDesc = `400 ${S.fonts.noteDesc.max}px Montserrat, NotoSans, sans-serif`;
   const notes = data.notes.slice(0, 3);
 
   for (let i = 0; i < notes.length; i++) {
@@ -206,12 +245,26 @@ function drawProductShadow(
   ctx.restore();
 }
 
-async function overlayProductPhoto(
+function maxLineWidth(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  lines: string[],
+  font: string
+): number {
+  ctx.font = font;
+  return Math.max(0, ...lines.map((ln) => ctx.measureText(ln).width));
+}
+
+async function resolveProductPlacement(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string,
   L: PodruzhkaRuntimeLayout,
+  brandInfo: { size: number; lines: string[] },
   layoutAdj?: VisionLayoutAdjustment
-): Promise<{ loaded: boolean; error?: string }> {
+): Promise<{
+  loaded: boolean;
+  error?: string;
+  placement?: ResolvedProductPlacement;
+}> {
   const url = fotoUrl?.trim();
   if (!url) return { loaded: false, error: "Колонка foto пуста" };
 
@@ -219,28 +272,31 @@ async function overlayProductPhoto(
   if (!productBuf?.length) return { loaded: false, error: error ?? "Не скачалось foto" };
 
   try {
-    const zone = L.product;
-    const availH = zone.bottom - zone.y;
-    const fillH = layoutAdj?.fillHeightRatio ?? S.product.fillHeight;
-    const minHR = layoutAdj?.minHeightRatio ?? S.product.minHeightRatio;
-
-    const fit = await fitProductPng(productBuf, zone.w, availH, fillH, minHR);
-    const prodImg = await loadImage(fit.buffer);
-
-    const drawX = zone.x + (zone.w - fit.width) / 2;
-    const bottomOffset = layoutAdj?.bottomOffsetPx ?? 0;
-    const anchorY = zone.bottom + bottomOffset;
-    const drawY = anchorY - fit.height;
-
-    drawProductShadow(ctx, drawX + fit.width / 2, anchorY + 4, fit.width);
-    ctx.drawImage(prodImg, drawX, drawY, fit.width, fit.height);
-    return { loaded: true };
+    const brandW = maxLineWidth(ctx, brandInfo.lines, brandFont(brandInfo.size));
+    const placement = await autoCorrectProductLayout(
+      productBuf,
+      L,
+      { size: brandInfo.size, lines: brandInfo.lines, maxLineWidth: brandW },
+      layoutAdj
+    );
+    return { loaded: true, placement };
   } catch (e) {
     return {
       loaded: false,
       error: e instanceof Error ? e.message : "Ошибка обработки foto"
     };
   }
+}
+
+async function drawProductPlacementAsync(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  placement: ResolvedProductPlacement
+): Promise<void> {
+  const prodImg = await loadImage(placement.fit.buffer);
+  const { drawX, drawY } = placement.metrics;
+  const anchorY = drawY + placement.fit.height;
+  drawProductShadow(ctx, drawX + placement.fit.width / 2, anchorY + 4, placement.fit.width);
+  ctx.drawImage(prodImg, drawX, drawY, placement.fit.width, placement.fit.height);
 }
 
 function overlayMl(
@@ -250,7 +306,7 @@ function overlayMl(
 ): void {
   drawFilledBar(ctx, L.mlAccent.x, L.mlAccent.y, L.mlAccent.w, L.mlAccent.h, C.accent);
   ctx.fillStyle = C.text;
-  ctx.font = `500 italic ${S.fonts.ml.size}px MontserratMediumItalic, Montserrat, sans-serif`;
+  ctx.font = `500 italic ${S.fonts.ml.max}px MontserratMediumItalic, Montserrat, sans-serif`;
   ctx.fillText(formatMl(ml), L.ml.x, L.ml.y);
 }
 
@@ -258,6 +314,8 @@ export type RenderInfographicResult = {
   buffer: Buffer;
   fotoLoaded: boolean;
   fotoError?: string;
+  layoutValidationOk?: boolean;
+  layoutValidationPasses?: number;
   visionUsed?: boolean;
   visionPasses?: number;
   visionScore?: number;
@@ -286,18 +344,40 @@ async function renderOnce(
   layoutAdj?: VisionLayoutAdjustment
 ): Promise<RenderInfographicResult> {
   ensureFonts();
-  const L = buildPodruzhkaLayout(layoutAdj);
+  let adj = layoutAdj;
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
+  const L0 = buildPodruzhkaLayout(adj);
+  const fontDelta = adj?.brandFontDelta ?? 0;
+  let brandResolved = resolveBrandFontSize(ctx, data.brandName, L0, fontDelta);
+
+  const resolved = await resolveProductPlacement(ctx, data.fotoUrl, L0, brandResolved, adj);
+  if (resolved.placement) {
+    adj = { ...adj, ...resolved.placement.adjustment };
+    const L1 = buildPodruzhkaLayout(adj);
+    brandResolved = resolveBrandFontSize(ctx, data.brandName, L1, adj?.brandFontDelta ?? 0);
+  }
+
+  const Lfinal = buildPodruzhkaLayout(adj);
   await drawTemplateBase(ctx);
-  overlayDynamicText(ctx, data, L, layoutAdj);
-  const foto = await overlayProductPhoto(ctx, data.fotoUrl, L, layoutAdj);
-  overlayMl(ctx, data.ml, L);
+  overlayDynamicText(ctx, data, Lfinal, adj);
+
+  if (resolved.placement) {
+    await drawProductPlacementAsync(ctx, resolved.placement);
+  }
+
+  overlayMl(ctx, data.ml, Lfinal);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
-  return { buffer, fotoLoaded: foto.loaded, fotoError: foto.error };
+  return {
+    buffer,
+    fotoLoaded: resolved.loaded,
+    fotoError: resolved.error,
+    layoutValidationOk: resolved.placement?.validationOk,
+    layoutValidationPasses: resolved.placement?.validationPasses
+  };
 }
 
 export async function renderInfographicDetailed(
@@ -323,7 +403,7 @@ export async function renderInfographicDetailed(
   let visionError: string | undefined;
 
   try {
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 3; pass++) {
       passes++;
       const review = await reviewAgainstReference(result.buffer, key, layoutAdj);
       lastReason = review.reasoning;

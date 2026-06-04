@@ -1,12 +1,12 @@
 import fs from "fs";
 import path from "path";
-import { PODRUZHKA_REFERENCE } from "@/lib/podruzhkaReferenceSpec";
+import { PODRUZHKA_COMPOSITION_VISION_PROMPT } from "@/lib/podruzhkaCompositionPrompt";
 
 const REFERENCE_PATH = path.join(process.cwd(), "public", "podruzhka", "reference-target.png");
 
-/** Смещения от базовой сетки (reference spec) — возвращает GPT-4o Vision */
 export type VisionLayoutAdjustment = {
   brandYOffset: number;
+  brandXOffset: number;
   productTypeYOffset: number;
   modelYOffset: number;
   accentYOffset: number;
@@ -14,33 +14,33 @@ export type VisionLayoutAdjustment = {
   noteBlockHeight?: number;
   productTopYOffset: number;
   productBottomYOffset: number;
-  fillHeightRatio: number;
-  minHeightRatio: number;
-  bottomOffsetPx: number;
+  productLeftOffset?: number;
+  productScaleMultiplier: number;
+  brandFontDelta: number;
 };
 
 export type VisionReviewResult = {
   overallScore: number;
   needsAdjustment: boolean;
-  brandVerdict: "too_high" | "too_low" | "ok";
-  textSpacingVerdict: "too_tight" | "too_loose" | "ok";
-  photoSizeVerdict: "too_small" | "too_large" | "ok";
+  productDominanceVerdict: "product_too_small" | "product_ok" | "brand_too_large";
   photoPositionVerdict: "too_high" | "too_low" | "ok";
+  textSpacingVerdict: "too_tight" | "too_loose" | "ok";
   reasoning: string;
   adjustment: VisionLayoutAdjustment;
 };
 
 const BASE_ADJ: VisionLayoutAdjustment = {
   brandYOffset: 0,
+  brandXOffset: 0,
   productTypeYOffset: 0,
   modelYOffset: 0,
   accentYOffset: 0,
   notesStartYOffset: 0,
   productTopYOffset: 0,
   productBottomYOffset: 0,
-  fillHeightRatio: PODRUZHKA_REFERENCE.product.fillHeight,
-  minHeightRatio: PODRUZHKA_REFERENCE.product.minHeightRatio,
-  bottomOffsetPx: 0
+  productLeftOffset: 0,
+  productScaleMultiplier: 1,
+  brandFontDelta: 0
 };
 
 async function callGPT4VisionLayout(
@@ -52,22 +52,7 @@ async function callGPT4VisionLayout(
     : null;
 
   const contentParts: object[] = [
-    {
-      type: "text",
-      text: `ЭТАЛОН (reference) — идеальная карточка 1000×1400. ТЕКУЩИЙ РЕНДЕР — нужно приблизить к эталону.
-Сравни ВСЁ: отступ бренда от шапки, плотность текстового блока слева, размер и вертикаль фото справа, блок нот, «мл» внизу.
-Верни ТОЛЬКО JSON (без markdown):
-{
-  "overallScore": 1-10,
-  "needsAdjustment": true/false,
-  "brandVerdict": "too_high"|"too_low"|"ok",
-  "textSpacingVerdict": "too_tight"|"too_loose"|"ok",
-  "photoSizeVerdict": "too_small"|"too_large"|"ok",
-  "photoPositionVerdict": "too_high"|"too_low"|"ok",
-  "reasoning": "одно предложение по-русски"
-}
-needsAdjustment=true если overallScore < 8.`
-    }
+    { type: "text", text: PODRUZHKA_COMPOSITION_VISION_PROMPT }
   ];
 
   if (refBuffer) {
@@ -90,7 +75,7 @@ needsAdjustment=true если overallScore < 8.`
     },
     body: JSON.stringify({
       model: "gpt-4o",
-      max_tokens: 350,
+      max_tokens: 400,
       temperature: 0,
       messages: [{ role: "user", content: contentParts }]
     })
@@ -115,35 +100,31 @@ function verdictToAdjustment(
 ): VisionLayoutAdjustment {
   const a: VisionLayoutAdjustment = { ...BASE_ADJ, ...prev };
 
-  if (v.brandVerdict === "too_high") a.brandYOffset += 24;
-  else if (v.brandVerdict === "too_low") a.brandYOffset -= 16;
+  if (v.productDominanceVerdict === "product_too_small") {
+    a.productScaleMultiplier = Math.min(1.35, a.productScaleMultiplier + 0.12);
+    a.productTopYOffset -= 15;
+  } else if (v.productDominanceVerdict === "brand_too_large") {
+    a.brandFontDelta -= 6;
+    a.productScaleMultiplier = Math.min(1.35, a.productScaleMultiplier + 0.08);
+  }
+
+  if (v.photoPositionVerdict === "too_high") {
+    a.productBottomYOffset += 25;
+  } else if (v.photoPositionVerdict === "too_low") {
+    a.productBottomYOffset -= 25;
+  }
 
   if (v.textSpacingVerdict === "too_loose") {
-    a.brandYOffset -= 8;
-    a.productTypeYOffset -= 14;
+    a.productTypeYOffset -= 8;
+    a.modelYOffset -= 8;
   } else if (v.textSpacingVerdict === "too_tight") {
-    a.brandYOffset += 8;
-    a.productTypeYOffset += 10;
+    a.productTypeYOffset += 8;
+    a.modelYOffset += 8;
   }
-
-  if (v.photoSizeVerdict === "too_small") {
-    a.minHeightRatio = Math.min(0.97, a.minHeightRatio + 0.04);
-    a.fillHeightRatio = Math.min(0.99, a.fillHeightRatio + 0.03);
-    a.productTopYOffset -= 20;
-  } else if (v.photoSizeVerdict === "too_large") {
-    a.minHeightRatio = Math.max(0.82, a.minHeightRatio - 0.06);
-    a.fillHeightRatio = Math.max(0.85, a.fillHeightRatio - 0.05);
-  }
-
-  if (v.photoPositionVerdict === "too_high") a.bottomOffsetPx += 50;
-  else if (v.photoPositionVerdict === "too_low") a.bottomOffsetPx -= 50;
 
   return a;
 }
 
-/**
- * Сравнение с reference-target + корректировки всей сетки (текст + фото).
- */
 export async function reviewAgainstReference(
   renderedBuffer: Buffer,
   openaiKey: string,
@@ -151,27 +132,14 @@ export async function reviewAgainstReference(
 ): Promise<VisionReviewResult> {
   const verdict = await callGPT4VisionLayout(renderedBuffer, openaiKey);
   const adjustment = verdictToAdjustment(verdict, prevAdj);
-  return { ...verdict, adjustment };
-}
+  const needsAdjustment =
+    verdict.needsAdjustment ||
+    verdict.overallScore < 8 ||
+    verdict.productDominanceVerdict !== "product_ok";
 
-/** @deprecated */
-export type VisionPhotoAdjustment = Pick<
-  VisionLayoutAdjustment,
-  "fillHeightRatio" | "minHeightRatio" | "bottomOffsetPx"
-> & { forceHeightFill?: boolean };
-
-export async function getVisionAdjustment(
-  renderedBuffer: Buffer,
-  openaiKey: string
-): Promise<{ adjustment: VisionPhotoAdjustment; verdict: { reasoning: string } }> {
-  const r = await reviewAgainstReference(renderedBuffer, openaiKey);
   return {
-    adjustment: {
-      fillHeightRatio: r.adjustment.fillHeightRatio,
-      minHeightRatio: r.adjustment.minHeightRatio,
-      bottomOffsetPx: r.adjustment.bottomOffsetPx,
-      forceHeightFill: r.photoSizeVerdict === "too_small"
-    },
-    verdict: { reasoning: r.reasoning }
+    ...verdict,
+    needsAdjustment,
+    adjustment
   };
 }
