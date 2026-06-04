@@ -72,12 +72,32 @@ export async function POST(req: Request) {
 
     const rendered = await renderInfographicDetailed({ data }, openaiKey);
 
-    if (fotoUrl && !rendered.fotoLoaded) {
+    if (!fotoUrl) {
+      return NextResponse.json(
+        { error: "Колонка foto обязательна", fotoLoaded: false },
+        { status: 400 }
+      );
+    }
+
+    if (!rendered.fotoLoaded) {
       return NextResponse.json(
         {
           error: rendered.fotoError ?? "Не удалось загрузить foto",
           fotoLoaded: false,
           fotoError: rendered.fotoError
+        },
+        { status: 422 }
+      );
+    }
+
+    if (!rendered.layoutValidationOk || rendered.buffer.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            rendered.layoutValidationError ??
+            "Композиция не соответствует эталону Carolina Herrera",
+          layoutValidationOk: false,
+          layoutValidationPasses: rendered.layoutValidationPasses
         },
         { status: 422 }
       );

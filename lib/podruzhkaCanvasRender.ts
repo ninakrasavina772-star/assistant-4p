@@ -6,7 +6,9 @@ import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import {
   autoCorrectProductLayout,
-  type ResolvedProductPlacement
+  formatValidationFailure,
+  type ResolvedProductPlacement,
+  type TextLayoutEstimate
 } from "@/lib/podruzhkaLayoutValidation";
 import type { VisionLayoutAdjustment } from "@/lib/podruzhkaVisionAdjust";
 import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
@@ -112,9 +114,10 @@ function resolveModelFontSize(
 ): { size: number; lines: string[] } {
   const maxW = L.model.w;
   const maxH = L.model.h;
-  const cap = Math.min(S.fonts.model.max, Math.round(brandSize * 0.8));
-  const floor = Math.round(brandSize * 0.7);
-  const minSize = Math.max(S.fonts.model.min, floor);
+  const ratio = S.fonts.model.ratioOfBrand ?? 0.75;
+  const target = Math.round(brandSize * ratio);
+  const cap = Math.min(S.fonts.model.max, Math.round(brandSize * 0.85));
+  const minSize = Math.max(S.fonts.model.min, target);
 
   for (let size = cap; size >= minSize; size -= 2) {
     const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
@@ -124,15 +127,38 @@ function resolveModelFontSize(
   }
 
   const size = minSize;
+  const lines = wrapLines(
+    ctx,
+    model,
+    maxW,
+    `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`,
+    S.fonts.model.maxLines
+  );
+  return { size, lines };
+}
+
+function buildTextLayoutEstimate(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  data: PodruzhkaInfographicData,
+  L: PodruzhkaRuntimeLayout,
+  layoutAdj?: VisionLayoutAdjustment
+): TextLayoutEstimate {
+  const fontDelta = layoutAdj?.brandFontDelta ?? 0;
+  const modelDelta = layoutAdj?.modelFontDelta ?? 0;
+  const brand = resolveBrandFontSize(ctx, data.brandName, L, fontDelta);
+  const model = resolveModelFontSize(ctx, data.model, L, brand.size);
+  const modelSize = Math.min(S.fonts.model.max, model.size + modelDelta);
+  const brandFontStr = brandFont(brand.size);
+  const modelFontStr = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
   return {
-    size,
-    lines: wrapLines(
-      ctx,
-      model,
-      maxW,
-      `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`,
-      S.fonts.model.maxLines
-    )
+    brandSize: brand.size,
+    brandLines: brand.lines,
+    brandMaxLineWidth: maxLineWidth(ctx, brand.lines, brandFontStr),
+    modelSize,
+    modelLines: model.lines,
+    modelMaxLineWidth: maxLineWidth(ctx, model.lines, modelFontStr),
+    notesBlockH: L.notes.h,
+    noteBlockHeight: L.notes.blockH
   };
 }
 
@@ -192,12 +218,14 @@ function overlayDynamicText(
     ctx.fillText(typeLine, L.productType.x, L.productType.y + typeSize);
   }
 
-  const { size: modelSize, lines: modelLines } = resolveModelFontSize(
+  const modelDelta = layoutAdj?.modelFontDelta ?? 0;
+  const { size: modelSizeBase, lines: modelLines } = resolveModelFontSize(
     ctx,
     data.model,
     L,
     brandSize
   );
+  const modelSize = Math.min(S.fonts.model.max, modelSizeBase + modelDelta);
   ctx.fillStyle = C.text;
   ctx.font = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
   let modelBaseline = L.model.y + modelSize;
@@ -255,10 +283,8 @@ function maxLineWidth(
 }
 
 async function resolveProductPlacement(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string,
-  L: PodruzhkaRuntimeLayout,
-  brandInfo: { size: number; lines: string[] },
+  text: TextLayoutEstimate,
   layoutAdj?: VisionLayoutAdjustment
 ): Promise<{
   loaded: boolean;
@@ -272,13 +298,7 @@ async function resolveProductPlacement(
   if (!productBuf?.length) return { loaded: false, error: error ?? "Не скачалось foto" };
 
   try {
-    const brandW = maxLineWidth(ctx, brandInfo.lines, brandFont(brandInfo.size));
-    const placement = await autoCorrectProductLayout(
-      productBuf,
-      L,
-      { size: brandInfo.size, lines: brandInfo.lines, maxLineWidth: brandW },
-      layoutAdj
-    );
+    const placement = await autoCorrectProductLayout(productBuf, text, layoutAdj);
     return { loaded: true, placement };
   } catch (e) {
     return {
@@ -316,6 +336,7 @@ export type RenderInfographicResult = {
   fotoError?: string;
   layoutValidationOk?: boolean;
   layoutValidationPasses?: number;
+  layoutValidationError?: string;
   visionUsed?: boolean;
   visionPasses?: number;
   visionScore?: number;
@@ -349,34 +370,48 @@ async function renderOnce(
   const ctx = canvas.getContext("2d");
 
   const L0 = buildPodruzhkaLayout(adj);
-  const fontDelta = adj?.brandFontDelta ?? 0;
-  let brandResolved = resolveBrandFontSize(ctx, data.brandName, L0, fontDelta);
+  let textEst = buildTextLayoutEstimate(ctx, data, L0, adj);
 
-  const resolved = await resolveProductPlacement(ctx, data.fotoUrl, L0, brandResolved, adj);
-  if (resolved.placement) {
-    adj = { ...adj, ...resolved.placement.adjustment };
-    const L1 = buildPodruzhkaLayout(adj);
-    brandResolved = resolveBrandFontSize(ctx, data.brandName, L1, adj?.brandFontDelta ?? 0);
+  const resolved = await resolveProductPlacement(data.fotoUrl, textEst, adj);
+
+  if (!resolved.loaded) {
+    return {
+      buffer: Buffer.alloc(0),
+      fotoLoaded: false,
+      fotoError: resolved.error ?? "Фото товара обязательно",
+      layoutValidationOk: false,
+      layoutValidationError: resolved.error ?? "Нет фото товара"
+    };
   }
 
+  const placement = resolved.placement;
+  if (!placement?.validationOk) {
+    const msg = formatValidationFailure(placement?.failureMessages ?? []);
+    return {
+      buffer: Buffer.alloc(0),
+      fotoLoaded: true,
+      layoutValidationOk: false,
+      layoutValidationPasses: placement?.validationPasses,
+      layoutValidationError: msg
+    };
+  }
+
+  adj = { ...adj, ...placement.adjustment };
   const Lfinal = buildPodruzhkaLayout(adj);
+  textEst = buildTextLayoutEstimate(ctx, data, Lfinal, adj);
+
   await drawTemplateBase(ctx);
   overlayDynamicText(ctx, data, Lfinal, adj);
-
-  if (resolved.placement) {
-    await drawProductPlacementAsync(ctx, resolved.placement);
-  }
-
+  await drawProductPlacementAsync(ctx, placement);
   overlayMl(ctx, data.ml, Lfinal);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
   return {
     buffer,
-    fotoLoaded: resolved.loaded,
-    fotoError: resolved.error,
-    layoutValidationOk: resolved.placement?.validationOk,
-    layoutValidationPasses: resolved.placement?.validationPasses
+    fotoLoaded: true,
+    layoutValidationOk: true,
+    layoutValidationPasses: placement.validationPasses
   };
 }
 
@@ -388,11 +423,25 @@ export async function renderInfographicDetailed(
     ? dataOrOpts
     : { data: dataOrOpts };
 
+  if (!opts.data.fotoUrl?.trim()) {
+    return {
+      buffer: Buffer.alloc(0),
+      fotoLoaded: false,
+      fotoError: "Колонка foto обязательна",
+      layoutValidationOk: false,
+      layoutValidationError: "Карточка без фото товара не сохраняется"
+    };
+  }
+
   let layoutAdj = opts.layoutAdj;
   let result = await renderOnce(opts.data, layoutAdj);
 
+  if (!result.layoutValidationOk || !result.fotoLoaded || result.buffer.length === 0) {
+    return result;
+  }
+
   const key = openaiKey?.trim();
-  if (!key || !result.fotoLoaded) {
+  if (!key) {
     return result;
   }
 
@@ -410,8 +459,12 @@ export async function renderInfographicDetailed(
       lastScore = review.overallScore;
       layoutAdj = review.adjustment;
 
+      result = await renderOnce(opts.data, layoutAdj);
+      if (!result.layoutValidationOk || result.buffer.length === 0) {
+        return { ...result, visionUsed: true, visionPasses: passes, visionScore: lastScore, visionReasoning: lastReason };
+      }
+
       if (!review.needsAdjustment || review.overallScore >= 8) {
-        result = await renderOnce(opts.data, layoutAdj);
         return {
           ...result,
           visionUsed: true,
@@ -420,8 +473,6 @@ export async function renderInfographicDetailed(
           visionReasoning: lastReason
         };
       }
-
-      result = await renderOnce(opts.data, layoutAdj);
     }
 
     return {

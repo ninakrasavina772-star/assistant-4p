@@ -439,7 +439,7 @@ export function PodruzhkaOzonTool() {
                 const err =
                   data.fotoError ??
                   data.error ??
-                  (res.status === 422 ? "фото не загрузилось" : `HTTP ${res.status}`);
+                  (res.status === 422 ? "ошибка рендера" : `HTTP ${res.status}`);
                 if (res.status === 422 || data.fotoError) {
                   noFoto++;
                   noFotoRows.push({

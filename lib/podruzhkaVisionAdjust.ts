@@ -17,6 +17,7 @@ export type VisionLayoutAdjustment = {
   productLeftOffset?: number;
   productScaleMultiplier: number;
   brandFontDelta: number;
+  modelFontDelta?: number;
 };
 
 export type VisionReviewResult = {
@@ -40,7 +41,8 @@ const BASE_ADJ: VisionLayoutAdjustment = {
   productBottomYOffset: 0,
   productLeftOffset: 0,
   productScaleMultiplier: 1,
-  brandFontDelta: 0
+  brandFontDelta: 0,
+  modelFontDelta: 0
 };
 
 async function callGPT4VisionLayout(
