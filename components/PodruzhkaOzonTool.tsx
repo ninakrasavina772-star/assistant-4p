@@ -94,6 +94,7 @@ export function PodruzhkaOzonTool() {
     sampleFotoError: string | null;
     visionNote: string | null;
     skipped: { row: number; brand: string; reasons: string }[];
+    noFotoRows: { row: number; brand: string; error: string }[];
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
@@ -378,6 +379,7 @@ export function PodruzhkaOzonTool() {
     let visionNote: string | null = null;
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
+    const noFotoRows: { row: number; brand: string; error: string }[] = [];
 
     for (const row of sheetInfo.rows) {
       const el = getRowRenderEligibility(ws, sheetInfo, row);
@@ -434,14 +436,34 @@ export function PodruzhkaOzonTool() {
               };
               if (!res.ok || !data.url) {
                 fail++;
+                const err =
+                  data.fotoError ??
+                  data.error ??
+                  (res.status === 422 ? "фото не загрузилось" : `HTTP ${res.status}`);
+                if (res.status === 422 || data.fotoError) {
+                  noFoto++;
+                  noFotoRows.push({
+                    row: row.row,
+                    brand: row.brandName || row.name.slice(0, 30),
+                    error: err
+                  });
+                  if (!sampleFotoError) sampleFotoError = err;
+                }
+                return;
+              }
+              if (!data.fotoLoaded) {
+                noFoto++;
+                noFotoRows.push({
+                  row: row.row,
+                  brand: row.brandName || row.name.slice(0, 30),
+                  error: data.fotoError ?? "фото не вставлено"
+                });
+                if (!sampleFotoError && data.fotoError) sampleFotoError = data.fotoError;
+                fail++;
                 return;
               }
               urls.set(row.row, data.url);
               ok++;
-              if (!data.fotoLoaded) {
-                noFoto++;
-                if (!sampleFotoError && data.fotoError) sampleFotoError = data.fotoError;
-              }
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 if (data.visionError) {
@@ -462,7 +484,7 @@ export function PodruzhkaOzonTool() {
 
       const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
-      setRenderStats({ ok, fail, noFoto, sampleFotoError, visionNote, skipped });
+      setRenderStats({ ok, fail, noFoto, sampleFotoError, visionNote, skipped, noFotoRows });
       setInfographicDone(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка инфографики");
@@ -733,11 +755,20 @@ export function PodruzhkaOzonTool() {
                     </ul>
                   </div>
                 ) : null}
-                {renderStats.noFoto > 0 ? (
-                  <p className="text-sm text-amber-900">
-                    Проверьте сопоставление <strong>Фото товара</strong> и ссылки в Excel.
-                    {renderStats.sampleFotoError ? ` (${renderStats.sampleFotoError})` : ""}
-                  </p>
+                {renderStats.noFotoRows.length > 0 ? (
+                  <div className="text-sm text-amber-900">
+                    <p>
+                      Без фото на карточке ({renderStats.noFotoRows.length}) — в Excel{" "}
+                      <strong>foto 2</strong> не записано:
+                    </p>
+                    <ul className="mt-1 list-inside list-disc">
+                      {renderStats.noFotoRows.map((s) => (
+                        <li key={s.row}>
+                          строка {s.row} — {s.brand}: {s.error}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : null}
                 {previewUrl ? (
                   /* eslint-disable-next-line @next/next/no-img-element */

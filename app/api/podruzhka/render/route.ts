@@ -71,6 +71,18 @@ export async function POST(req: Request) {
     };
 
     const rendered = await renderInfographicDetailed({ data }, openaiKey);
+
+    if (fotoUrl && !rendered.fotoLoaded) {
+      return NextResponse.json(
+        {
+          error: rendered.fotoError ?? "Не удалось загрузить foto",
+          fotoLoaded: false,
+          fotoError: rendered.fotoError
+        },
+        { status: 422 }
+      );
+    }
+
     const fileName = `podruzhka-${crypto.randomUUID().slice(0, 8)}.jpg`;
     const url = await uploadOzonImage(rendered.buffer, fileName);
 

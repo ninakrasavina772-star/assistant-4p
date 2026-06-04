@@ -15,21 +15,27 @@ function canFetchHost(hostname: string): boolean {
 
 export type FotoFetchResult = { buf: Buffer | null; error?: string };
 
-/** Ozon: -1-s часто мелкое превью, -1-f — полноразмернее */
+/** Ozon: только -s → -f. Пути -5/-g/-c в фиде часто единственные рабочие; -f даёт 403/пустышку. */
 export function preferOzonFullSizeUrl(url: string): string {
   const u = url.trim();
   if (!/ozone\.ru|ozon\.ru/i.test(u)) return u;
-  return u
-    .replace(/multimedia-1-s\//i, "multimedia-1-f/")
-    .replace(/multimedia-1-5\//i, "multimedia-1-f/")
-    .replace(/multimedia-1-g\//i, "multimedia-1-f/");
+  return u.replace(/multimedia-1-s\//i, "multimedia-1-f/");
 }
 
-/** Скачивание foto из фида (5.35.85.200, Ozon CDN, https) */
-export async function fetchPodruzhkaProductImageDetailed(url: string): Promise<FotoFetchResult> {
-  const u = preferOzonFullSizeUrl(url?.trim() ?? "");
-  if (!u) return { buf: null, error: "Пустая ссылка foto" };
+const MIN_IMAGE_BYTES = 2048;
 
+function ozonUrlVariants(url: string): string[] {
+  const u = url.trim();
+  const out: string[] = [];
+  const add = (x: string) => {
+    if (x && !out.includes(x)) out.push(x);
+  };
+  add(u);
+  if (/multimedia-1-s\//i.test(u)) add(preferOzonFullSizeUrl(u));
+  return out;
+}
+
+async function fetchOneImageUrl(u: string): Promise<FotoFetchResult> {
   let parsed: URL;
   try {
     parsed = new URL(u);
@@ -65,11 +71,34 @@ export async function fetchPodruzhkaProductImageDetailed(url: string): Promise<F
     }
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0) return { buf: null, error: "foto: пустой ответ" };
+    if (buf.length < MIN_IMAGE_BYTES) {
+      return {
+        buf: null,
+        error: `foto: файл слишком маленький (${buf.length} байт), вероятно не картинка`
+      };
+    }
     return { buf };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "сеть";
     return { buf: null, error: `foto: ${msg}` };
   }
+}
+
+/** Скачивание foto из фида (Ozon CDN, Yandex, https). Сначала URL из Excel как есть. */
+export async function fetchPodruzhkaProductImageDetailed(url: string): Promise<FotoFetchResult> {
+  const original = url?.trim() ?? "";
+  if (!original) return { buf: null, error: "Пустая ссылка foto" };
+
+  const variants = ozonUrlVariants(original);
+  let lastError = "foto: не удалось скачать";
+
+  for (const u of variants) {
+    const r = await fetchOneImageUrl(u);
+    if (r.buf) return r;
+    if (r.error) lastError = r.error;
+  }
+
+  return { buf: null, error: lastError };
 }
 
 export async function fetchPodruzhkaProductImage(url: string): Promise<Buffer | null> {
