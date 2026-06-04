@@ -13,11 +13,12 @@ export const PODRUZHKA_REFERENCE = {
     separator: "#D9D9D9"
   },
   gaps: {
-    headerToBrandTop: 152,
-    afterBrand: 22,
-    afterProductType: 12,
-    afterModel: 14,
-    afterAccentToNotes: 36
+    /** CH: заметный зазор под чёрной плашкой (шапка в PNG может быть выше блока 85px) */
+    headerToBrandTop: 168,
+    afterBrand: 20,
+    afterProductType: 10,
+    afterModel: 12,
+    afterAccentToNotes: 40
   },
   blocks: {
     header: { x: 250, y: 35, w: 500, h: 85 },
@@ -47,7 +48,8 @@ export const PODRUZHKA_REFERENCE = {
   noteSpacingMax: 60,
   separatorWidth: 200,
   product: {
-    bottomAlignY: 1178,
+    /** volume.y=1195 → зазор 32px до низа товара */
+    bottomAlignY: 1163,
     heightRatioMin: 0.48,
     heightRatioMax: 0.58,
     heightRatioTarget: 0.55,

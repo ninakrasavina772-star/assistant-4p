@@ -1,21 +1,23 @@
-import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
+import { LAYOUT_RULES as LR } from "@/lib/podruzhkaLayoutRules";
 
-const HEADER_BOTTOM = R.blocks.header.y + R.blocks.header.h;
-const G = R.gaps;
+const G = LR.gaps;
 
 export type TextFlowLayout = {
   brandTopY: number;
   brandLineStep: number;
+  brandFirstBaseline: number;
+  brandLastBaseline: number;
   productTypeBaseline: number;
   modelLineStep: number;
   modelFirstBaseline: number;
   accentY: number;
   notesStartY: number;
-  brandBottomY: number;
-  modelBottomY: number;
 };
 
-/** Вертикальный поток как на CH: широкий зазор шапка→бренд, плотно бренд→тип→модель */
+/**
+ * Вертикальный поток: шапка → зазор → бренд → тип → модель → акцент → ноты.
+ * Baseline canvas: fillText(y) = базовая линия символов.
+ */
 export function computeTextFlowLayout(input: {
   brandSize: number;
   brandLineCount: number;
@@ -28,15 +30,14 @@ export function computeTextFlowLayout(input: {
   accentYOffset?: number;
   notesStartYOffset?: number;
 }): TextFlowLayout {
-  const brandTopY = HEADER_BOTTOM + G.headerToBrandTop + (input.brandYOffset ?? 0);
+  const brandTopY = LR.headerBottomY + G.headerToBrandTop + (input.brandYOffset ?? 0);
   const brandLineStep = Math.round(input.brandSize * 1.05);
-  const brandBottomY = brandTopY + input.brandLineCount * brandLineStep;
+  const brandFirstBaseline = brandTopY + input.brandSize;
+  const brandLastBaseline =
+    brandFirstBaseline + Math.max(0, input.brandLineCount - 1) * brandLineStep;
 
   const productTypeBaseline =
-    brandBottomY +
-    G.afterBrand +
-    input.productTypeSize +
-    (input.productTypeYOffset ?? 0);
+    brandLastBaseline + G.afterBrand + (input.productTypeYOffset ?? 0);
 
   const modelFirstBaseline =
     productTypeBaseline +
@@ -44,24 +45,25 @@ export function computeTextFlowLayout(input: {
     input.modelSize +
     (input.modelYOffset ?? 0);
   const modelLineStep = Math.round(input.modelSize * 1.08);
-  const modelBottomY = modelFirstBaseline + (input.modelLineCount - 1) * modelLineStep;
+  const modelLastBaseline =
+    modelFirstBaseline + Math.max(0, input.modelLineCount - 1) * modelLineStep;
 
-  const accentY = modelBottomY + G.afterModel + (input.accentYOffset ?? 0);
-  const flowNotesStart = accentY + R.accentBar.h + G.afterAccentToNotes;
+  const accentY = modelLastBaseline + G.afterModel + (input.accentYOffset ?? 0);
+  const flowNotesStart = accentY + LR.accentBar.h + G.afterAccentToNotes;
   const notesStartY = Math.max(
-    R.blocks.notes.y,
+    LR.blocks.notes.y,
     flowNotesStart + (input.notesStartYOffset ?? 0)
   );
 
   return {
     brandTopY,
     brandLineStep,
+    brandFirstBaseline,
+    brandLastBaseline,
     productTypeBaseline,
     modelLineStep,
     modelFirstBaseline,
     accentY,
-    notesStartY,
-    brandBottomY,
-    modelBottomY
+    notesStartY
   };
 }

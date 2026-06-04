@@ -233,7 +233,7 @@ function overlayDynamicText(
 
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
-  let brandBaseline = flow.brandTopY + brandSize;
+  let brandBaseline = flow.brandFirstBaseline;
   for (const line of brandLines) {
     ctx.fillText(line, L.brand.x, brandBaseline);
     brandBaseline += flow.brandLineStep;
@@ -261,6 +261,7 @@ function overlayDynamicText(
   }
 
   drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
+  drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);
 
   const fNoteTitle = `700 ${S.fonts.noteTitle.max}px MontserratBold, Montserrat, sans-serif`;
   const fNoteDesc = `400 ${S.fonts.noteDesc.max}px Montserrat, NotoSans, sans-serif`;
@@ -426,9 +427,22 @@ async function renderOnce(
   const Lfinal = buildPodruzhkaLayout(adj);
   textEst = buildTextLayoutEstimate(ctx, data, Lfinal, adj);
 
+  const placementFinal = await resolveProductPlacement(data.fotoUrl, textEst, adj);
+  const finalPlacement = placementFinal.placement;
+  if (!finalPlacement?.validationOk) {
+    const msg = formatValidationFailure(finalPlacement?.failureMessages ?? []);
+    return {
+      buffer: Buffer.alloc(0),
+      fotoLoaded: true,
+      layoutValidationOk: false,
+      layoutValidationPasses: finalPlacement?.validationPasses,
+      layoutValidationError: msg
+    };
+  }
+
   await drawTemplateBase(ctx);
   overlayDynamicText(ctx, data, Lfinal, adj);
-  await drawProductPlacementAsync(ctx, placement);
+  await drawProductPlacementAsync(ctx, finalPlacement);
   overlayMl(ctx, data.ml, Lfinal);
 
   const png = canvas.toBuffer("image/png");
@@ -437,7 +451,7 @@ async function renderOnce(
     buffer,
     fotoLoaded: true,
     layoutValidationOk: true,
-    layoutValidationPasses: placement.validationPasses
+    layoutValidationPasses: finalPlacement.validationPasses
   };
 }
 
@@ -466,51 +480,7 @@ export async function renderInfographicDetailed(
     return result;
   }
 
-  const key = openaiKey?.trim();
-  if (!key) {
-    return result;
-  }
-
-  /** Vision только если уже прошла программная валидация */
-  const { reviewAgainstReference } = await import("@/lib/podruzhkaVisionAdjust");
-  let passes = 0;
-  let lastReason = "";
-  let lastScore = 0;
-  let visionError: string | undefined;
-
-  try {
-    for (let pass = 0; pass < 3; pass++) {
-      passes++;
-      const review = await reviewAgainstReference(result.buffer, key, layoutAdj);
-      lastReason = review.reasoning;
-      lastScore = review.overallScore;
-      layoutAdj = review.adjustment;
-
-      result = await renderOnce(opts.data, layoutAdj);
-      if (!result.layoutValidationOk || result.buffer.length === 0) {
-        return { ...result, visionUsed: true, visionPasses: passes, visionScore: lastScore, visionReasoning: lastReason };
-      }
-
-      if (!review.needsAdjustment || review.overallScore >= 8) {
-        return {
-          ...result,
-          visionUsed: true,
-          visionPasses: passes,
-          visionScore: lastScore,
-          visionReasoning: lastReason
-        };
-      }
-    }
-
-    return {
-      ...result,
-      visionUsed: true,
-      visionPasses: passes,
-      visionScore: lastScore,
-      visionReasoning: lastReason
-    };
-  } catch (e) {
-    visionError = e instanceof Error ? e.message : "Vision error";
-    return { ...result, visionUsed: false, visionError, visionReasoning: visionError };
-  }
+  /** Vision отключён: ломал согласованность текст/товар после программной валидации */
+  void openaiKey;
+  return result;
 }

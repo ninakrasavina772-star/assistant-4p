@@ -1,4 +1,5 @@
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
+import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
 import type { VisionLayoutAdjustment } from "@/lib/podruzhkaVisionAdjust";
 
 const B = S.blocks;
@@ -63,7 +64,7 @@ export function buildPodruzhkaLayout(adj?: VisionLayoutAdjustment): PodruzhkaRun
       x: B.product.x + n(adj?.productLeftOffset, 0),
       y: B.product.y + n(adj?.productTopYOffset, 0),
       w: B.product.w,
-      bottom: S.product.bottomAlignY + n(adj?.productBottomYOffset, 0)
+      bottom: LAYOUT_RULES.productBottomY + n(adj?.productBottomYOffset, 0)
     },
     separator: { width: S.separatorWidth }
   };

@@ -1,5 +1,6 @@
 import type { VisionLayoutAdjustment } from "@/lib/podruzhkaVisionAdjust";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
+import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
 import { fitProductPng, type FitResult } from "@/lib/podruzhkaImageProcess";
 import { buildPodruzhkaLayout, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 
@@ -153,14 +154,20 @@ export function validateFullLayout(m: FullLayoutMetrics): LayoutValidationResult
   return { ok: issues.length === 0, issues, metrics: m, messages };
 }
 
-/** Минимум для сохранения JPG после всех попыток подгонки */
+/** После maxPasses — только если остались мягкие отклонения по пустотам */
 export function hardLayoutPass(m: FullLayoutMetrics): boolean {
+  const strict = validateFullLayout(m);
+  if (strict.ok) return true;
+  const softOnly = strict.issues.every(
+    (i) => i === "empty_right_too_large" || i === "empty_center_too_large"
+  );
   return (
-    m.productHeightRatio >= 0.44 &&
-    m.productWidthRatio >= 0.42 &&
-    m.productArea >= m.brandArea * 1.75 &&
-    m.productWidth >= 420 &&
-    m.productHeight >= 600
+    softOnly &&
+    m.productHeightRatio >= V.productHeightRatioMin &&
+    m.productHeightRatio <= V.productHeightRatioMax + 0.02 &&
+    m.productArea >= m.brandArea * V.productVsBrandAreaMultiplier &&
+    m.gapAboveVolumePx >= V.gapAboveVolumeMinPx &&
+    m.gapAboveVolumePx <= V.gapAboveVolumeMaxPx
   );
 }
 
@@ -232,6 +239,7 @@ export async function autoCorrectProductLayout(
 ): Promise<ResolvedProductPlacement> {
   let adj: VisionLayoutAdjustment = { ...BASE_ADJ, ...initialAdj };
   const volumeY = R.blocks.volume.y;
+  const productBottomTarget = LAYOUT_RULES.productBottomY;
   const maxPasses = V.maxCorrectionPasses;
 
   let lastFit: FitResult = { buffer: productBuf, width: 1, height: 1 };
@@ -271,7 +279,7 @@ export async function autoCorrectProductLayout(
       zone.x,
       zone.x + zone.w - fit.width + (adj.productLeftOffset ?? 0)
     );
-    const drawY = zone.bottom - fit.height;
+    const drawY = Math.min(zone.bottom - fit.height, productBottomTarget - fit.height);
 
     lastMetrics = buildFullLayoutMetrics({
       productWidth: fit.width,
