@@ -143,7 +143,7 @@ async function drawTemplateBase(
   ctx.fillRect(hdr.x - 20, hdr.y - 12, hdr.w + 40, hdr.h + 24);
 
   const fadeX = Math.round(W * S.ratios.loopFadeX);
-  ctx.fillStyle = `rgba(247, 247, 247, ${S.ratios.loopFadeOpacity})`;
+  ctx.fillStyle = `rgba(240, 240, 240, ${S.ratios.loopFadeOpacity})`;
   ctx.fillRect(fadeX, S.ratios.loopFadeY, W - fadeX, H - S.ratios.loopFadeY - 100);
 }
 
@@ -203,7 +203,13 @@ function overlayDynamicText(
 
   ctx.fillStyle = C.muted;
   ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
-  const typeLine = wrapLines(ctx, data.productType.trim(), L.productType.w, ctx.font, 1)[0];
+  const typeLine = wrapLines(
+    ctx,
+    data.productType.trim().toLowerCase(),
+    L.productType.w,
+    ctx.font,
+    1
+  )[0];
   if (typeLine) {
     ctx.fillText(typeLine, x, y + typeSize);
     y += typeSize + S.gaps.afterType;
@@ -245,6 +251,20 @@ function overlayDynamicText(
   return y + notes.length * L.notes.blockH;
 }
 
+function drawProductShadow(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  centerX: number,
+  baseY: number,
+  width: number
+): void {
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
+  ctx.beginPath();
+  ctx.ellipse(centerX, baseY + 6, width * 0.38, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 async function overlayProductPhoto(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string
@@ -257,18 +277,19 @@ async function overlayProductPhoto(
 
   try {
     const zone = L.product;
+    const availH = zone.bottom - zone.y;
     const { buffer, width, height } = await fitProductPng(
       productBuf,
       zone.w,
-      zone.h,
+      availH,
       S.ratios.productFillHeight
     );
 
     const prodImg = await loadImage(buffer);
     const drawX = zone.x + (zone.w - width) / 2;
-    const bottomTarget = L.ml.y - 8;
-    const drawY = Math.max(zone.y, bottomTarget - height);
+    const drawY = zone.bottom - height;
 
+    drawProductShadow(ctx, drawX + width / 2, drawY + height, width);
     ctx.drawImage(prodImg, drawX, drawY, width, height);
     return { loaded: true };
   } catch (e) {

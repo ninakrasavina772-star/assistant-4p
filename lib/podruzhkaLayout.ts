@@ -16,14 +16,14 @@ export const PODRUZHKA_LAYOUT = {
   },
   productType: { x: S.textX, w: Math.round(W * 0.46) },
   model: { x: S.textX, w: Math.round(W * 0.46) },
-  notes: { x: S.textX, w: 280, blockH: S.noteBlockHeight },
+  notes: { x: S.textX, w: 300, blockH: S.noteBlockHeight },
   ml: S.ml,
   mlAccent: S.mlAccent,
   product: {
     x: Math.round(W * R.productX),
     y: Math.round(H * R.productY),
     w: Math.round(W * R.productW),
-    h: Math.round(H * R.productH)
+    bottom: H - S.margins.bottom
   },
   separator: { width: S.separatorWidth }
 } as const;
