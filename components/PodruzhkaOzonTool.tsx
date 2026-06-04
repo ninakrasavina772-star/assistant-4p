@@ -31,6 +31,21 @@ const RENDER_CHUNK = 2;
 
 type Step = 1 | 2 | 3;
 
+function StepDoneBanner({
+  title,
+  children
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-4 space-y-3">
+      <p className="text-sm font-semibold text-emerald-900">{title}</p>
+      {children}
+    </div>
+  );
+}
+
 export function PodruzhkaOzonTool() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>(1);
@@ -42,9 +57,10 @@ export function PodruzhkaOzonTool() {
   const [error, setError] = useState<string | null>(null);
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
+  const [notesDone, setNotesDone] = useState(false);
   const [notesStats, setNotesStats] = useState<{ ok: number; fail: number } | null>(null);
+  const [infographicDone, setInfographicDone] = useState(false);
   const [renderStats, setRenderStats] = useState<{ ok: number; fail: number } | null>(null);
-  const [resultBlob, setResultBlob] = useState<{ blob: Blob; name: string } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -55,12 +71,30 @@ export function PodruzhkaOzonTool() {
     }
   }, []);
 
+  const downloadBlob = useCallback((blob: Blob, name: string) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, []);
+
+  const downloadWorkbook = useCallback(
+    async (suffix: "notes" | "infographic" | "foto3") => {
+      if (!wb) return;
+      const blob = await writeWorkbookToBlob(wb);
+      downloadBlob(blob, defaultPodruzhkaDownloadName(fileName, suffix));
+    },
+    [wb, fileName, downloadBlob]
+  );
+
   const onFile = useCallback(async (file: File) => {
     setBusy(true);
     setError(null);
+    setNotesDone(false);
     setNotesStats(null);
+    setInfographicDone(false);
     setRenderStats(null);
-    setResultBlob(null);
     setPreviewUrl(null);
     setProgress("Читаем Excel…");
 
@@ -103,7 +137,9 @@ export function PodruzhkaOzonTool() {
 
     setBusy(true);
     setError(null);
+    setNotesDone(false);
     setNotesStats(null);
+
     const ws = wb.getWorksheet(sheetInfo.sheetName);
     if (!ws) {
       setError("Лист не найден");
@@ -116,18 +152,18 @@ export function PodruzhkaOzonTool() {
       return ai.status !== "ok";
     });
 
-    if (all.length === 0) {
-      setNotesStats({ ok: sheetInfo.rows.length, fail: 0 });
-      setStep(2);
-      setBusy(false);
-      return;
-    }
-
     const results: PodruzhkaAiResult[] = [];
     let ok = 0;
     let fail = 0;
 
     try {
+      if (all.length === 0) {
+        setNotesStats({ ok: sheetInfo.rows.length, fail: 0 });
+        setNotesDone(true);
+        setBusy(false);
+        return;
+      }
+
       for (let i = 0; i < all.length; i += NOTES_CHUNK) {
         const chunk = all.slice(i, i + NOTES_CHUNK);
         setProgress(`Ноты и model: ${i} / ${all.length}…`);
@@ -151,26 +187,27 @@ export function PodruzhkaOzonTool() {
       }
 
       applyAiResults(ws, sheetInfo, results);
-
-      const blob = await writeWorkbookToBlob(wb);
-      const outName = defaultPodruzhkaDownloadName(fileName, "notes");
-      setResultBlob({ blob, name: outName });
       const skipped = sheetInfo.rows.length - all.length;
       setNotesStats({ ok: ok + skipped, fail });
-      setStep(2);
+      setNotesDone(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка шага 1");
     } finally {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, openaiKey, rememberKey, fileName]);
+  }, [wb, sheetInfo, openaiKey, rememberKey]);
 
   const runRender = useCallback(async () => {
     if (!wb || !sheetInfo) return;
+    if (!notesDone) {
+      setError("Сначала завершите шаг 1 (ноты и model).");
+      return;
+    }
 
     setBusy(true);
     setError(null);
+    setInfographicDone(false);
     setRenderStats(null);
     setPreviewUrl(null);
 
@@ -201,7 +238,9 @@ export function PodruzhkaOzonTool() {
     }
 
     if (todo.length === 0) {
-      setError("Нет строк с notes_status=ok и заполненными нотами. Сначала шаг 1.");
+      setError(
+        "Нет строк для инфографики (нужен notes_status=ok и пустой foto 2). Проверьте Excel после шага 1."
+      );
       setBusy(false);
       return;
     }
@@ -209,7 +248,7 @@ export function PodruzhkaOzonTool() {
     try {
       for (let i = 0; i < todo.length; i += RENDER_CHUNK) {
         const chunk = todo.slice(i, i + RENDER_CHUNK);
-        setProgress(`Инфографика: ${i} / ${todo.length}…`);
+        setProgress(`Формируем инфографику: ${i} / ${todo.length}…`);
 
         await Promise.all(
           chunk.map(async (row) => {
@@ -244,47 +283,18 @@ export function PodruzhkaOzonTool() {
 
       const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
-      const blob = await writeWorkbookToBlob(wb);
-      const outName = defaultPodruzhkaDownloadName(fileName, "infographic");
-      setResultBlob({ blob, name: outName });
       setRenderStats({ ok, fail });
-      setStep(3);
+      setInfographicDone(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка шага 2");
+      setError(e instanceof Error ? e.message : "Ошибка формирования инфографики");
     } finally {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, fileName, previewUrl]);
-
-  const downloadBlob = useCallback((blob: Blob, name: string) => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }, []);
-
-  const download = useCallback(() => {
-    if (!resultBlob) return;
-    downloadBlob(resultBlob.blob, resultBlob.name);
-  }, [resultBlob, downloadBlob]);
-
-  const downloadCurrentExcel = useCallback(
-    async (suffix: "notes" | "infographic" | "current" = "current") => {
-      if (!wb) return;
-      const blob = await writeWorkbookToBlob(wb);
-      const name =
-        suffix === "current"
-          ? (fileName ?? "feed.xlsx")
-          : defaultPodruzhkaDownloadName(fileName, suffix);
-      downloadBlob(blob, name);
-    },
-    [wb, fileName, downloadBlob]
-  );
+  }, [wb, sheetInfo, notesDone, previewUrl]);
 
   const pipeline = useMemo(() => {
-    if (!wb || !sheetInfo) return null;
+    if (!wb || !sheetInfo || !infographicDone) return null;
     return {
       workbook: wb,
       fileName: fileName ?? "feed.xlsx",
@@ -293,17 +303,16 @@ export function PodruzhkaOzonTool() {
         if (!ws) return null;
         return buildFoto2ColumnInfo(ws, sheetInfo);
       },
-      onDone: (blob: Blob, name: string) => {
-        setResultBlob({ blob, name });
-      }
+      onDone: undefined
     };
-  }, [wb, sheetInfo, fileName]);
+  }, [wb, sheetInfo, fileName, infographicDone, downloadWorkbook]);
 
-  const stepBtn = (n: Step, label: string) => (
+  const stepBtn = (n: Step, label: string, enabled: boolean) => (
     <button
       type="button"
-      onClick={() => setStep(n)}
-      className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
+      disabled={!enabled}
+      onClick={() => enabled && setStep(n)}
+      className={`rounded-lg px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
         step === n
           ? "bg-[#ffd740] text-[#0a0a0a]"
           : "border border-slate-200 bg-white text-slate-700"
@@ -317,88 +326,70 @@ export function PodruzhkaOzonTool() {
     <div className="space-y-6">
       <section className={homeCard}>
         <div className={homeCardHeader}>
-          <h2 className={homeCardTitle}>Этапы</h2>
+          <h2 className={homeCardTitle}>Как работать</h2>
         </div>
         <div className={`${homeCardBody} space-y-3 text-sm text-slate-600`}>
           <div className="flex flex-wrap gap-2">
-            {stepBtn(1, "1. Ноты + model (AI)")}
-            {stepBtn(2, "2. Инфографика в foto 2")}
-            {stepBtn(3, "3. Публичные ссылки Foto 3")}
+            {stepBtn(1, "1. Загрузка и ноты", Boolean(wb))}
+            {stepBtn(2, "2. Инфографика", notesDone)}
+            {stepBtn(3, "3. Foto 3 для Ozon", infographicDone)}
           </div>
           <ol className="list-decimal space-y-1 pl-5 text-xs">
-            <li>
-              AI находит <strong>model</strong> (название аромата) и 3 пары нот по{" "}
-              <strong>name</strong> + <strong>product name</strong> — без выдумок.
-            </li>
-            <li>
-              Подстановка в шаблон Подружка Global: <strong>brand name</strong>,{" "}
-              <strong>product_type</strong>, <strong>model</strong>, ноты, <strong>ml</strong>, фото из{" "}
-              <strong>foto</strong> → колонка <strong>foto 2</strong>.
-            </li>
-            <li>Как раньше: foto 2 → облако → <strong>Foto 3</strong> для Ozon.</li>
+            <li>Загрузите ваш Excel → AI пропишет <strong>model</strong> и ноты → <strong>скачайте</strong> и проверьте.</li>
+            <li>Нажмите <strong>«Сформировать инфографику»</strong> → в <strong>foto 2</strong> появятся ссылки на картинки → <strong>скачайте готовый файл</strong> со всеми колонками.</li>
+            <li>По желанию: шаг 3 делает <strong>Foto 3</strong> (https для загрузки в Ozon).</li>
           </ol>
         </div>
       </section>
 
-      {wb && sheetInfo && (
-        <section className={homeCard}>
-          <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Excel фид</h2>
-          </div>
-          <div className={`${homeCardBody} space-y-4`}>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void onFile(f);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className={homeBtnPrimary}
-              disabled={busy}
-              onClick={() => fileRef.current?.click()}
-            >
-              {busy ? "Обрабатываем…" : "Загрузить Excel"}
-            </button>
-            {fileName && sheetInfo ? (
-              <p className="text-sm text-slate-600">
-                {fileName} — {sheetInfo.rows.length} строк
-              </p>
-            ) : null}
-            {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
-            {error ? (
-              <p className="text-sm text-red-700" role="alert">
-                {error}
-              </p>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                disabled={busy}
-                onClick={() => void downloadCurrentExcel("current")}
-              >
-                Скачать текущий Excel
-              </button>
-              {resultBlob ? (
-                <button type="button" className={homeBtnPrimary} onClick={download}>
-                  Скачать {resultBlob.name}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </section>
-      )}
+      {/* Загрузка файла */}
+      <section className={homeCard}>
+        <div className={homeCardHeader}>
+          <h2 className={homeCardTitle}>Ваш Excel-фид</h2>
+        </div>
+        <div className={`${homeCardBody} space-y-4`}>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onFile(f);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className={homeBtnPrimary}
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            {busy && !wb ? "Читаем файл…" : wb ? "Загрузить другой Excel" : "Загрузить Excel"}
+          </button>
+          {fileName && sheetInfo ? (
+            <p className="text-sm text-slate-600">
+              <strong>{fileName}</strong> — {sheetInfo.rows.length} строк. Исходные колонки (brand name,
+              foto, ml…) сохраняются.
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Нужны колонки: brand name, product_type, product name, name, foto, ml.
+            </p>
+          )}
+          {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
+          {error ? (
+            <p className="text-sm text-red-700" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </section>
 
-      {step === 1 && (
+      {wb && sheetInfo && step === 1 && (
         <section className={homeCard}>
           <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Шаг 1 — ноты и model</h2>
+            <h2 className={homeCardTitle}>Шаг 1 — model и ноты (AI)</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <label className="block text-sm">
@@ -418,99 +409,134 @@ export function PodruzhkaOzonTool() {
                 checked={rememberKey}
                 onChange={(e) => setRememberKey(e.target.checked)}
               />
-              Помнить в sessionStorage до закрытия вкладки
+              Помнить ключ до закрытия вкладки
             </label>
-            <button
-              type="button"
-              className={homeBtnPrimary}
-              disabled={busy || !sheetInfo}
-              onClick={() => void runNotes()}
-            >
-              {busy ? "Идёт AI…" : "Прописать ноты и model"}
-            </button>
-            {notesStats ? (
-              <p className="text-sm text-emerald-700">
-                Готово: {notesStats.ok} ok, {notesStats.fail} без данных — переходите к шагу 2
-              </p>
-            ) : null}
-            {wb && notesStats ? (
+            {!notesDone ? (
               <button
                 type="button"
                 className={homeBtnPrimary}
                 disabled={busy}
-                onClick={() => void downloadCurrentExcel("notes")}
+                onClick={() => void runNotes()}
               >
-                Скачать Excel с нотами
+                {busy ? "Идёт AI…" : "Прописать model и ноты"}
               </button>
             ) : null}
-            <p className="text-xs text-slate-500">
-              Добавятся колонки: model, note1_title, note1_desc, … notes_status.
-            </p>
-          </div>
-        </section>
-      )}
 
-      {step === 2 && (
-        <section className={homeCard}>
-          <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Шаг 2 — шаблон Подружка Global</h2>
-          </div>
-          <div className={`${homeCardBody} space-y-4`}>
-            <p className="text-sm text-slate-600">
-              Только подстановка в макет: бренд, тип товара, model, 3 ноты, объём, фото из{" "}
-              <strong>foto</strong>. Дизайн не меняется.
-            </p>
-            <button
-              type="button"
-              className={homeBtnPrimary}
-              disabled={busy || !wb}
-              onClick={() => void runRender()}
-            >
-              {busy ? "Рендер…" : "Собрать инфографику в foto 2"}
-            </button>
-            {renderStats ? (
-              <p className="text-sm text-emerald-700">
-                Заполнено foto 2: {renderStats.ok}, ошибок: {renderStats.fail}. Переходите к шагу 3 —
-                файл уже в системе.
-              </p>
-            ) : null}
-            {wb ? (
-              <div className="flex flex-wrap gap-2 pt-1">
+            {notesDone && notesStats ? (
+              <StepDoneBanner title="Шаг 1 готов — скачайте файл и проверьте">
+                <p className="text-sm text-emerald-800">
+                  Заполнено: {notesStats.ok} строк, без данных: {notesStats.fail}. В файле появились
+                  колонки model, note1_title, note1_desc, … notes_status.
+                </p>
                 <button
                   type="button"
                   className={homeBtnPrimary}
                   disabled={busy}
-                  onClick={() => void downloadCurrentExcel("infographic")}
+                  onClick={() => void downloadWorkbook("notes")}
                 >
-                  Скачать Excel с foto 2
+                  Скачать Excel с model и нотами
                 </button>
-                {resultBlob?.name.includes("infographic") ? (
-                  <button
-                    type="button"
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                    onClick={download}
-                  >
-                    {resultBlob.name}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {previewUrl ? (
-              <div>
-                <p className="mb-2 text-xs text-slate-500">Пример последней карточки:</p>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={previewUrl}
-                  alt="Превью инфографики"
-                  className="max-w-xs rounded-lg border border-slate-200 shadow-sm"
-                />
-              </div>
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-900 hover:bg-emerald-50"
+                  onClick={() => setStep(2)}
+                >
+                  Проверила — перейти к инфографике →
+                </button>
+              </StepDoneBanner>
             ) : null}
           </div>
         </section>
       )}
 
-      {step === 3 && <OzonImageConverter embedded pipeline={pipeline} />}
+      {wb && sheetInfo && step === 2 && (
+        <section className={homeCard}>
+          <div className={homeCardHeader}>
+            <h2 className={homeCardTitle}>Шаг 2 — сформировать инфографику</h2>
+          </div>
+          <div className={`${homeCardBody} space-y-4`}>
+            <p className="text-sm text-slate-600">
+              Подстановка в шаблон Подружка Global: brand name, product_type, model, 3 ноты, ml и фото
+              товара из <strong>foto</strong>. Результат — ссылки в колонке <strong>foto 2</strong>.
+              Остальные ваши колонки не удаляются.
+            </p>
+            {!infographicDone ? (
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy || !notesDone}
+                onClick={() => void runRender()}
+              >
+                {busy ? "Формируем…" : "Сформировать инфографику"}
+              </button>
+            ) : null}
+            {!notesDone ? (
+              <p className="text-xs text-amber-800">Сначала завершите шаг 1.</p>
+            ) : null}
+
+            {infographicDone && renderStats ? (
+              <StepDoneBanner title="Инфографика готова — скачайте полный Excel">
+                <p className="text-sm text-emerald-800">
+                  В foto 2 записано ссылок: {renderStats.ok}
+                  {renderStats.fail > 0 ? `, ошибок: ${renderStats.fail}` : ""}. В файле все исходные
+                  поля + model + ноты + foto 2.
+                </p>
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy}
+                  onClick={() => void downloadWorkbook("infographic")}
+                >
+                  Скачать готовый Excel (все поля + инфографика)
+                </button>
+                {previewUrl ? (
+                  <div>
+                    <p className="mb-2 text-xs text-slate-500">Пример карточки:</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewUrl}
+                      alt="Превью"
+                      className="max-w-xs rounded-lg border border-slate-200"
+                    />
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-900 hover:bg-emerald-50"
+                  onClick={() => setStep(3)}
+                >
+                  Нужны https для Ozon? Шаг 3 → Foto 3
+                </button>
+              </StepDoneBanner>
+            ) : null}
+          </div>
+        </section>
+      )}
+
+      {wb && sheetInfo && step === 3 && infographicDone && (
+        <>
+          <section className={homeCard}>
+            <div className={homeCardHeader}>
+              <h2 className={homeCardTitle}>Готовый файл</h2>
+            </div>
+            <div className={`${homeCardBody} flex flex-wrap gap-2`}>
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy}
+                onClick={() => void downloadWorkbook("infographic")}
+              >
+                Снова скачать Excel с foto 2
+              </button>
+            </div>
+          </section>
+          <OzonImageConverter embedded pipeline={pipeline} />
+        </>
+      )}
+
+      {step === 3 && !infographicDone ? (
+        <p className="text-sm text-amber-800 px-1">Сначала завершите шаг 2 и сформируйте инфографику.</p>
+      ) : null}
     </div>
   );
 }
