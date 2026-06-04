@@ -223,14 +223,8 @@ async function overlayProductPhoto(
     const anchorY = zone.bottom + bottomOffset;
     const drawY = anchorY - fit.height;
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(zone.x - 4, zone.y, zone.w + 12, zone.bottom - zone.y + 80);
-    ctx.clip();
-
-    drawProductShadow(ctx, zone.x + zone.w / 2, anchorY + 4, Math.min(fit.width, zone.w));
+    drawProductShadow(ctx, drawX + fit.width / 2, anchorY + 4, fit.width);
     ctx.drawImage(prodImg, drawX, drawY, fit.width, fit.height);
-    ctx.restore();
     return { loaded: true };
   } catch (e) {
     return {

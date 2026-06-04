@@ -28,9 +28,27 @@ export async function stripNearWhiteBackground(
     .toBuffer();
 }
 
-async function trimTransparent(input: Buffer): Promise<Buffer> {
+/** trim только если не «съел» товар (иначе — как на Ozon, целиком) */
+async function trimTransparentSafe(input: Buffer): Promise<Buffer> {
+  const before = await sharp(input).metadata();
+  const origW = before.width ?? 1;
+  const origH = before.height ?? 1;
+  const origArea = origW * origH;
+  const origAspect = origW / origH;
+
   try {
-    return await sharp(input).trim({ threshold: 12 }).png().toBuffer();
+    const trimmed = await sharp(input).trim({ threshold: 8 }).png().toBuffer();
+    const after = await sharp(trimmed).metadata();
+    const newW = after.width ?? 1;
+    const newH = after.height ?? 1;
+    const newArea = newW * newH;
+    const newAspect = newW / newH;
+
+    if (newArea < origArea * 0.4) return input;
+    if (Math.abs(Math.log(origAspect / newAspect)) > 0.45) return input;
+    if (newW < origW * 0.45 || newH < origH * 0.45) return input;
+
+    return trimmed;
   } catch {
     return input;
   }
@@ -40,58 +58,46 @@ export type FitResult = {
   buffer: Buffer;
   width: number;
   height: number;
-  overflowsWidth: boolean;
 };
 
 /**
- * Масштаб товара под референс:
- * - portrait / square: contain в maxW × maxH
- * - landscape (коробки): по высоте minHeightRatio, ширина может выходить за maxW (clip при рендере)
+ * Весь товар целиком в зоне (contain), без обрезки краёв.
+ * Как в референсе: крупно, но не вылезает за границы.
  */
 export async function fitProductPng(
   input: Buffer,
   maxW: number,
   maxH: number,
   fillHeightRatio = 0.96,
-  minHeightRatio = 0.92
+  minHeightRatio = 0.88
 ): Promise<FitResult> {
   const stripped = await stripNearWhiteBackground(input);
-  const trimmed = await trimTransparent(stripped);
+  const trimmed = await trimTransparentSafe(stripped);
   const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
-  const aspect = srcW / srcH;
 
   const targetH = Math.round(maxH * fillHeightRatio);
   const minH = Math.round(maxH * minHeightRatio);
-  const isLandscape = aspect > 1.15;
 
-  let width: number;
-  let height: number;
+  let scale = Math.min(maxW / srcW, targetH / srcH);
+  let width = Math.max(1, Math.round(srcW * scale));
+  let height = Math.max(1, Math.round(srcH * scale));
 
-  if (isLandscape) {
-    height = Math.max(minH, Math.min(targetH, Math.round(maxH * 0.98)));
-    const scale = height / srcH;
-    width = Math.round(srcW * scale);
-  } else {
-    let scale = Math.min(targetH / srcH, maxW / srcW);
-    width = Math.max(1, Math.round(srcW * scale));
-    height = Math.max(1, Math.round(srcH * scale));
-    if (height < minH) {
-      scale = minH / srcH;
-      width = Math.round(srcW * scale);
+  if (height < minH) {
+    const scaleH = minH / srcH;
+    const w2 = Math.round(srcW * scaleH);
+    if (w2 <= maxW) {
+      scale = scaleH;
+      width = w2;
       height = minH;
-      if (width > maxW) {
-        width = maxW;
-        height = Math.max(1, Math.round(srcH * (maxW / srcW)));
-      }
     }
   }
 
   const buffer = await sharp(trimmed)
-    .resize(width, height, { fit: "fill" })
+    .resize(width, height, { fit: "inside" })
     .png()
     .toBuffer();
 
-  return { buffer, width, height, overflowsWidth: width > maxW };
+  return { buffer, width, height };
 }

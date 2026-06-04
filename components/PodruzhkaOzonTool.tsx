@@ -21,6 +21,7 @@ import {
   countAiReadyRows,
   defaultPodruzhkaDownloadName,
   ensureAiColumns,
+  getRowRenderEligibility,
   listAiColumnsOnSheet,
   mappingIsComplete,
   readAiFromSheet,
@@ -92,6 +93,7 @@ export function PodruzhkaOzonTool() {
     noFoto: number;
     sampleFotoError: string | null;
     visionNote: string | null;
+    skipped: { row: number; brand: string; reasons: string }[];
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
@@ -375,18 +377,24 @@ export function PodruzhkaOzonTool() {
     let sampleFotoError: string | null = null;
     let visionNote: string | null = null;
     const todo: typeof sheetInfo.rows = [];
+    const skipped: { row: number; brand: string; reasons: string }[] = [];
 
     for (const row of sheetInfo.rows) {
-      const ai = readAiFromSheet(ws, sheetInfo, row);
-      if (ai.status !== "ok" || !ai.model || !ai.notes.every((n) => n.title && n.desc)) {
-        continue;
+      const el = getRowRenderEligibility(ws, sheetInfo, row);
+      if (el.ok) {
+        todo.push(row);
+      } else {
+        skipped.push({
+          row: row.row,
+          brand: row.brandName || row.name.slice(0, 30),
+          reasons: el.reasons.join(", ") || el.status || "не готово"
+        });
       }
-      todo.push(row);
     }
 
     if (todo.length === 0) {
       setError(
-        "Нет строк для картинок: нужны model и note 1–3 (заполните вручную или шаг 1 AI)."
+        `Нет строк для картинок (0 из ${sheetInfo.rows.length}). Запустите шаг 1 AI или заполните model и note 1–3 вручную.`
       );
       setBusy(false);
       return;
@@ -454,7 +462,7 @@ export function PodruzhkaOzonTool() {
 
       const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
-      setRenderStats({ ok, fail, noFoto, sampleFotoError, visionNote });
+      setRenderStats({ ok, fail, noFoto, sampleFotoError, visionNote, skipped });
       setInfographicDone(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка инфографики");
@@ -709,6 +717,21 @@ export function PodruzhkaOzonTool() {
                 </p>
                 {renderStats.visionNote ? (
                   <p className="text-sm text-slate-700">{renderStats.visionNote}</p>
+                ) : null}
+                {renderStats.skipped.length > 0 ? (
+                  <div className="text-sm text-amber-900">
+                    <p>
+                      Пропущено строк: {renderStats.skipped.length} (нет model/нот или AI не
+                      заполнил):
+                    </p>
+                    <ul className="mt-1 list-inside list-disc">
+                      {renderStats.skipped.map((s) => (
+                        <li key={s.row}>
+                          строка {s.row} — {s.brand}: {s.reasons}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : null}
                 {renderStats.noFoto > 0 ? (
                   <p className="text-sm text-amber-900">

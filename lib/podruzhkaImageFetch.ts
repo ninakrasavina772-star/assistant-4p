@@ -15,9 +15,19 @@ function canFetchHost(hostname: string): boolean {
 
 export type FotoFetchResult = { buf: Buffer | null; error?: string };
 
+/** Ozon: -1-s часто мелкое превью, -1-f — полноразмернее */
+export function preferOzonFullSizeUrl(url: string): string {
+  const u = url.trim();
+  if (!/ozone\.ru|ozon\.ru/i.test(u)) return u;
+  return u
+    .replace(/multimedia-1-s\//i, "multimedia-1-f/")
+    .replace(/multimedia-1-5\//i, "multimedia-1-f/")
+    .replace(/multimedia-1-g\//i, "multimedia-1-f/");
+}
+
 /** Скачивание foto из фида (5.35.85.200, Ozon CDN, https) */
 export async function fetchPodruzhkaProductImageDetailed(url: string): Promise<FotoFetchResult> {
-  const u = url?.trim();
+  const u = preferOzonFullSizeUrl(url?.trim() ?? "");
   if (!u) return { buf: null, error: "Пустая ссылка foto" };
 
   let parsed: URL;

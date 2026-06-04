@@ -276,25 +276,6 @@ export function formatNoteCellForExcel(note: PodruzhkaNoteBlock): string {
   return `${title}  ${desc}`;
 }
 
-/** Нужен ли запуск AI: только если статус ещё не ok после прошлой генерации */
-export function rowNeedsAiGeneration(
-  ws: ExcelJS.Worksheet,
-  info: PodruzhkaSheetInfo,
-  feedRow: PodruzhkaFeedRow,
-  force = false
-): boolean {
-  if (force) return true;
-  const ai = readAiFromSheet(ws, info, feedRow);
-  return ai.status !== "ok";
-}
-
-export function countAiReadyRows(
-  ws: ExcelJS.Worksheet,
-  info: PodruzhkaSheetInfo
-): number {
-  return info.rows.filter((r) => readAiFromSheet(ws, info, r).status === "ok").length;
-}
-
 export function readAiFromSheet(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaSheetInfo,
@@ -312,6 +293,63 @@ export function readAiFromSheet(
   const statusCol = aiCols.notes_status;
   const status = statusCol ? cellPlainValue(ws.getCell(row, statusCol).value).trim() : "";
   return { model, notes, status };
+}
+
+export type RowRenderEligibility = {
+  ok: boolean;
+  model: string;
+  notes: PodruzhkaNoteBlock[];
+  status: string;
+  reasons: string[];
+};
+
+function noteIsComplete(n: PodruzhkaNoteBlock): boolean {
+  return Boolean(n.title.trim() && n.desc.trim());
+}
+
+/** Можно ли рисовать инфографику (model + 3 ноты; статус «ok» не обязателен) */
+export function getRowRenderEligibility(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaSheetInfo,
+  feedRow: PodruzhkaFeedRow
+): RowRenderEligibility {
+  const ai = readAiFromSheet(ws, info, feedRow);
+  const reasons: string[] = [];
+
+  if (!feedRow.brandName.trim()) reasons.push("нет brand name");
+  if (!feedRow.foto.trim()) reasons.push("нет foto");
+  if (!ai.model.trim()) reasons.push("нет model");
+  for (let i = 0; i < 3; i++) {
+    const n = ai.notes[i]!;
+    if (!n.title.trim()) reasons.push(`пустой note ${i + 1}`);
+    else if (!n.desc.trim()) reasons.push(`нет описания в note ${i + 1}`);
+  }
+
+  const ok =
+    reasons.length === 0 &&
+    ai.model.trim().length > 0 &&
+    ai.notes.length >= 3 &&
+    ai.notes.every(noteIsComplete);
+
+  return { ok, model: ai.model, notes: ai.notes, status: ai.status, reasons };
+}
+
+/** Нужен ли запуск AI: нет model или неполные ноты, либо force */
+export function rowNeedsAiGeneration(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaSheetInfo,
+  feedRow: PodruzhkaFeedRow,
+  force = false
+): boolean {
+  if (force) return true;
+  return !getRowRenderEligibility(ws, info, feedRow).ok;
+}
+
+export function countAiReadyRows(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaSheetInfo
+): number {
+  return info.rows.filter((r) => getRowRenderEligibility(ws, info, r).ok).length;
 }
 
 export function applyAiResults(
