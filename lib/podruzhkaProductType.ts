@@ -15,8 +15,8 @@ function genderSuffix(blob: string): string {
   return "";
 }
 
-function inferFromNames(productName: string, name: string): string {
-  const blob = `${productName} ${name}`.toLowerCase();
+function inferFromNames(productName: string, name: string, model?: string): string {
+  const blob = `${productName} ${name} ${model ?? ""}`.toLowerCase();
   const g = genderSuffix(blob);
 
   if (
@@ -52,14 +52,22 @@ export function resolveProductTypeForCard(input: {
   productType: string;
   productName: string;
   name: string;
+  model?: string;
 }): string {
   const col = norm(input.productType);
+  const blob = `${input.productName} ${input.name} ${input.model ?? ""}`.trim();
+
   if (col && !VAGUE_ONLY.test(col)) {
     return col;
   }
 
-  const inferred = inferFromNames(input.productName, input.name);
+  const inferred = inferFromNames(input.productName, input.name, input.model);
   if (inferred) return inferred;
+
+  if (col && VAGUE_ONLY.test(col)) {
+    const g = genderSuffix(blob);
+    return `парфюмерная вода${g}`.trim();
+  }
 
   if (col) return col;
   return "";

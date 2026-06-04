@@ -425,7 +425,8 @@ export function PodruzhkaOzonTool() {
                   productType: resolveProductTypeForCard({
                     productType: row.productType,
                     productName: row.productName,
-                    name: row.name
+                    name: row.name,
+                    model: ai.model
                   }),
                   model: ai.model,
                   ml: row.ml,
@@ -770,7 +771,7 @@ export function PodruzhkaOzonTool() {
                   {layoutVersion ? (
                     <>
                       {" "}
-                      Макет: <code className="text-xs">{layoutVersion}</code> (ожидается ref-v4b-ch —
+                      Макет: <code className="text-xs">{layoutVersion}</code> (ожидается ref-v5-ch —
                       иначе Ctrl+F5).
                     </>
                   ) : null}

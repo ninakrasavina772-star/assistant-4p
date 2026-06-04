@@ -347,6 +347,15 @@ function overlayDynamicText(
     modelBaseline += flow.modelLineStep;
   }
 
+  if (LAYOUT_RULES.replaceOnly) {
+    const gapTop = modelBaseline + 4;
+    const gapH = flow.notesStartY - gapTop - 6;
+    if (gapH > 0) {
+      ctx.fillStyle = C.bg;
+      ctx.fillRect(L.brand.x - 4, gapTop, L.brand.w + 24, gapH);
+    }
+  }
+
   if (!LAYOUT_RULES.replaceOnly) {
     drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
     drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);

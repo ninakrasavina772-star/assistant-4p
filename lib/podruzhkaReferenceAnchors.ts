@@ -10,7 +10,7 @@ const SY = 1365 / 1400;
 const s = (x: number) => Math.round(x * SX);
 const sy = (y: number) => Math.round(y * SY);
 
-export const PODRUZHKA_LAYOUT_VERSION = "ref-v4b-ch";
+export const PODRUZHKA_LAYOUT_VERSION = "ref-v5-ch";
 
 /** Позиции как на эталоне 1000×1400 (масштаб 1024×1365) */
 export const REFERENCE_TEXT_ANCHORS = {
@@ -33,8 +33,8 @@ export const REFERENCE_TEXT_ANCHORS = {
   textColumnErase: { x: 52, y: sy(115), w: 300, h: sy(1120) },
   /** Стереть «хвост» розовой черты под model с template-base */
   modelAccentErase: { x: 52, y: sy(498), w: 56, h: sy(14) },
-  /** Стереть тень товара с template-base (рисуем без тени) */
-  productShadowErase: { x: s(320), y: sy(1050), w: s(680), h: sy(130) }
+  /** Стереть тень товара с template-base и зону под foto */
+  productShadowErase: { x: s(280), y: sy(980), w: s(720), h: sy(200) }
 } as const;
 
 export function eraseReferenceGhostMarks(

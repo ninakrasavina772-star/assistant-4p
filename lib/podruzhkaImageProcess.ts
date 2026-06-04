@@ -54,6 +54,43 @@ async function trimTransparentSafe(input: Buffer): Promise<Buffer> {
   }
 }
 
+/** Убрать серую «половую» тень под флаконом (часто в foto с Ozon). */
+export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const shadowStart = Math.floor(h * 0.52);
+
+  for (let y = shadowStart; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = pixels[i + 3]!;
+      if (a < 12) continue;
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (spread <= 38 && avg >= 110 && avg <= 242) {
+        pixels[i + 3] = 0;
+      }
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 export type FitProductOptions = {
   cardH?: number;
   cardW?: number;
@@ -128,7 +165,8 @@ export async function fitProductPng(
   const scaleMul = referenceBoxOnly ? 1 : (opts.scaleMultiplier ?? 1);
 
   const stripped = await stripNearWhiteBackground(input);
-  const trimmed = await trimTransparentSafe(stripped);
+  const noShadow = await stripGrayFloorShadow(stripped);
+  const trimmed = await trimTransparentSafe(noShadow);
   const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
