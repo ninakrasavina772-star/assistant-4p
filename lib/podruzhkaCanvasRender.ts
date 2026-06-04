@@ -121,7 +121,8 @@ async function drawTemplateBase(
 function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   data: PodruzhkaInfographicData,
-  L: PodruzhkaRuntimeLayout
+  L: PodruzhkaRuntimeLayout,
+  layoutAdj?: VisionLayoutAdjustment
 ): void {
   const x = L.textX;
   const modelSize = S.fonts.model.size;
@@ -130,11 +131,17 @@ function overlayDynamicText(
   const { size: brandSize, lines: brandLines } = resolveBrandFontSize(ctx, data.brandName, L);
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
-  let brandBaseline = L.brand.y + brandSize;
+
+  const gapAfterHeader = S.gaps.afterHeader + (layoutAdj?.brandYOffset ?? 0);
+  const gapAfterBrand = S.gaps.afterBrand + (layoutAdj?.productTypeYOffset ?? 0);
+
+  let cursorY = S.headerBottomY + gapAfterHeader;
+  let brandBaseline = cursorY + brandSize;
   for (const line of brandLines) {
     ctx.fillText(line, x, brandBaseline);
     brandBaseline += Math.round(brandSize * 1.05);
   }
+  cursorY = brandBaseline + 4;
 
   ctx.fillStyle = C.muted;
   ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
@@ -146,7 +153,9 @@ function overlayDynamicText(
     1
   )[0];
   if (typeLine) {
-    ctx.fillText(typeLine, L.productType.x, L.productType.y + typeSize);
+    cursorY += gapAfterBrand;
+    ctx.fillText(typeLine, L.productType.x, cursorY + typeSize);
+    cursorY += typeSize;
   }
 
   ctx.fillStyle = C.text;
@@ -282,7 +291,7 @@ async function renderOnce(
   const ctx = canvas.getContext("2d");
 
   await drawTemplateBase(ctx);
-  overlayDynamicText(ctx, data, L);
+  overlayDynamicText(ctx, data, L, layoutAdj);
   const foto = await overlayProductPhoto(ctx, data.fotoUrl, L, layoutAdj);
   overlayMl(ctx, data.ml, L);
 

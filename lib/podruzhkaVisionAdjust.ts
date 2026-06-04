@@ -115,20 +115,15 @@ function verdictToAdjustment(
 ): VisionLayoutAdjustment {
   const a: VisionLayoutAdjustment = { ...BASE_ADJ, ...prev };
 
-  if (v.brandVerdict === "too_high") a.brandYOffset += 28;
-  else if (v.brandVerdict === "too_low") a.brandYOffset -= 20;
+  if (v.brandVerdict === "too_high") a.brandYOffset += 24;
+  else if (v.brandVerdict === "too_low") a.brandYOffset -= 16;
 
   if (v.textSpacingVerdict === "too_loose") {
-    a.productTypeYOffset -= 12;
-    a.modelYOffset -= 16;
-    a.accentYOffset -= 20;
-    a.notesStartYOffset -= 24;
-    if (!a.noteBlockHeight) a.noteBlockHeight = PODRUZHKA_REFERENCE.text.noteBlockHeight - 8;
+    a.brandYOffset -= 8;
+    a.productTypeYOffset -= 14;
   } else if (v.textSpacingVerdict === "too_tight") {
+    a.brandYOffset += 8;
     a.productTypeYOffset += 10;
-    a.modelYOffset += 12;
-    a.accentYOffset += 14;
-    a.notesStartYOffset += 16;
   }
 
   if (v.photoSizeVerdict === "too_small") {
