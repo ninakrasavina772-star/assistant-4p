@@ -12,18 +12,20 @@ export type TextFlowLayout = {
   modelFirstBaseline: number;
   accentY: number;
   notesStartY: number;
+  notesEndY: number;
+  mlAccentY: number;
+  mlBaseline: number;
+  productGroundY: number;
 };
 
-/**
- * Вертикальный поток: шапка → зазор → бренд → тип → модель → акцент → ноты.
- * Baseline canvas: fillText(y) = базовая линия символов.
- */
 export function computeTextFlowLayout(input: {
   brandSize: number;
   brandLineCount: number;
   productTypeSize: number;
   modelSize: number;
   modelLineCount: number;
+  noteBlockHeight: number;
+  mlFontSize: number;
   brandYOffset?: number;
   productTypeYOffset?: number;
   modelYOffset?: number;
@@ -50,8 +52,12 @@ export function computeTextFlowLayout(input: {
 
   const accentY = modelLastBaseline + G.afterModel + (input.accentYOffset ?? 0);
   const flowNotesStart = accentY + LR.accentBar.h + G.afterAccentToNotes;
-  /** CH: ноты сразу под акцентом, без принудительного Y=668 */
   const notesStartY = flowNotesStart + (input.notesStartYOffset ?? 0);
+  const notesEndY = notesStartY + 3 * input.noteBlockHeight;
+
+  const mlAccentY = notesEndY + G.afterNotesToMl;
+  const mlBaseline = mlAccentY + LR.accentBar.h + Math.round(input.mlFontSize * 0.85);
+  const productGroundY = LR.product.bottomAlignY;
 
   return {
     brandTopY,
@@ -62,6 +68,10 @@ export function computeTextFlowLayout(input: {
     modelLineStep,
     modelFirstBaseline,
     accentY,
-    notesStartY
+    notesStartY,
+    notesEndY,
+    mlAccentY,
+    mlBaseline,
+    productGroundY
   };
 }

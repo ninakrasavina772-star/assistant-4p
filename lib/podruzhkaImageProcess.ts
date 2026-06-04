@@ -63,13 +63,45 @@ export type FitProductOptions = {
   minWidthRatio?: number;
   narrowAspectBoost?: number;
   scaleMultiplier?: number;
+  /** Вписать только в рамку эталона (без «доминанты» по % макета) */
+  referenceBoxOnly?: boolean;
+  /** Доп. масштаб внутри рамки (replaceOnly, ≈1.12–1.16) */
+  referenceBoxScale?: number;
+  /** Доля высоты рамки, которую должен занять товар (0.85–0.92) */
+  referenceBoxMinHeightFill?: number;
+  /** Доля ширины рамки (наборы, коробка+флакон) */
+  referenceBoxMinWidthFill?: number;
 };
 
 export type FitResult = {
   buffer: Buffer;
   width: number;
   height: number;
+  /** Прозрачные пиксели снизу PNG — без учёта товар «висит» над тенью */
+  bottomAlphaInset: number;
 };
+
+/** Сколько пустых строк снизу у обрезанного PNG (alpha < порога). */
+export async function measureBottomAlphaInset(
+  input: Buffer,
+  alphaThreshold = 14
+): Promise<number> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return 0;
+
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = 0; x < w; x++) {
+      const a = data[(y * w + x) * 4 + 3]!;
+      if (a >= alphaThreshold) return h - 1 - y;
+    }
+  }
+  return 0;
+}
 
 /**
  * Товар — доминанта: высота 48–58% макета, ширина 50–60% макета (Carolina Herrera).
@@ -89,8 +121,11 @@ export async function fitProductPng(
     cardH * (opts.targetHeightRatio ?? R.product.heightRatioTarget)
   );
   const minW = Math.round(cardW * (opts.minWidthRatio ?? R.product.widthRatioMin));
-  const narrowBoost = opts.narrowAspectBoost ?? R.product.narrowAspectBoost;
-  const scaleMul = opts.scaleMultiplier ?? 1;
+  const referenceBoxOnly = opts.referenceBoxOnly === true;
+  const narrowBoost = referenceBoxOnly
+    ? 1
+    : (opts.narrowAspectBoost ?? R.product.narrowAspectBoost);
+  const scaleMul = referenceBoxOnly ? 1 : (opts.scaleMultiplier ?? 1);
 
   const stripped = await stripNearWhiteBackground(input);
   const trimmed = await trimTransparentSafe(stripped);
@@ -102,16 +137,19 @@ export async function fitProductPng(
   const maxAllowedH = Math.min(maxH, maxHCap);
   let scale = Math.min(maxW / srcW, maxAllowedH / srcH);
 
-  if (aspect < 0.55) {
+  if (!referenceBoxOnly && aspect < 0.55) {
     scale *= narrowBoost;
   }
   scale *= scaleMul;
+  if (referenceBoxOnly) {
+    scale *= opts.referenceBoxScale ?? 1;
+  }
 
   let width = Math.max(1, Math.round(srcW * scale));
   let height = Math.max(1, Math.round(srcH * scale));
 
   const pushToTarget = () => {
-    if (height >= targetH || height >= maxH) return;
+    if (referenceBoxOnly || height >= targetH || height >= maxH) return;
     const s = Math.min(targetH / height, maxW / width, maxH / height);
     width = Math.round(width * s);
     height = Math.round(height * s);
@@ -129,30 +167,61 @@ export async function fitProductPng(
     width = Math.max(1, Math.round(width * s));
   }
 
-  if (height < minH) {
-    const s = Math.min(minH / height, maxW / width);
-    width = Math.round(width * s);
-    height = Math.round(height * s);
+  if (referenceBoxOnly) {
+    const minHFill = opts.referenceBoxMinHeightFill ?? 0;
+    if (minHFill > 0) {
+      const targetH = Math.round(maxH * minHFill);
+      if (height < targetH && height < maxH) {
+        const s = Math.min(targetH / height, maxW / width, maxH / height);
+        width = Math.round(width * s);
+        height = Math.round(height * s);
+      }
+    }
+    const minWFill = opts.referenceBoxMinWidthFill ?? 0;
+    if (minWFill > 0) {
+      const targetW = Math.round(maxW * minWFill);
+      if (width < targetW && width < maxW) {
+        const s = Math.min(targetW / width, maxH / height, maxW / width);
+        width = Math.round(width * s);
+        height = Math.round(height * s);
+      }
+    }
+    if (width > maxW) {
+      const s = maxW / width;
+      width = maxW;
+      height = Math.max(1, Math.round(height * s));
+    }
+    if (height > maxH) {
+      const s = maxH / height;
+      height = maxH;
+      width = Math.max(1, Math.round(width * s));
+    }
+  } else {
+    if (height < minH) {
+      const s = Math.min(minH / height, maxW / width);
+      width = Math.round(width * s);
+      height = Math.round(height * s);
+      if (width > maxW) {
+        width = maxW;
+        height = Math.min(maxH, Math.round(srcH * (maxW / srcW)));
+      }
+    }
+
+    if (width < minW) {
+      const s = Math.min(minW / width, maxH / height);
+      width = Math.round(width * s);
+      height = Math.round(height * s);
+      if (height > maxH) {
+        height = maxH;
+        width = Math.min(maxW, Math.round(srcW * (maxH / srcH)));
+      }
+    }
+
+    pushToTarget();
     if (width > maxW) {
       width = maxW;
       height = Math.min(maxH, Math.round(srcH * (maxW / srcW)));
     }
-  }
-
-  if (width < minW) {
-    const s = Math.min(minW / width, maxH / height);
-    width = Math.round(width * s);
-    height = Math.round(height * s);
-    if (height > maxH) {
-      height = maxH;
-      width = Math.min(maxW, Math.round(srcW * (maxH / srcH)));
-    }
-  }
-
-  pushToTarget();
-  if (width > maxW) {
-    width = maxW;
-    height = Math.min(maxH, Math.round(srcH * (maxW / srcW)));
   }
 
   const buffer = await sharp(trimmed)
@@ -160,6 +229,8 @@ export async function fitProductPng(
     .png()
     .toBuffer();
 
-  return { buffer, width, height };
+  const bottomAlphaInset = await measureBottomAlphaInset(buffer);
+
+  return { buffer, width, height, bottomAlphaInset };
 }
-
+

@@ -87,6 +87,7 @@ export function PodruzhkaOzonTool() {
     null
   );
   const [infographicDone, setInfographicDone] = useState(false);
+  const [layoutVersion, setLayoutVersion] = useState<string | null>(null);
   const [renderStats, setRenderStats] = useState<{
     ok: number;
     fail: number;
@@ -211,6 +212,7 @@ export function PodruzhkaOzonTool() {
       setNotesStats(null);
       setInfographicDone(false);
       setRenderStats(null);
+    setLayoutVersion(null);
       setPreviewUrl(null);
       setMappingConfirmed(false);
       setSheetInfo(null);
@@ -363,6 +365,7 @@ export function PodruzhkaOzonTool() {
     setError(null);
     setInfographicDone(false);
     setRenderStats(null);
+    setLayoutVersion(null);
     setPreviewUrl(null);
 
     const ws = wb.getWorksheet(sheetInfo.sheetName);
@@ -437,6 +440,7 @@ export function PodruzhkaOzonTool() {
                 visionScore?: number;
                 visionReasoning?: string;
                 visionError?: string;
+                layoutVersion?: string;
               };
               if (!res.ok || !data.url) {
                 fail++;
@@ -468,6 +472,7 @@ export function PodruzhkaOzonTool() {
               }
               urls.set(row.row, data.url);
               ok++;
+              if (data.layoutVersion) setLayoutVersion(data.layoutVersion);
               if (data.layoutWarning) {
                 layoutWarnings.push({
                   row: row.row,
@@ -558,7 +563,8 @@ export function PodruzhkaOzonTool() {
             распознаются сами (name, brand name, foto, note 1…).
           </p>
           <p>
-            <strong>2.</strong> AI заполняет <strong>model</strong> и <strong>note 1–3</strong> по
+            <strong>2.</strong> AI заполняет <strong>model</strong>, <strong>note 1–3</strong> и при
+            ошибке в таблице правит <strong>product_type</strong> (не оставляет голое «духи») по
             образцу (как Nasomatto Pardon) — обязательно перед инфографикой.
           </p>
           <p>
@@ -658,7 +664,8 @@ export function PodruzhkaOzonTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              <strong>model</strong> и <strong>note 1–3</strong> на карточке пишет только AI — в
+              <strong>model</strong>, <strong>note 1–3</strong> и при необходимости исправленный{" "}
+              <strong>product_type</strong> пишет AI — в
               формате образца: заголовок ноты ЗАГЛАВНЫМИ, описание с маленькой буквы (например «ПРЯНЫЙ
               пикантный характер»). Без этого шага инфографика будет пустой или кривой.
             </p>
@@ -756,6 +763,13 @@ export function PodruzhkaOzonTool() {
                   Готово: {renderStats.ok}
                   {renderStats.fail > 0 ? `, ошибок: ${renderStats.fail}` : ""}
                   {renderStats.noFoto > 0 ? `, без фото: ${renderStats.noFoto}` : ""}.
+                  {layoutVersion ? (
+                    <>
+                      {" "}
+                      Макет: <code className="text-xs">{layoutVersion}</code> (если не ref-v3-ch —
+                      обновите сайт Ctrl+F5).
+                    </>
+                  ) : null}
                 </p>
                 {renderStats.visionNote ? (
                   <p className="text-sm text-slate-700">{renderStats.visionNote}</p>

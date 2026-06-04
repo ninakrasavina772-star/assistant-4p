@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { renderInfographicDetailed } from "@/lib/podruzhkaCanvasRender";
+import { PODRUZHKA_LAYOUT_VERSION } from "@/lib/podruzhkaReferenceAnchors";
 import { uploadOzonImage, getOzonStorageBackend } from "@/lib/ozonImageStorage";
 import type { PodruzhkaInfographicData, PodruzhkaNoteBlock } from "@/lib/podruzhkaTypes";
 
@@ -107,6 +108,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       url,
+      layoutVersion: PODRUZHKA_LAYOUT_VERSION,
       fotoLoaded: rendered.fotoLoaded,
       layoutValidationOk: rendered.layoutValidationOk ?? true,
       ...(rendered.layoutValidationError

@@ -10,7 +10,7 @@ let templateMtime = 0;
 
 const BG = { r: 247, g: 247, b: 247, alpha: 1 };
 
-/** Пустой макет 1000×1400 — contain, плашка не сжимается */
+/** Пустой макет — contain в 1024×1365 (3:4), плашка не сжимается */
 export async function getFullTemplateBuffer(): Promise<Buffer> {
   if (!fs.existsSync(TEMPLATE_FULL_PATH)) {
     throw new Error("Не найден public/podruzhka/template-base.png");

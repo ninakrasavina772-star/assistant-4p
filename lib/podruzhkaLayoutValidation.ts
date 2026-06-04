@@ -1,5 +1,6 @@
 import type { VisionLayoutAdjustment } from "@/lib/podruzhkaVisionAdjust";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
+import { REFERENCE_TEXT_ANCHORS } from "@/lib/podruzhkaReferenceAnchors";
 import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
 import { fitProductPng, type FitResult } from "@/lib/podruzhkaImageProcess";
 import { buildPodruzhkaLayout, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
@@ -15,6 +16,8 @@ export type TextLayoutEstimate = {
   modelLines: string[];
   modelMaxLineWidth: number;
   noteBlockHeight: number;
+  /** Верх розовой плашки объёма (поток текста) — для зазора под товаром */
+  mlAnchorY: number;
 };
 
 export type FullLayoutMetrics = {
@@ -85,6 +88,7 @@ export function buildFullLayoutMetrics(input: {
   productHeight: number;
   drawX: number;
   drawY: number;
+  bottomAlphaInset?: number;
   productZoneX: number;
   productZoneY: number;
   productZoneW: number;
@@ -93,8 +97,9 @@ export function buildFullLayoutMetrics(input: {
   volumeY: number;
   text: TextLayoutEstimate;
 }): FullLayoutMetrics {
-  const productBottom = input.drawY + input.productHeight;
-  const gapAboveVolumePx = input.volumeY - productBottom;
+  const bottomInset = input.bottomAlphaInset ?? 0;
+  const productVisualBottom = input.drawY + input.productHeight - bottomInset;
+  const gapAboveVolumePx = input.volumeY - productVisualBottom;
   const emptyRightPx =
     input.productZoneX + input.productZoneW - (input.drawX + input.productWidth);
   const textColumnRight = R.blocks.brand.x + R.blocks.brand.w;
@@ -217,20 +222,35 @@ export type ResolvedProductPlacement = {
   failureMessages: string[];
 };
 
-const BASE_ADJ: VisionLayoutAdjustment = {
-  brandYOffset: 0,
-  brandXOffset: 0,
-  productTypeYOffset: 0,
-  modelYOffset: 0,
-  accentYOffset: 0,
-  notesStartYOffset: 0,
-  productTopYOffset: 0,
-  productBottomYOffset: 0,
-  productLeftOffset: 0,
-  productScaleMultiplier: 1.22,
-  brandFontDelta: 0,
-  modelFontDelta: 0
-};
+const BASE_ADJ: VisionLayoutAdjustment = LAYOUT_RULES.replaceOnly
+  ? {
+      brandYOffset: 0,
+      brandXOffset: 0,
+      productTypeYOffset: 0,
+      modelYOffset: 0,
+      accentYOffset: 0,
+      notesStartYOffset: 0,
+      productTopYOffset: 0,
+      productBottomYOffset: 0,
+      productLeftOffset: 0,
+      productScaleMultiplier: 1,
+      brandFontDelta: 0,
+      modelFontDelta: 0
+    }
+  : {
+      brandYOffset: 0,
+      brandXOffset: 0,
+      productTypeYOffset: 0,
+      modelYOffset: 0,
+      accentYOffset: 0,
+      notesStartYOffset: 0,
+      productTopYOffset: 0,
+      productBottomYOffset: 0,
+      productLeftOffset: 0,
+      productScaleMultiplier: 1.38,
+      brandFontDelta: 0,
+      modelFontDelta: 0
+    };
 
 export async function autoCorrectProductLayout(
   productBuf: Buffer,
@@ -242,7 +262,12 @@ export async function autoCorrectProductLayout(
   const productBottomTarget = LAYOUT_RULES.productBottomY;
   const maxPasses = V.maxCorrectionPasses;
 
-  let lastFit: FitResult = { buffer: productBuf, width: 1, height: 1 };
+  let lastFit: FitResult = {
+    buffer: productBuf,
+    width: 1,
+    height: 1,
+    bottomAlphaInset: 0
+  };
   let lastMetrics = buildFullLayoutMetrics({
     productWidth: 1,
     productHeight: 1,
@@ -271,7 +296,17 @@ export async function autoCorrectProductLayout(
     const fit = await fitProductPng(productBuf, zone.w, availH, {
       cardH: H,
       cardW: W,
-      scaleMultiplier: adj.productScaleMultiplier
+      scaleMultiplier: adj.productScaleMultiplier,
+      referenceBoxOnly: LAYOUT_RULES.replaceOnly,
+      referenceBoxScale: LAYOUT_RULES.replaceOnly
+        ? REFERENCE_TEXT_ANCHORS.productBoxScale
+        : undefined,
+      referenceBoxMinHeightFill: LAYOUT_RULES.replaceOnly
+        ? REFERENCE_TEXT_ANCHORS.productBoxMinHeightFill
+        : undefined,
+      referenceBoxMinWidthFill: LAYOUT_RULES.replaceOnly
+        ? REFERENCE_TEXT_ANCHORS.productBoxMinWidthFill
+        : undefined
     });
     lastFit = fit;
 
@@ -279,13 +314,19 @@ export async function autoCorrectProductLayout(
       zone.x,
       zone.x + zone.w - fit.width + (adj.productLeftOffset ?? 0)
     );
-    const drawY = Math.min(zone.bottom - fit.height, productBottomTarget - fit.height);
+    const groundY = LAYOUT_RULES.productBottomY;
+    const inset = fit.bottomAlphaInset ?? 0;
+    const drawY = Math.max(
+      zone.y,
+      Math.min(groundY - fit.height + inset, zone.bottom - fit.height + inset)
+    );
 
     lastMetrics = buildFullLayoutMetrics({
       productWidth: fit.width,
       productHeight: fit.height,
       drawX,
       drawY,
+      bottomAlphaInset: inset,
       productZoneX: zone.x,
       productZoneY: zone.y,
       productZoneW: zone.w,
@@ -296,7 +337,7 @@ export async function autoCorrectProductLayout(
     });
 
     lastValidation = validateFullLayout(lastMetrics);
-    if (lastValidation.ok) {
+    if (lastValidation.ok || LAYOUT_RULES.replaceOnly) {
       return {
         fit: lastFit,
         metrics: lastMetrics,

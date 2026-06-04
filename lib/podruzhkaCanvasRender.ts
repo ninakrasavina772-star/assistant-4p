@@ -15,7 +15,13 @@ import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { buildPodruzhkaLayout, type PodruzhkaRuntimeLayout } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
-import { computeTextFlowLayout } from "@/lib/podruzhkaTextFlow";
+import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
+import {
+  getReferenceFixedTextLayout,
+  REFERENCE_PRODUCT_SHADOW,
+  REFERENCE_TEXT_ANCHORS
+} from "@/lib/podruzhkaReferenceAnchors";
+import { computeTextFlowLayout, type TextFlowLayout } from "@/lib/podruzhkaTextFlow";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
 const C = S.colors;
@@ -52,6 +58,22 @@ function brandFont(size: number): string {
   return `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
 }
 
+function truncateLine(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  text: string,
+  maxWidth: number,
+  font: string
+): string {
+  ctx.font = font;
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const ell = "…";
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + ell).width > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return t + ell;
+}
+
 function wrapLines(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   text: string,
@@ -84,8 +106,18 @@ function resolveBrandFontSize(
   fontDelta = 0
 ): { size: number; lines: string[] } {
   const maxW = L.brand.w;
-  const maxH = L.brand.h;
   const maxLines = S.fonts.brand.maxLines;
+
+  if (LAYOUT_RULES.replaceOnly) {
+    const size = S.fonts.brand.max + fontDelta;
+    const font = brandFont(size);
+    const lines = wrapLines(ctx, brandName.toUpperCase(), maxW, font, maxLines).map(
+      (ln) => truncateLine(ctx, ln, maxW, font)
+    );
+    return { size, lines };
+  }
+
+  const maxH = L.brand.h;
   const maxSize = Math.max(S.fonts.brand.min, S.fonts.brand.max + fontDelta);
   const minSize = S.fonts.brand.min;
 
@@ -114,6 +146,17 @@ function resolveModelFontSize(
   brandSize: number
 ): { size: number; lines: string[] } {
   const maxW = L.model.w;
+  const maxLines = S.fonts.model.maxLines;
+
+  if (LAYOUT_RULES.replaceOnly) {
+    const size = S.fonts.model.max;
+    const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+    const lines = wrapLines(ctx, model, maxW, font, maxLines).map((ln) =>
+      truncateLine(ctx, ln, maxW, font)
+    );
+    return { size, lines };
+  }
+
   const maxH = L.model.h;
   const ratio = S.fonts.model.ratioOfBrand ?? 0.68;
   const target = Math.round(brandSize * ratio);
@@ -152,17 +195,20 @@ function buildTextLayoutEstimate(
   const brandFontStr = brandFont(brand.size);
   const modelFontStr = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
   const typeSize = S.fonts.productType.size;
-  const flow = computeTextFlowLayout({
-    brandSize: brand.size,
-    brandLineCount: brand.lines.length,
-    productTypeSize: typeSize,
-    modelSize,
-    modelLineCount: model.lines.length,
-    brandYOffset: layoutAdj?.brandYOffset,
-    productTypeYOffset: layoutAdj?.productTypeYOffset,
-    modelYOffset: layoutAdj?.modelYOffset
-  });
-  void flow;
+  const flow = LAYOUT_RULES.replaceOnly
+    ? getReferenceFixedTextLayout(brand.size, modelSize, model.lines.length)
+    : computeTextFlowLayout({
+        brandSize: brand.size,
+        brandLineCount: brand.lines.length,
+        productTypeSize: typeSize,
+        modelSize,
+        modelLineCount: model.lines.length,
+        noteBlockHeight: L.notes.blockH,
+        mlFontSize: S.fonts.ml.max,
+        brandYOffset: layoutAdj?.brandYOffset,
+        productTypeYOffset: layoutAdj?.productTypeYOffset,
+        modelYOffset: layoutAdj?.modelYOffset
+      });
   return {
     brandSize: brand.size,
     brandLines: brand.lines,
@@ -170,7 +216,8 @@ function buildTextLayoutEstimate(
     modelSize,
     modelLines: model.lines,
     modelMaxLineWidth: maxLineWidth(ctx, model.lines, modelFontStr),
-    noteBlockHeight: L.notes.blockH
+    noteBlockHeight: L.notes.blockH,
+    mlAnchorY: flow.mlAccentY
   };
 }
 
@@ -186,12 +233,22 @@ function drawFilledBar(
   ctx.fillRect(x, y, w, h);
 }
 
+function eraseTemplateTextGhost(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
+): void {
+  if (!LAYOUT_RULES.replaceOnly) return;
+  const z = REFERENCE_TEXT_ANCHORS.textColumnErase;
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(z.x, z.y, z.w, z.h);
+}
+
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
   const buf = await getFullTemplateBuffer();
   const base = await loadImage(buf);
   ctx.drawImage(base, 0, 0, W, H);
+  eraseTemplateTextGhost(ctx);
 }
 
 function overlayDynamicText(
@@ -199,7 +256,7 @@ function overlayDynamicText(
   data: PodruzhkaInfographicData,
   L: PodruzhkaRuntimeLayout,
   layoutAdj?: VisionLayoutAdjustment
-): void {
+): TextFlowLayout {
   const fontDelta = layoutAdj?.brandFontDelta ?? 0;
   const { size: brandSize, lines: brandLines } = resolveBrandFontSize(
     ctx,
@@ -218,18 +275,23 @@ function overlayDynamicText(
   );
   const modelSize = Math.min(S.fonts.model.max, modelSizeBase + modelDelta);
 
-  const flow = computeTextFlowLayout({
-    brandSize,
-    brandLineCount: brandLines.length,
-    productTypeSize: typeSize,
-    modelSize,
-    modelLineCount: modelLines.length,
-    brandYOffset: layoutAdj?.brandYOffset,
-    productTypeYOffset: layoutAdj?.productTypeYOffset,
-    modelYOffset: layoutAdj?.modelYOffset,
-    accentYOffset: layoutAdj?.accentYOffset,
-    notesStartYOffset: layoutAdj?.notesStartYOffset
-  });
+  const mlSize = S.fonts.ml.max;
+  const flow = LAYOUT_RULES.replaceOnly
+    ? getReferenceFixedTextLayout(brandSize, modelSize, modelLines.length)
+    : computeTextFlowLayout({
+        brandSize,
+        brandLineCount: brandLines.length,
+        productTypeSize: typeSize,
+        modelSize,
+        modelLineCount: modelLines.length,
+        noteBlockHeight: L.notes.blockH,
+        mlFontSize: mlSize,
+        brandYOffset: layoutAdj?.brandYOffset,
+        productTypeYOffset: layoutAdj?.productTypeYOffset,
+        modelYOffset: layoutAdj?.modelYOffset,
+        accentYOffset: layoutAdj?.accentYOffset,
+        notesStartYOffset: layoutAdj?.notesStartYOffset
+      });
 
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
@@ -249,7 +311,14 @@ function overlayDynamicText(
     1
   )[0];
   if (typeLine) {
-    ctx.fillText(typeLine, L.productType.x, flow.productTypeBaseline);
+    let typeY = flow.productTypeBaseline;
+    if (
+      LAYOUT_RULES.replaceOnly &&
+      typeLine.length <= REFERENCE_TEXT_ANCHORS.productTypeShortMaxLen
+    ) {
+      typeY += REFERENCE_TEXT_ANCHORS.productTypeShortExtraDy;
+    }
+    ctx.fillText(typeLine, L.productType.x, typeY);
   }
 
   ctx.fillStyle = C.text;
@@ -260,8 +329,10 @@ function overlayDynamicText(
     modelBaseline += flow.modelLineStep;
   }
 
-  drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
-  drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);
+  if (!LAYOUT_RULES.replaceOnly) {
+    drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
+    drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);
+  }
 
   const fNoteTitle = `700 ${S.fonts.noteTitle.max}px MontserratBold, Montserrat, sans-serif`;
   const fNoteDesc = `400 ${S.fonts.noteDesc.max}px Montserrat, NotoSans, sans-serif`;
@@ -284,24 +355,8 @@ function overlayDynamicText(
       drawFilledBar(ctx, L.notes.x, sepY, L.separator.width, 1, C.separator);
     }
   }
-}
 
-function drawProductShadow(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  centerX: number,
-  baseY: number,
-  width: number
-): void {
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.14)";
-  ctx.beginPath();
-  ctx.ellipse(centerX, baseY + 6, width * 0.44, 16, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
-  ctx.beginPath();
-  ctx.ellipse(centerX, baseY + 3, width * 0.38, 11, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  return flow;
 }
 
 function maxLineWidth(
@@ -339,26 +394,69 @@ async function resolveProductPlacement(
   }
 }
 
+function drawReferenceProductShadow(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
+): void {
+  const sh = REFERENCE_PRODUCT_SHADOW;
+  const cy = sh.groundY + Math.round(sh.ry * 0.55);
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+  ctx.beginPath();
+  ctx.ellipse(sh.centerX, cy, sh.rx, sh.ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
+  ctx.beginPath();
+  ctx.ellipse(sh.centerX, cy + 2, sh.rx * 0.9, sh.ry * 0.72, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 async function drawProductPlacementAsync(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   placement: ResolvedProductPlacement
 ): Promise<void> {
   const prodImg = await loadImage(placement.fit.buffer);
   const { drawX, drawY } = placement.metrics;
-  const anchorY = drawY + placement.fit.height;
-  drawProductShadow(ctx, drawX + placement.fit.width / 2, anchorY + 4, placement.fit.width);
-  ctx.drawImage(prodImg, drawX, drawY, placement.fit.width, placement.fit.height);
+  const w = placement.fit.width;
+  const h = placement.fit.height;
+
+  if (LAYOUT_RULES.replaceOnly) {
+    drawReferenceProductShadow(ctx);
+    ctx.drawImage(prodImg, drawX, drawY, w, h);
+    return;
+  }
+
+  const inset = placement.fit.bottomAlphaInset ?? 0;
+  const visualBaseY = drawY + h - inset;
+  const cx = drawX + w / 2;
+  const ry = Math.max(10, Math.round(w * 0.036));
+  const rx = w * 0.44;
+  const cy = visualBaseY + Math.round(ry * 0.55);
+
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 2, rx * 0.9, ry * 0.72, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.drawImage(prodImg, drawX, drawY, w, h);
 }
 
 function overlayMl(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   ml: string,
-  L: PodruzhkaRuntimeLayout
+  flow: TextFlowLayout
 ): void {
-  drawFilledBar(ctx, L.mlAccent.x, L.mlAccent.y, L.mlAccent.w, L.mlAccent.h, C.accent);
+  const x = S.mlAccent.x;
+  drawFilledBar(ctx, x, flow.mlAccentY, S.mlAccent.w, S.mlAccent.h, C.accent);
   ctx.fillStyle = C.text;
   ctx.font = `500 italic ${S.fonts.ml.max}px MontserratMediumItalic, Montserrat, sans-serif`;
-  ctx.fillText(formatMl(ml), L.ml.x, L.ml.y);
+  ctx.fillText(formatMl(ml), S.ml.x, flow.mlBaseline);
 }
 
 export type RenderInfographicResult = {
@@ -447,9 +545,9 @@ async function renderOnce(
     : formatValidationFailure(finalPlacement.failureMessages);
 
   await drawTemplateBase(ctx);
-  overlayDynamicText(ctx, data, Lfinal, adj);
+  const flow = overlayDynamicText(ctx, data, Lfinal, adj);
   await drawProductPlacementAsync(ctx, finalPlacement);
-  overlayMl(ctx, data.ml, Lfinal);
+  overlayMl(ctx, data.ml, flow);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
