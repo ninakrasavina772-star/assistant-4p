@@ -15,6 +15,7 @@ import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { buildPodruzhkaLayout, type PodruzhkaRuntimeLayout } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
+import { computeTextFlowLayout } from "@/lib/podruzhkaTextFlow";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
 const C = S.colors;
@@ -150,6 +151,18 @@ function buildTextLayoutEstimate(
   const modelSize = Math.min(S.fonts.model.max, model.size + modelDelta);
   const brandFontStr = brandFont(brand.size);
   const modelFontStr = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
+  const typeSize = S.fonts.productType.size;
+  const flow = computeTextFlowLayout({
+    brandSize: brand.size,
+    brandLineCount: brand.lines.length,
+    productTypeSize: typeSize,
+    modelSize,
+    modelLineCount: model.lines.length,
+    brandYOffset: layoutAdj?.brandYOffset,
+    productTypeYOffset: layoutAdj?.productTypeYOffset,
+    modelYOffset: layoutAdj?.modelYOffset
+  });
+  void flow;
   return {
     brandSize: brand.size,
     brandLines: brand.lines,
@@ -195,15 +208,37 @@ function overlayDynamicText(
     fontDelta
   );
 
+  const typeSize = S.fonts.productType.size;
+  const modelDelta = layoutAdj?.modelFontDelta ?? 0;
+  const { size: modelSizeBase, lines: modelLines } = resolveModelFontSize(
+    ctx,
+    data.model,
+    L,
+    brandSize
+  );
+  const modelSize = Math.min(S.fonts.model.max, modelSizeBase + modelDelta);
+
+  const flow = computeTextFlowLayout({
+    brandSize,
+    brandLineCount: brandLines.length,
+    productTypeSize: typeSize,
+    modelSize,
+    modelLineCount: modelLines.length,
+    brandYOffset: layoutAdj?.brandYOffset,
+    productTypeYOffset: layoutAdj?.productTypeYOffset,
+    modelYOffset: layoutAdj?.modelYOffset,
+    accentYOffset: layoutAdj?.accentYOffset,
+    notesStartYOffset: layoutAdj?.notesStartYOffset
+  });
+
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
-  let brandBaseline = L.brand.y + brandSize;
+  let brandBaseline = flow.brandTopY + brandSize;
   for (const line of brandLines) {
     ctx.fillText(line, L.brand.x, brandBaseline);
-    brandBaseline += Math.round(brandSize * 1.05);
+    brandBaseline += flow.brandLineStep;
   }
 
-  const typeSize = S.fonts.productType.size;
   ctx.fillStyle = C.muted;
   ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
   const typeLine = wrapLines(
@@ -214,26 +249,18 @@ function overlayDynamicText(
     1
   )[0];
   if (typeLine) {
-    ctx.fillText(typeLine, L.productType.x, L.productType.y + typeSize);
+    ctx.fillText(typeLine, L.productType.x, flow.productTypeBaseline);
   }
 
-  const modelDelta = layoutAdj?.modelFontDelta ?? 0;
-  const { size: modelSizeBase, lines: modelLines } = resolveModelFontSize(
-    ctx,
-    data.model,
-    L,
-    brandSize
-  );
-  const modelSize = Math.min(S.fonts.model.max, modelSizeBase + modelDelta);
   ctx.fillStyle = C.text;
   ctx.font = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
-  let modelBaseline = L.model.y + modelSize;
+  let modelBaseline = flow.modelFirstBaseline;
   for (const line of modelLines) {
     ctx.fillText(line, L.model.x, modelBaseline);
-    modelBaseline += Math.round(modelSize * 1.08);
+    modelBaseline += flow.modelLineStep;
   }
 
-  drawFilledBar(ctx, L.accent.x, L.accent.y, L.accent.w, L.accent.h, C.accent);
+  drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
 
   const fNoteTitle = `700 ${S.fonts.noteTitle.max}px MontserratBold, Montserrat, sans-serif`;
   const fNoteDesc = `400 ${S.fonts.noteDesc.max}px Montserrat, NotoSans, sans-serif`;
@@ -241,7 +268,7 @@ function overlayDynamicText(
 
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i]!;
-    const blockY = L.notes.startY + i * L.notes.blockH;
+    const blockY = flow.notesStartY + i * L.notes.blockH;
 
     ctx.fillStyle = C.accent;
     ctx.font = fNoteTitle;

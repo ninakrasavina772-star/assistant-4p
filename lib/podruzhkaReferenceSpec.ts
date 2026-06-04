@@ -12,11 +12,18 @@ export const PODRUZHKA_REFERENCE = {
     accent: "#E6007E",
     separator: "#D9D9D9"
   },
+  gaps: {
+    headerToBrandTop: 152,
+    afterBrand: 22,
+    afterProductType: 12,
+    afterModel: 14,
+    afterAccentToNotes: 36
+  },
   blocks: {
     header: { x: 250, y: 35, w: 500, h: 85 },
-    brand: { x: 55, y: 228, w: 480, h: 150 },
-    productType: { x: 55, y: 428, w: 350, h: 40 },
-    model: { x: 55, y: 498, w: 350, h: 80 },
+    brand: { x: 55, y: 272, w: 480, h: 150 },
+    productType: { x: 55, y: 0, w: 350, h: 40 },
+    model: { x: 55, y: 0, w: 350, h: 80 },
     notes: { x: 55, y: 668, w: 250, h: 320 },
     volume: { x: 55, y: 1195, w: 180, h: 60 },
     product: { x: 350, y: 348, w: 580, h: 760 }
@@ -30,7 +37,7 @@ export const PODRUZHKA_REFERENCE = {
     noteDesc: { max: 16, min: 14, weight: 400 },
     ml: { max: 32, min: 26, weight: 500, italic: true }
   },
-  accentBar: { x: 55, y: 586, w: 50, h: 6 },
+  accentBar: { x: 55, y: 0, w: 50, h: 6 },
   noteTitleDy: 22,
   noteDescDy: 46,
   /** интервал между группами нот 48–60 px */
@@ -62,7 +69,7 @@ export const PODRUZHKA_REFERENCE = {
     referenceEmptyRightPx: 28,
     referenceEmptyCenterPx: 42,
     emptySpaceTolerance: 1.15,
-    contentRect: { x: 55, y: 228, w: 875, h: 952 },
+    contentRect: { x: 55, y: 272, w: 875, h: 908 },
     maxCorrectionPasses: 18
   }
 } as const;
