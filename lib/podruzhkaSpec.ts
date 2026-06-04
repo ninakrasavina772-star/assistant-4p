@@ -1,30 +1,24 @@
-/** ТЗ Podruzhka Global для Ozon (из референса) */
+/** Макет 1000×1400 — согласованная спецификация Подружka Global */
 export const PODRUZHKA_SPEC = {
-  size: { w: 1080, h: 1350 },
+  size: { w: 1000, h: 1400 },
   colors: {
     bg: "#F7F7F7",
-    loop: "#EDEDED",
-    text: "#000000",
-    muted: "#7A7A7A",
-    accent: "#FF1E6E",
-    separator: "#E0E0E0"
-  },
-  margins: {
-    logoTop: 60,
-    contentLeft: 80,
-    belowLogo: 80,
-    contentBottom: 80
+    text: "#111111",
+    muted: "#666666",
+    productType: "#555555",
+    accent: "#E6007E",
+    separator: "#D9D9D9"
   },
   fonts: {
-    brand: { size: 72, weight: 800 },
-    productType: { size: 20, weight: 400 },
-    model: { size: 36, weight: 800 },
-    noteTitle: { size: 18, weight: 700 },
+    brand: { size: 80, weight: 800, maxLines: 2 },
+    productType: { size: 28, weight: 400, maxLines: 1 },
+    model: { size: 56, weight: 800, maxLines: 2 },
+    noteTitle: { size: 22, weight: 700 },
     noteDesc: { size: 16, weight: 400 },
-    ml: { size: 24, weight: 500, italic: true }
+    ml: { size: 30, weight: 500, italic: true }
   },
-  accentLine: { length: 40, width: 2 },
-  logo: { height: 68, maxWidth: 520 },
-  noteBlockHeight: 118,
-  separatorWidth: 400
+  accentBar: { x: 60, y: 565, w: 50, h: 6 },
+  noteBlockHeight: 90,
+  separatorWidth: 200,
+  productMaxHeightRatio: 0.9
 } as const;

@@ -4,13 +4,13 @@ import fs from "fs";
 import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
+import { fitProductPng } from "@/lib/podruzhkaImageProcess";
 import { PODRUZHKA_LAYOUT, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
 const L = PODRUZHKA_LAYOUT;
 const C = S.colors;
-const BG_RGB = { r: 247, g: 247, b: 247 };
 
 const TEMPLATE_PATH = path.join(process.cwd(), "public", "podruzhka", "template-base.png");
 
@@ -46,11 +46,12 @@ function wrapLines(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   text: string,
   maxWidth: number,
-  font: string
+  font: string,
+  maxLines: number
 ): string[] {
   ctx.font = font;
   const words = text.split(/\s+/).filter(Boolean);
-  if (!words.length) return [text.slice(0, 80)];
+  if (!words.length) return [];
   const lines: string[] = [];
   let line = words[0]!;
   for (let i = 1; i < words.length; i++) {
@@ -59,26 +60,25 @@ function wrapLines(
     if (ctx.measureText(test).width > maxWidth) {
       lines.push(line);
       line = w;
+      if (lines.length >= maxLines) return lines;
     } else line = test;
   }
   lines.push(line);
-  return lines;
+  return lines.slice(0, maxLines);
 }
 
-function drawAccentLine(
+function drawFilledBar(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   x: number,
-  y: number
+  y: number,
+  w: number,
+  h: number,
+  color: string
 ): void {
-  ctx.strokeStyle = C.accent;
-  ctx.lineWidth = S.accentLine.width;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x + S.accentLine.length, y);
-  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
 }
 
-/** Неизменяемый слой: фон, петля, шапка Global (ваш PNG) */
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
@@ -95,79 +95,82 @@ async function drawTemplateBase(
   ctx.drawImage(base, 0, 0, W, H);
 }
 
-/** Текст и акценты поверх шаблона — без заливки зон */
+/** Текст по фиксированным координатам макета 1000×1400 */
 function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   data: PodruzhkaInfographicData
 ): void {
-  const fBrand = `800 ${L.brand.fontSize}px MontserratExtraBold, MontserratBold, sans-serif`;
-  const fType = `400 ${L.productType.fontSize}px Montserrat, NotoSans, sans-serif`;
-  const fModel = `800 ${L.model.fontSize}px MontserratExtraBold, MontserratBold, sans-serif`;
+  const fBrand = `800 ${S.fonts.brand.size}px MontserratExtraBold, MontserratBold, sans-serif`;
+  const fType = `400 ${S.fonts.productType.size}px Montserrat, NotoSans, sans-serif`;
+  const fModel = `800 ${S.fonts.model.size}px MontserratExtraBold, MontserratBold, sans-serif`;
   const fNoteTitle = `700 ${S.fonts.noteTitle.size}px MontserratBold, Montserrat, sans-serif`;
   const fNoteDesc = `400 ${S.fonts.noteDesc.size}px Montserrat, NotoSans, sans-serif`;
-  const fMl = `500 italic ${L.ml.fontSize}px MontserratMediumItalic, Montserrat, sans-serif`;
+  const fMl = `500 italic ${S.fonts.ml.size}px MontserratMediumItalic, Montserrat, sans-serif`;
 
-  const x = L.contentLeft;
-  let y = L.contentTop;
-
+  const bx = L.brand.x;
+  let brandY = L.brand.y + S.fonts.brand.size;
   ctx.fillStyle = C.text;
   ctx.font = fBrand;
-  for (const line of wrapLines(ctx, data.brandName.toUpperCase(), L.brand.maxWidth, fBrand).slice(0, 2)) {
-    y += L.brand.lineHeight;
-    ctx.fillText(line, x, y);
+  for (const line of wrapLines(
+    ctx,
+    data.brandName.toUpperCase(),
+    L.brand.w,
+    fBrand,
+    S.fonts.brand.maxLines
+  )) {
+    ctx.fillText(line, bx, brandY);
+    brandY += Math.round(S.fonts.brand.size * 1.05);
   }
 
-  y += L.productType.gapAfterBrand;
-  ctx.fillStyle = C.muted;
+  ctx.fillStyle = C.productType;
   ctx.font = fType;
-  const productTypeText = data.productType.trim().toLowerCase();
-  for (const line of wrapLines(ctx, productTypeText, L.productType.maxWidth, fType).slice(0, 2)) {
-    y += L.productType.lineHeight;
-    ctx.fillText(line, x, y);
+  const typeLines = wrapLines(
+    ctx,
+    data.productType.trim(),
+    L.productType.w,
+    fType,
+    S.fonts.productType.maxLines
+  );
+  if (typeLines[0]) {
+    ctx.fillText(typeLines[0], L.productType.x, L.productType.y + S.fonts.productType.size);
   }
 
-  y += L.model.gapAfterType;
   ctx.fillStyle = C.text;
   ctx.font = fModel;
-  for (const line of wrapLines(ctx, data.model, L.model.maxWidth, fModel).slice(0, 2)) {
-    y += L.model.lineHeight;
-    ctx.fillText(line, x, y);
+  let modelY = L.model.y + S.fonts.model.size;
+  for (const line of wrapLines(ctx, data.model, L.model.w, fModel, S.fonts.model.maxLines)) {
+    ctx.fillText(line, L.model.x, modelY);
+    modelY += Math.round(S.fonts.model.size * 1.08);
   }
 
-  y += L.gapAfterModel;
-  drawAccentLine(ctx, x, y);
-  y += L.gapAfterAccent;
+  drawFilledBar(ctx, L.accentBar.x, L.accentBar.y, L.accentBar.w, L.accentBar.h, C.accent);
 
   const notes = data.notes.slice(0, 3);
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i]!;
+    const blockY = L.notes.y + i * L.notes.blockH;
+
     ctx.fillStyle = C.accent;
     ctx.font = fNoteTitle;
-    ctx.fillText(n.title.toUpperCase(), x, y + L.noteTitleOffsetY);
+    ctx.fillText(n.title.toUpperCase(), L.notes.x, blockY + S.fonts.noteTitle.size);
 
     ctx.fillStyle = C.muted;
     ctx.font = fNoteDesc;
-    ctx.fillText(n.desc, x, y + L.noteDescOffsetY);
+    ctx.fillText(n.desc, L.notes.x, blockY + 40);
 
-    y += L.noteLineHeight;
     if (i < 2) {
-      ctx.strokeStyle = C.separator;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, y - 28);
-      ctx.lineTo(x + L.separator.width, y - 28);
-      ctx.stroke();
+      const sepY = blockY + L.notes.blockH - 1;
+      drawFilledBar(ctx, L.notes.x, sepY, L.separator.width, 1, C.separator);
     }
   }
 
-  const mlY = L.ml.y;
-  drawAccentLine(ctx, x, mlY - L.accentBeforeMlOffset);
+  drawFilledBar(ctx, L.mlAccent.x, L.mlAccent.y, L.mlAccent.w, L.mlAccent.h, C.accent);
   ctx.fillStyle = C.text;
   ctx.font = fMl;
-  ctx.fillText(formatMl(data.ml), x, mlY);
+  ctx.fillText(formatMl(data.ml), L.ml.x, L.ml.y);
 }
 
-/** Фото товара поверх шаблона (петля и фон из PNG не трогаем) */
+/** Фото: contain, 90% высоты зоны, низ + центр, без белого фона */
 async function overlayProductPhoto(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string
@@ -179,19 +182,15 @@ async function overlayProductPhoto(
   if (!productBuf?.length) return { loaded: false, error: error ?? "Не скачалось foto" };
 
   try {
-    const pw = L.product.w;
-    const ph = L.product.h;
-    const tile = await sharp(productBuf)
-      .resize(pw, ph, {
-        fit: "contain",
-        background: { ...BG_RGB, alpha: 1 }
-      })
-      .flatten({ background: BG_RGB })
-      .png()
-      .toBuffer();
+    const zone = L.product;
+    const maxH = Math.round(zone.h * S.productMaxHeightRatio);
+    const { buffer, width, height } = await fitProductPng(productBuf, zone.w, maxH);
 
-    const prodImg = await loadImage(tile);
-    ctx.drawImage(prodImg, L.product.x, L.product.y, pw, ph);
+    const prodImg = await loadImage(buffer);
+    const drawX = zone.x + (zone.w - width) / 2;
+    const drawY = zone.y + zone.h - height;
+
+    ctx.drawImage(prodImg, drawX, drawY, width, height);
     return { loaded: true };
   } catch (e) {
     return {
@@ -215,9 +214,6 @@ export function isRenderOptions(v: unknown): v is RenderInfographicOptions {
   return Boolean(v && typeof v === "object" && "data" in v && (v as RenderInfographicOptions).data);
 }
 
-/**
- * Шаблон PNG (фон + петля + шапка) → поверх текст из Excel/AI → поверх foto.
- */
 export async function renderInfographicPng(
   dataOrOpts: PodruzhkaInfographicData | RenderInfographicOptions
 ): Promise<Buffer> {
@@ -232,15 +228,14 @@ export async function renderInfographicDetailed(
     ? dataOrOpts
     : { data: dataOrOpts };
 
-  const data = opts.data;
   ensureFonts();
 
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
   await drawTemplateBase(ctx);
-  overlayDynamicText(ctx, data);
-  const foto = await overlayProductPhoto(ctx, data.fotoUrl);
+  overlayDynamicText(ctx, opts.data);
+  const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
