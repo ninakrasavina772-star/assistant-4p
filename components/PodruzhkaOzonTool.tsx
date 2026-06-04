@@ -770,7 +770,7 @@ export function PodruzhkaOzonTool() {
                   {layoutVersion ? (
                     <>
                       {" "}
-                      Макет: <code className="text-xs">{layoutVersion}</code> (ожидается ref-v4-ch —
+                      Макет: <code className="text-xs">{layoutVersion}</code> (ожидается ref-v4b-ch —
                       иначе Ctrl+F5).
                     </>
                   ) : null}

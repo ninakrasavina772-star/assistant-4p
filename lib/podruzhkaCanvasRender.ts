@@ -195,8 +195,19 @@ function buildTextLayoutEstimate(
   const brandFontStr = brandFont(brand.size);
   const modelFontStr = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
   const typeSize = S.fonts.productType.size;
+  const typeFont = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
+  const typeText = data.productType.trim().toLowerCase();
+  const typeLinesEst = typeText
+    ? wrapLines(ctx, typeText, L.productType.w, typeFont, 2)
+    : [];
   const flow = LAYOUT_RULES.replaceOnly
-    ? getReferenceFixedTextLayout(brand.size, modelSize, model.lines.length)
+    ? getReferenceFixedTextLayout(
+        brand.size,
+        modelSize,
+        model.lines.length,
+        brand.lines.length,
+        typeLinesEst.length
+      )
     : computeTextFlowLayout({
         brandSize: brand.size,
         brandLineCount: brand.lines.length,
@@ -264,6 +275,12 @@ function overlayDynamicText(
   );
 
   const typeSize = S.fonts.productType.size;
+  const typeFont = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
+  const typeText = data.productType.trim().toLowerCase();
+  const typeLines = typeText
+    ? wrapLines(ctx, typeText, L.productType.w, typeFont, 2)
+    : [];
+
   const modelDelta = layoutAdj?.modelFontDelta ?? 0;
   const { size: modelSizeBase, lines: modelLines } = resolveModelFontSize(
     ctx,
@@ -275,7 +292,13 @@ function overlayDynamicText(
 
   const mlSize = S.fonts.ml.max;
   const flow = LAYOUT_RULES.replaceOnly
-    ? getReferenceFixedTextLayout(brandSize, modelSize, modelLines.length)
+    ? getReferenceFixedTextLayout(
+        brandSize,
+        modelSize,
+        modelLines.length,
+        brandLines.length,
+        typeLines.length
+      )
     : computeTextFlowLayout({
         brandSize,
         brandLineCount: brandLines.length,
@@ -300,23 +323,20 @@ function overlayDynamicText(
   }
 
   ctx.fillStyle = C.muted;
-  ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
-  const typeLine = wrapLines(
-    ctx,
-    data.productType.trim().toLowerCase(),
-    L.productType.w,
-    ctx.font,
-    1
-  )[0];
-  if (typeLine) {
-    let typeY = flow.productTypeBaseline;
+  ctx.font = typeFont;
+  if (typeLines.length) {
+    let typeBaseline = flow.productTypeBaseline;
     if (
       LAYOUT_RULES.replaceOnly &&
-      typeLine.length <= REFERENCE_TEXT_ANCHORS.productTypeShortMaxLen
+      typeLines.length === 1 &&
+      typeLines[0]!.length <= REFERENCE_TEXT_ANCHORS.productTypeShortMaxLen
     ) {
-      typeY += REFERENCE_TEXT_ANCHORS.productTypeShortExtraDy;
+      typeBaseline += REFERENCE_TEXT_ANCHORS.productTypeShortExtraDy;
     }
-    ctx.fillText(typeLine, L.productType.x, typeY);
+    for (const line of typeLines) {
+      ctx.fillText(line, L.productType.x, typeBaseline);
+      typeBaseline += Math.round(typeSize * 1.12);
+    }
   }
 
   ctx.fillStyle = C.text;

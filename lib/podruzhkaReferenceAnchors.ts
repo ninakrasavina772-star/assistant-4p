@@ -10,7 +10,7 @@ const SY = 1365 / 1400;
 const s = (x: number) => Math.round(x * SX);
 const sy = (y: number) => Math.round(y * SY);
 
-export const PODRUZHKA_LAYOUT_VERSION = "ref-v4-ch";
+export const PODRUZHKA_LAYOUT_VERSION = "ref-v4b-ch";
 
 /** Позиции как на эталоне 1000×1400 (масштаб 1024×1365) */
 export const REFERENCE_TEXT_ANCHORS = {
@@ -53,9 +53,25 @@ export function eraseReferenceGhostMarks(
 export function getReferenceFixedTextLayout(
   brandSize: number,
   modelSize: number,
-  _modelLineCount: number
+  modelLineCount: number,
+  brandLineCount: number,
+  productTypeLineCount: number
 ): TextFlowLayout {
   const a = REFERENCE_TEXT_ANCHORS;
+  const brandLastBaseline =
+    a.brandFirstBaseline + Math.max(0, brandLineCount - 1) * a.brandLineStep;
+  const typeLineStep = sy(24);
+  const productTypeBaseline =
+    brandLineCount > 0
+      ? brandLastBaseline + sy(22) + Math.round(R.fonts.productType.size * 0.9)
+      : a.productTypeBaseline;
+  const typeBlockEnd =
+    productTypeBaseline + Math.max(0, productTypeLineCount - 1) * typeLineStep;
+  const modelFirstBaseline =
+    productTypeLineCount > 0
+      ? typeBlockEnd + sy(14) + Math.round(modelSize * 0.85)
+      : Math.max(a.modelFirstBaseline, brandLastBaseline + sy(56) + Math.round(modelSize * 0.85));
+
   const notesStartY = a.notesStartY;
   const notesBlockH = 3 * a.noteBlockHeight;
   const notesEndY = notesStartY + notesBlockH;
@@ -66,10 +82,11 @@ export function getReferenceFixedTextLayout(
     brandTopY: a.brandFirstBaseline - brandSize,
     brandLineStep: a.brandLineStep,
     brandFirstBaseline: a.brandFirstBaseline,
-    brandLastBaseline: a.brandFirstBaseline,
-    productTypeBaseline: a.productTypeBaseline,
+    brandLastBaseline,
+    productTypeBaseline:
+      productTypeLineCount > 0 ? productTypeBaseline : a.productTypeBaseline,
     modelLineStep: a.modelLineStep,
-    modelFirstBaseline: a.modelFirstBaseline,
+    modelFirstBaseline,
     accentY: 0,
     notesStartY,
     notesEndY,
