@@ -157,7 +157,6 @@ function buildTextLayoutEstimate(
     modelSize,
     modelLines: model.lines,
     modelMaxLineWidth: maxLineWidth(ctx, model.lines, modelFontStr),
-    notesBlockH: L.notes.h,
     noteBlockHeight: L.notes.blockH
   };
 }
@@ -445,6 +444,7 @@ export async function renderInfographicDetailed(
     return result;
   }
 
+  /** Vision только если уже прошла программная валидация */
   const { reviewAgainstReference } = await import("@/lib/podruzhkaVisionAdjust");
   let passes = 0;
   let lastReason = "";
