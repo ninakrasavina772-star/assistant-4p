@@ -1,6 +1,6 @@
 import sharp from "sharp";
 
-/** Убирает белый / почти белый фон Ozon (без белого квадрата при вставке) */
+/** Убирает белый / почти белый фон Ozon */
 export async function stripNearWhiteBackground(
   input: Buffer,
   threshold = 238
@@ -29,21 +29,36 @@ export async function stripNearWhiteBackground(
     .toBuffer();
 }
 
-/** Вписать в зону contain, вернуть PNG с альфой */
+async function trimTransparent(input: Buffer): Promise<Buffer> {
+  try {
+    return await sharp(input).trim({ threshold: 12 }).png().toBuffer();
+  } catch {
+    return input;
+  }
+}
+
+/**
+ * contain + upscaling: обрезка пустых полей, приоритет высоты (~97% зоны).
+ * Без trim маленький флакон в центре большого PNG Ozon не увеличивался.
+ */
 export async function fitProductPng(
   input: Buffer,
   maxW: number,
-  maxH: number
+  maxH: number,
+  fillHeightRatio = 0.97
 ): Promise<{ buffer: Buffer; width: number; height: number }> {
   const stripped = await stripNearWhiteBackground(input);
-  const meta = await sharp(stripped).metadata();
+  const trimmed = await trimTransparent(stripped);
+  const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
-  const scale = Math.min(maxW / srcW, maxH / srcH);
+
+  const targetH = Math.round(maxH * fillHeightRatio);
+  const scale = Math.min(targetH / srcH, maxW / srcW);
   const width = Math.max(1, Math.round(srcW * scale));
   const height = Math.max(1, Math.round(srcH * scale));
 
-  const buffer = await sharp(stripped)
+  const buffer = await sharp(trimmed)
     .resize(width, height, { fit: "inside" })
     .png()
     .toBuffer();

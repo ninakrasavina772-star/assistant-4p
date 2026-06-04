@@ -1,18 +1,17 @@
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
-import path from "path";
 import fs from "fs";
+import path from "path";
 import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { fitProductPng } from "@/lib/podruzhkaImageProcess";
+import { getHeaderPlaqueBuffer, getResizedTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { PODRUZHKA_LAYOUT, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
 const L = PODRUZHKA_LAYOUT;
 const C = S.colors;
-
-const TEMPLATE_PATH = path.join(process.cwd(), "public", "podruzhka", "template-base.png");
 
 let fontsReady = false;
 
@@ -113,22 +112,26 @@ function drawFilledBar(
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
-  if (!fs.existsSync(TEMPLATE_PATH)) {
-    throw new Error("Не найден шаблон public/podruzhka/template-base.png");
-  }
-  const raw = await fs.promises.readFile(TEMPLATE_PATH);
-  const meta = await sharp(raw).metadata();
-  const buf =
-    meta.width === W && meta.height === H
-      ? raw
-      : await sharp(raw).resize(W, H, { fit: "fill" }).png().toBuffer();
+  const buf = await getResizedTemplateBuffer(W, H);
   const base = await loadImage(buf);
   ctx.drawImage(base, 0, 0, W, H);
 
+  const fadeX = Math.round(W * S.ratios.loopFadeX);
+  const fadeY = S.ratios.loopFadeY;
   ctx.save();
   ctx.fillStyle = `rgba(247, 247, 247, ${S.ratios.loopFadeOpacity})`;
-  ctx.fillRect(Math.round(W * S.ratios.loopFadeRight), 100, W - Math.round(W * S.ratios.loopFadeRight), H - 100);
+  ctx.fillRect(fadeX, fadeY, W - fadeX, H - fadeY - 120);
   ctx.restore();
+}
+
+/** Плашка поверх — петля и осветление не «залезают» на шапку */
+async function overlayHeaderPlaque(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
+): Promise<void> {
+  const patch = await getHeaderPlaqueBuffer();
+  const img = await loadImage(patch);
+  const h = S.header;
+  ctx.drawImage(img, h.x, h.y, h.w, h.h);
 }
 
 function overlayDynamicText(
@@ -215,7 +218,12 @@ async function overlayProductPhoto(
 
   try {
     const zone = L.product;
-    const { buffer, width, height } = await fitProductPng(productBuf, zone.w, zone.h);
+    const { buffer, width, height } = await fitProductPng(
+      productBuf,
+      zone.w,
+      zone.h,
+      S.ratios.productFillHeight
+    );
 
     const prodImg = await loadImage(buffer);
     const drawX = zone.x + (zone.w - width) / 2;
@@ -268,6 +276,7 @@ export async function renderInfographicDetailed(
   await drawTemplateBase(ctx);
   overlayDynamicText(ctx, opts.data);
   const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
+  await overlayHeaderPlaque(ctx);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();

@@ -9,19 +9,22 @@ export const PODRUZHKA_SPEC = {
     separator: "#D9D9D9"
   },
   /** Доли холста */
+  header: { x: 250, y: 35, w: 500, h: 85 },
   ratios: {
-    brandMaxWidth: 0.55,
-    brandMaxHeight: 0.14,
-    productX: 0.38,
-    productY: 0.28,
-    productW: 0.55,
-    productH: 0.58,
-    loopFadeRight: 0.42,
-    loopFadeOpacity: 0.52
+    brandMaxWidth: 0.5,
+    brandMaxHeight: 0.13,
+    productX: 0.34,
+    productY: 0.24,
+    productW: 0.58,
+    productH: 0.64,
+    productFillHeight: 0.97,
+    loopFadeX: 0.44,
+    loopFadeY: 220,
+    loopFadeOpacity: 0.55
   },
   fonts: {
-    brand: { maxSize: 72, minSize: 48, weight: 800, maxLines: 2 },
-    productTypeRatioOfModel: 0.48,
+    brand: { maxSize: 68, minSize: 44, weight: 800, maxLines: 2 },
+    productTypeRatioOfModel: 0.55,
     model: { size: 67, weight: 800, maxLines: 2 },
     noteTitle: { size: 22, weight: 700 },
     noteDesc: { size: 16, weight: 400 },
