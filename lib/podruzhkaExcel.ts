@@ -1,5 +1,11 @@
 import type ExcelJS from "exceljs";
 import {
+  guessColumnMapping,
+  type ExcelHeaderOption,
+  type PodruzhkaColumnMapping,
+  type PodruzhkaSheetInfo
+} from "@/lib/podruzhkaColumnMapping";
+import {
   PODRUZHKA_AI_COLUMNS,
   type PodruzhkaAiResult,
   type PodruzhkaFeedRow,
@@ -14,127 +20,129 @@ import {
 } from "@/lib/ozonImageExcel";
 
 export { readWorkbookFromFile, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
+export type { PodruzhkaSheetInfo, PodruzhkaColumnMapping, ExcelHeaderOption } from "@/lib/podruzhkaColumnMapping";
+export {
+  guessColumnMapping,
+  mappingIsComplete,
+  PODRUZHKA_FIELD_LABELS,
+  REQUIRED_FEED_FIELDS
+} from "@/lib/podruzhkaColumnMapping";
+export type { PodruzhkaFieldKey } from "@/lib/podruzhkaColumnMapping";
 
-function normalizeHeader(value: unknown): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
-
-const HEADER_ALIASES: Record<string, keyof Omit<PodruzhkaFeedRow, "row">> = {
-  id: "id",
-  name: "name",
-  "brand name": "brandName",
-  brand: "brandName",
-  product_type: "productType",
-  "product type": "productType",
-  "product name": "productName",
-  product_name: "productName",
-  foto: "foto",
-  ml: "ml"
-};
-
-export type PodruzhkaSheetInfo = {
+export type WorkbookScan = {
   sheetName: string;
   headerRow: number;
-  cols: Record<keyof Omit<PodruzhkaFeedRow, "row">, number>;
-  foto2Col: number | null;
-  rows: PodruzhkaFeedRow[];
+  headers: ExcelHeaderOption[];
 };
 
-async function loadExcelJS(): Promise<typeof ExcelJS> {
-  const mod = await import("exceljs");
-  return mod.default ?? mod;
-}
+/** Список заголовков первого листа для сопоставления полей */
+export function scanWorkbookHeaders(wb: ExcelJS.Workbook): WorkbookScan | null {
+  const ws = wb.worksheets[0];
+  if (!ws) return null;
 
-function findFeedSheet(ws: ExcelJS.Worksheet): PodruzhkaSheetInfo | null {
-  const maxRow = Math.min(ws.rowCount || 15, 15);
-  const maxCol = ws.columnCount || 40;
+  const maxRow = Math.min(ws.rowCount || 8, 8);
+  const maxCol = ws.columnCount || 50;
 
   for (let r = 1; r <= maxRow; r++) {
-    const cols: Partial<Record<keyof Omit<PodruzhkaFeedRow, "row">, number>> = {};
-    let foto2Col: number | null = null;
-
+    const headers: ExcelHeaderOption[] = [];
     for (let c = 1; c <= maxCol; c++) {
-      const raw = cellPlainValue(ws.getCell(r, c).value);
-      const n = normalizeHeader(raw);
-      if (isFoto2Header(raw) || n === "foto 2" || n === "foto2") foto2Col = c;
-      const key = HEADER_ALIASES[n];
-      if (key) cols[key] = c;
+      const label = cellPlainValue(ws.getCell(r, c).value);
+      if (label) headers.push({ col: c, label });
     }
-
-    if (cols.brandName && cols.foto) {
-      const required = ["brandName", "productType", "productName", "name", "foto", "ml"] as const;
-      const missing = required.filter((k) => !cols[k]);
-      if (missing.length > 0) continue;
-
-      const headerRow = r;
-      const lastRow = ws.rowCount || headerRow;
-      const rows: PodruzhkaFeedRow[] = [];
-
-      for (let row = headerRow + 1; row <= lastRow; row++) {
-        const brandName = cellPlainValue(ws.getCell(row, cols.brandName!).value);
-        const foto = cellAsUrl(ws.getCell(row, cols.foto!).value);
-        if (!brandName && !foto) continue;
-
-        rows.push({
-          row,
-          id: cols.id ? cellPlainValue(ws.getCell(row, cols.id).value) : "",
-          name: cellPlainValue(ws.getCell(row, cols.name!).value),
-          brandName,
-          productType: cellPlainValue(ws.getCell(row, cols.productType!).value),
-          productName: cellPlainValue(ws.getCell(row, cols.productName!).value),
-          foto,
-          ml: cellPlainValue(ws.getCell(row, cols.ml!).value)
-        });
-      }
-
-      return {
-        sheetName: ws.name,
-        headerRow,
-        cols: cols as Record<keyof Omit<PodruzhkaFeedRow, "row">, number>,
-        foto2Col,
-        rows
-      };
+    if (headers.length >= 4) {
+      return { sheetName: ws.name, headerRow: r, headers };
     }
   }
   return null;
+}
+
+export function buildSheetFromMapping(
+  wb: ExcelJS.Workbook,
+  scan: WorkbookScan,
+  mapping: PodruzhkaColumnMapping
+): PodruzhkaSheetInfo | null {
+  const ws = wb.getWorksheet(scan.sheetName);
+  if (!ws) return null;
+
+  const m = mapping;
+  const brandCol = m.brandName!;
+  const rows: PodruzhkaFeedRow[] = [];
+  const lastRow = ws.rowCount || scan.headerRow;
+
+  for (let row = scan.headerRow + 1; row <= lastRow; row++) {
+    const brandName = cellPlainValue(ws.getCell(row, brandCol).value);
+    const foto = m.foto ? cellAsUrl(ws.getCell(row, m.foto).value) : "";
+    if (!brandName && !foto) continue;
+
+    rows.push({
+      row,
+      id: m.id ? cellPlainValue(ws.getCell(row, m.id).value) : "",
+      name: m.name ? cellPlainValue(ws.getCell(row, m.name).value) : "",
+      brandName,
+      productType: m.productType ? cellPlainValue(ws.getCell(row, m.productType).value) : "",
+      productName: m.productName ? cellPlainValue(ws.getCell(row, m.productName).value) : "",
+      foto,
+      ml: m.ml ? cellPlainValue(ws.getCell(row, m.ml).value) : ""
+    });
+  }
+
+  if (rows.length === 0) return null;
+
+  let foto2Col: number | null = m.foto2 ?? null;
+  if (!foto2Col) {
+    for (let c = 1; c <= maxCol(ws); c++) {
+      const raw = cellPlainValue(ws.getCell(scan.headerRow, c).value);
+      if (isFoto2Header(raw)) foto2Col = c;
+    }
+  }
+
+  return {
+    sheetName: scan.sheetName,
+    headerRow: scan.headerRow,
+    mapping: m,
+    foto2Col,
+    rows
+  };
+}
+
+function maxCol(ws: ExcelJS.Worksheet): number {
+  return ws.columnCount || 40;
 }
 
 export function analyzePodruzhkaWorkbook(wb: ExcelJS.Workbook): PodruzhkaSheetInfo | null {
-  for (const ws of wb.worksheets) {
-    const info = findFeedSheet(ws);
-    if (info) return info;
-  }
-  return null;
+  const scan = scanWorkbookHeaders(wb);
+  if (!scan) return null;
+  const mapping = guessColumnMapping(scan.headers);
+  return buildSheetFromMapping(wb, scan, mapping);
 }
 
 function colIndexByHeader(
   ws: ExcelJS.Worksheet,
   headerRow: number,
-  maxCol: number,
+  maxColN: number,
   name: string
 ): number | null {
-  const want = normalizeHeader(name);
-  for (let c = 1; c <= maxCol; c++) {
-    if (normalizeHeader(cellPlainValue(ws.getCell(headerRow, c).value)) === want) return c;
+  const want = name.trim().toLowerCase();
+  for (let c = 1; c <= maxColN; c++) {
+    const v = cellPlainValue(ws.getCell(headerRow, c).value).trim().toLowerCase();
+    if (v === want) return c;
   }
   return null;
 }
 
 function ensureAiColumns(ws: ExcelJS.Worksheet, headerRow: number): Record<string, number> {
-  const maxCol = ws.columnCount || 50;
+  const maxColN = maxCol(ws);
   const map: Record<string, number> = {};
 
   for (const colName of PODRUZHKA_AI_COLUMNS) {
-    let c = colIndexByHeader(ws, headerRow, maxCol, colName);
+    let c = colIndexByHeader(ws, headerRow, maxColN, colName);
     if (c == null) {
-      const next = (ws.columnCount || maxCol) + 1;
+      const next = maxColN + 1;
       ws.getCell(headerRow, next).value = colName;
-      c = next;
+      map[colName] = next;
+    } else {
+      map[colName] = c;
     }
-    map[colName] = c;
   }
   return map;
 }
@@ -172,31 +180,36 @@ export function applyAiResults(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaSheetInfo,
   results: PodruzhkaAiResult[]
-): void {
+): number {
   const aiCols = ensureAiColumns(ws, info.headerRow);
   const byRow = new Map(results.map((r) => [r.row, r]));
+  let written = 0;
 
-  for (const feed of info.rows) {
-    const r = byRow.get(feed.row);
-    if (!r) continue;
-    const row = feed.row;
+  for (const r of results) {
+    const row = r.row;
     ws.getCell(row, aiCols.model!).value = r.model;
     for (let i = 0; i < 3; i++) {
       const n = r.notes[i];
-      ws.getCell(row, aiCols[`note${i + 1}_title` as keyof typeof aiCols]!).value = n?.title ?? "";
-      ws.getCell(row, aiCols[`note${i + 1}_desc` as keyof typeof aiCols]!).value = n?.desc ?? "";
+      ws.getCell(row, aiCols[`note${i + 1}_title` as keyof typeof aiCols]!).value =
+        n?.title ?? "";
+      ws.getCell(row, aiCols[`note${i + 1}_desc` as keyof typeof aiCols]!).value =
+        n?.desc ?? "";
     }
     ws.getCell(row, aiCols.notes_status!).value = r.ok
       ? "ok"
       : r.error ?? "не найдено";
+    written++;
   }
+
+  return written;
 }
 
 function ensureFoto2Column(ws: ExcelJS.Worksheet, info: PodruzhkaSheetInfo): number {
   if (info.foto2Col) return info.foto2Col;
-  const maxCol = (ws.columnCount || info.cols.ml) + 1;
-  ws.getCell(info.headerRow, maxCol).value = "foto 2";
-  return maxCol;
+  const mc = maxCol(ws);
+  const next = mc + 1;
+  ws.getCell(info.headerRow, next).value = "foto 2";
+  return next;
 }
 
 export function applyFoto2Urls(
@@ -214,7 +227,6 @@ export function applyFoto2Urls(
   return { filled: n, foto2Col: col };
 }
 
-/** Для шага 3: foto 2 → Foto 3 (тот же формат, что у OzonImageConverter). */
 export function buildFoto2ColumnInfo(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaSheetInfo
@@ -229,8 +241,8 @@ export function buildFoto2ColumnInfo(
   if (rows.length === 0) return null;
 
   let foto3Col = foto2Col + 1;
-  const maxCol = ws.columnCount || foto2Col + 5;
-  for (let c = 1; c <= maxCol; c++) {
+  const maxColN = maxCol(ws);
+  for (let c = 1; c <= maxColN; c++) {
     const v = ws.getCell(info.headerRow, c).value;
     if (isFoto3Header(v) || isFoto3Header(cellPlainValue(v))) {
       foto3Col = c;
