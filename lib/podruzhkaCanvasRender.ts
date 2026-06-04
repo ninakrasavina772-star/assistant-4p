@@ -4,7 +4,8 @@ import path from "path";
 import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
-import { fitProductPng } from "@/lib/podruzhkaImageProcess";
+import { fitProductPng, type FitResult } from "@/lib/podruzhkaImageProcess";
+import type { VisionPhotoAdjustment } from "@/lib/podruzhkaVisionAdjust";
 import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { PODRUZHKA_LAYOUT, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
@@ -198,7 +199,8 @@ function drawProductShadow(
 
 async function overlayProductPhoto(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  fotoUrl: string
+  fotoUrl: string,
+  photoAdj?: VisionPhotoAdjustment
 ): Promise<{ loaded: boolean; error?: string }> {
   const url = fotoUrl?.trim();
   if (!url) return { loaded: false, error: "Колонка foto пуста" };
@@ -209,20 +211,36 @@ async function overlayProductPhoto(
   try {
     const zone = L.product;
     const availH = zone.bottom - zone.y;
-    const { buffer, width, height } = await fitProductPng(
-      productBuf,
-      zone.w,
-      availH,
-      S.product.fillHeight,
-      S.product.minHeightRatio
-    );
+    const fillH = photoAdj?.fillHeightRatio ?? S.product.fillHeight;
+    const minHR = photoAdj?.minHeightRatio ?? S.product.minHeightRatio;
+
+    const fit: FitResult = await fitProductPng(productBuf, zone.w, availH, fillH, minHR);
+
+    let { buffer, width, height } = fit;
+
+    // AI сказал увеличить — принудительно масштабируем по высоте зоны
+    if (photoAdj?.forceHeightFill && fit.overflowsWidth) {
+      // уже overflow → используем как есть (overflow обрезается при drawImage)
+    }
 
     const prodImg = await loadImage(buffer);
-    const drawX = zone.x + (zone.w - width) / 2;
-    const drawY = zone.bottom - height;
 
-    drawProductShadow(ctx, drawX + width / 2, drawY + height, width);
+    // Центрируем по X; если шире зоны — clip-регион
+    const drawX = zone.x + (zone.w - width) / 2;
+    const bottomOffset = photoAdj?.bottomOffsetPx ?? 0;
+    const anchorY = zone.bottom + bottomOffset;
+    const drawY = anchorY - height;
+
+    // Clip region чтобы широкие коробки не залезали на текст
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(zone.x, zone.y, zone.w + 10, zone.bottom - zone.y + 60);
+    ctx.clip();
+
+    drawProductShadow(ctx, zone.x + zone.w / 2, anchorY + 4, Math.min(width, zone.w));
     ctx.drawImage(prodImg, drawX, drawY, width, height);
+
+    ctx.restore();
     return { loaded: true };
   } catch (e) {
     return {
@@ -247,6 +265,7 @@ export type RenderInfographicResult = {
 
 export type RenderInfographicOptions = {
   data: PodruzhkaInfographicData;
+  photoAdj?: VisionPhotoAdjustment;
 };
 
 export function isRenderOptions(v: unknown): v is RenderInfographicOptions {
@@ -260,28 +279,58 @@ export async function renderInfographicPng(
   return r.buffer;
 }
 
-export async function renderInfographicDetailed(
-  dataOrOpts: PodruzhkaInfographicData | RenderInfographicOptions
+async function renderOnce(
+  data: PodruzhkaInfographicData,
+  photoAdj?: VisionPhotoAdjustment
 ): Promise<RenderInfographicResult> {
-  const opts: RenderInfographicOptions = isRenderOptions(dataOrOpts)
-    ? dataOrOpts
-    : { data: dataOrOpts };
-
   ensureFonts();
-
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
   await drawTemplateBase(ctx);
-  overlayDynamicText(ctx, opts.data);
-  const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
-  overlayMl(ctx, opts.data.ml);
+  overlayDynamicText(ctx, data);
+  const foto = await overlayProductPhoto(ctx, data.fotoUrl, photoAdj);
+  overlayMl(ctx, data.ml);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
-  return {
-    buffer,
-    fotoLoaded: foto.loaded,
-    fotoError: foto.error
-  };
+  return { buffer, fotoLoaded: foto.loaded, fotoError: foto.error };
+}
+
+export async function renderInfographicDetailed(
+  dataOrOpts: PodruzhkaInfographicData | RenderInfographicOptions,
+  openaiKey?: string
+): Promise<RenderInfographicResult & { visionUsed?: boolean; visionReasoning?: string }> {
+  const opts: RenderInfographicOptions = isRenderOptions(dataOrOpts)
+    ? dataOrOpts
+    : { data: dataOrOpts };
+
+  // Первый рендер — стандартные настройки
+  const first = await renderOnce(opts.data, opts.photoAdj);
+
+  // AI Vision loop: если передан ключ и фото загружено
+  if (openaiKey && first.fotoLoaded) {
+    try {
+      const { getVisionAdjustment } = await import("@/lib/podruzhkaVisionAdjust");
+      const { adjustment, verdict } = await getVisionAdjustment(first.buffer, openaiKey);
+
+      const needsRedo =
+        verdict.photoSizeVerdict !== "ok" || verdict.photoPositionVerdict !== "ok";
+
+      if (needsRedo) {
+        const second = await renderOnce(opts.data, adjustment);
+        return {
+          ...second,
+          visionUsed: true,
+          visionReasoning: verdict.reasoning
+        };
+      }
+
+      return { ...first, visionUsed: true, visionReasoning: verdict.reasoning };
+    } catch {
+      // Vision упал — возвращаем первый рендер без ошибки
+    }
+  }
+
+  return first;
 }

@@ -12,6 +12,7 @@ type Body = {
   ml?: string;
   fotoUrl?: string;
   notes?: PodruzhkaNoteBlock[];
+  openaiKey?: string;
 };
 
 export async function POST(req: Request) {
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
   const ml = String(body.ml ?? "").trim();
   const fotoUrl = String(body.fotoUrl ?? "").trim();
   const notes = Array.isArray(body.notes) ? body.notes.slice(0, 3) : [];
+  const openaiKey = typeof body.openaiKey === "string" ? body.openaiKey.trim() : undefined;
 
   if (!brandName || !model || notes.length < 3) {
     return NextResponse.json(
@@ -65,7 +67,7 @@ export async function POST(req: Request) {
       }))
     };
 
-    const rendered = await renderInfographicDetailed({ data });
+    const rendered = await renderInfographicDetailed({ data }, openaiKey);
     const fileName = `podruzhka-${crypto.randomUUID().slice(0, 8)}.jpg`;
     const url = await uploadOzonImage(rendered.buffer, fileName);
 
@@ -73,7 +75,8 @@ export async function POST(req: Request) {
       ok: true,
       url,
       fotoLoaded: rendered.fotoLoaded,
-      ...(rendered.fotoError ? { fotoError: rendered.fotoError } : {})
+      ...(rendered.fotoError ? { fotoError: rendered.fotoError } : {}),
+      ...(rendered.visionUsed ? { visionUsed: true, visionReasoning: rendered.visionReasoning } : {})
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка рендера";

@@ -407,7 +407,8 @@ export function PodruzhkaOzonTool() {
                   model: ai.model,
                   ml: row.ml,
                   fotoUrl: row.foto,
-                  notes: ai.notes
+                  notes: ai.notes,
+                  openaiKey: openaiKey.trim() || undefined
                 })
               });
               const data = (await res.json()) as {

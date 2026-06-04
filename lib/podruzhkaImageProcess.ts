@@ -36,14 +36,28 @@ async function trimTransparent(input: Buffer): Promise<Buffer> {
   }
 }
 
-/** contain + upscale; минимальная высота — чтобы флакон всегда крупный у низа */
+export type FitResult = {
+  buffer: Buffer;
+  /** Rendered width — может быть шире зоны для landscape продуктов */
+  width: number;
+  height: number;
+  /** true если ширина превышает maxW (нужна clip-зона при рендере) */
+  overflowsWidth: boolean;
+};
+
+/**
+ * Fit product into zone:
+ * - Для portrait/square: contain внутри maxW × (maxH * fillHeightRatio)
+ * - Для landscape (широкие коробки): масштаб по высоте minHeightRatio,
+ *   разрешаем ширину больше maxW — рендерер сам отрежет края при drawImage
+ */
 export async function fitProductPng(
   input: Buffer,
   maxW: number,
   maxH: number,
   fillHeightRatio = 0.98,
   minHeightRatio = 0.88
-): Promise<{ buffer: Buffer; width: number; height: number }> {
+): Promise<FitResult> {
   const stripped = await stripNearWhiteBackground(input);
   const trimmed = await trimTransparent(stripped);
   const meta = await sharp(trimmed).metadata();
@@ -52,25 +66,30 @@ export async function fitProductPng(
 
   const targetH = Math.round(maxH * fillHeightRatio);
   const minH = Math.round(maxH * minHeightRatio);
+
+  // Шаг 1: стандартный contain (не превышаем maxW и targetH)
   let scale = Math.min(targetH / srcH, maxW / srcW);
   let width = Math.max(1, Math.round(srcW * scale));
   let height = Math.max(1, Math.round(srcH * scale));
 
+  // Шаг 2: если высота меньше минимальной — масштабируем по высоте
+  // и РАЗРЕШАЕМ ширину превысить maxW (обрезка будет при рендере)
   if (height < minH) {
     scale = minH / srcH;
     width = Math.round(srcW * scale);
     height = minH;
-    if (width > maxW) {
-      const s = maxW / width;
+    // Только если ширина не больше чем в 2 раза превышает — иначе оставляем contain
+    if (width > maxW * 2) {
+      const s = maxW / srcW;
       width = maxW;
-      height = Math.max(1, Math.round(height * s));
+      height = Math.max(1, Math.round(srcH * s));
     }
   }
 
   const buffer = await sharp(trimmed)
-    .resize(width, height, { fit: "inside" })
+    .resize(width, height, { fit: "fill" })
     .png()
     .toBuffer();
 
-  return { buffer, width, height };
+  return { buffer, width, height, overflowsWidth: width > maxW };
 }

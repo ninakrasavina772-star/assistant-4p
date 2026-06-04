@@ -13,7 +13,7 @@ export const PODRUZHKA_REFERENCE = {
   },
   text: {
     x: 52,
-    brandY: 198,
+    brandY: 228,
     brandMaxWidthRatio: 0.47,
     brandMaxHeightRatio: 0.09,
     brandFontMax: 54,
