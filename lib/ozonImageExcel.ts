@@ -61,6 +61,25 @@ export function cellAsUrl(value: ExcelJS.CellValue): string {
   return m ? m[0]! : "";
 }
 
+/** URL из ячейки Excel (в т.ч. hyperlink на ячейке, не только текст) */
+export function cellAsUrlFromCell(cell: {
+  value?: ExcelJS.CellValue;
+  hyperlink?: string | { text?: string; hyperlink?: string };
+  text?: string;
+}): string {
+  const raw = cell.hyperlink;
+  if (typeof raw === "string" && /^https?:\/\//i.test(raw.trim())) return raw.trim();
+  if (raw && typeof raw === "object" && typeof raw.hyperlink === "string") {
+    const h = raw.hyperlink.trim();
+    if (/^https?:\/\//i.test(h)) return h;
+  }
+  const fromValue = cellAsUrl(cell.value ?? null);
+  if (fromValue) return fromValue;
+  const text = String(cell.text ?? "").trim();
+  const m = text.match(/https?:\/\/\S+/i);
+  return m ? m[0]! : "";
+}
+
 function findHeaderColumns(ws: ExcelJS.Worksheet): Omit<Foto2ColumnInfo, "sheetName" | "rows"> | null {
   const maxRow = Math.min(ws.rowCount || 10, 10);
   const maxCol = ws.columnCount || 30;

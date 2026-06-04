@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { renderInfographicPng } from "@/lib/podruzhkaCanvasRender";
+import { renderInfographicDetailed } from "@/lib/podruzhkaCanvasRender";
 import { uploadOzonImage, getOzonStorageBackend } from "@/lib/ozonImageStorage";
 import type { PodruzhkaInfographicData, PodruzhkaNoteBlock } from "@/lib/podruzhkaTypes";
 
@@ -12,8 +12,6 @@ type Body = {
   ml?: string;
   fotoUrl?: string;
   notes?: PodruzhkaNoteBlock[];
-  /** data:image/png;base64,... — референс шаблона */
-  templateBase64?: string;
 };
 
 export async function POST(req: Request) {
@@ -67,19 +65,16 @@ export async function POST(req: Request) {
       }))
     };
 
-    let templateBuffer: Buffer | null = null;
-    const tb = String(body.templateBase64 ?? "").trim();
-    if (tb) {
-      const m = tb.match(/^data:image\/\w+;base64,(.+)$/);
-      const b64 = m ? m[1]! : tb;
-      templateBuffer = Buffer.from(b64, "base64");
-    }
-
-    const buf = await renderInfographicPng({ data, templateBuffer });
+    const rendered = await renderInfographicDetailed({ data });
     const fileName = `podruzhka-${crypto.randomUUID().slice(0, 8)}.jpg`;
-    const url = await uploadOzonImage(buf, fileName);
+    const url = await uploadOzonImage(rendered.buffer, fileName);
 
-    return NextResponse.json({ ok: true, url });
+    return NextResponse.json({
+      ok: true,
+      url,
+      fotoLoaded: rendered.fotoLoaded,
+      ...(rendered.fotoError ? { fotoError: rendered.fotoError } : {})
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка рендера";
     return NextResponse.json({ error: msg }, { status: 500 });

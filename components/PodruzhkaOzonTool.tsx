@@ -10,26 +10,32 @@ import {
   homeInput
 } from "@/components/homeTheme";
 import { OzonImageConverter } from "@/components/OzonImageConverter";
-import { cellAsUrl } from "@/lib/ozonImageExcel";
+import { PodruzhkaColumnMappingUI } from "@/components/PodruzhkaColumnMappingUI";
+import { PodruzhkaDetectedLayout } from "@/components/PodruzhkaDetectedLayout";
 import {
   applyAiResults,
   applyFoto2Urls,
+  autoDetectPodruzhkaMapping,
   buildFoto2ColumnInfo,
   buildSheetFromMapping,
+  countAiReadyRows,
   defaultPodruzhkaDownloadName,
-  guessColumnMapping,
+  ensureAiColumns,
+  listAiColumnsOnSheet,
   mappingIsComplete,
-  PODRUZHKA_FIELD_LABELS,
   readAiFromSheet,
+  rowNeedsAiGeneration,
   readWorkbookFromFile,
-  REQUIRED_FEED_FIELDS,
+  refreshWorkbookScan,
   scanWorkbookHeaders,
   writeWorkbookToBlob,
+  type AutoDetectResult,
   type PodruzhkaColumnMapping,
   type PodruzhkaFieldKey,
   type PodruzhkaSheetInfo,
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
+import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
 import type { PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
 
@@ -39,17 +45,6 @@ const NOTES_CHUNK = 3;
 const RENDER_CHUNK = 2;
 
 type Step = 1 | 2 | 3;
-
-const FIELD_ORDER: PodruzhkaFieldKey[] = [
-  "brandName",
-  "productType",
-  "productName",
-  "name",
-  "foto",
-  "ml",
-  "id",
-  "foto2"
-];
 
 function StepDoneBanner({
   title,
@@ -68,16 +63,18 @@ function StepDoneBanner({
 
 export function PodruzhkaOzonTool() {
   const fileRef = useRef<HTMLInputElement>(null);
-  const refFileRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>(1);
   const [fileName, setFileName] = useState<string | null>(null);
   const [wb, setWb] = useState<ExcelJS.Workbook | null>(null);
   const [scan, setScan] = useState<WorkbookScan | null>(null);
   const [mapping, setMapping] = useState<PodruzhkaColumnMapping>({});
-  const [mappingOk, setMappingOk] = useState(false);
+  const [mappingConfirmed, setMappingConfirmed] = useState(false);
+  const [detection, setDetection] = useState<AutoDetectResult | null>(null);
+  const [manualMapping, setManualMapping] = useState(false);
   const [sheetInfo, setSheetInfo] = useState<PodruzhkaSheetInfo | null>(null);
-  const [templateBase64, setTemplateBase64] = useState<string | null>(null);
-  const [templatePreview, setTemplatePreview] = useState<string | null>(null);
+  const [aiColumns, setAiColumns] = useState<{ key: string; header: string; col: number }[]>(
+    []
+  );
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -88,8 +85,14 @@ export function PodruzhkaOzonTool() {
     null
   );
   const [infographicDone, setInfographicDone] = useState(false);
-  const [renderStats, setRenderStats] = useState<{ ok: number; fail: number } | null>(null);
+  const [renderStats, setRenderStats] = useState<{
+    ok: number;
+    fail: number;
+    noFoto: number;
+    sampleFotoError: string | null;
+  } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
 
   useEffect(() => {
     if (typeof sessionStorage === "undefined") return;
@@ -109,15 +112,28 @@ export function PodruzhkaOzonTool() {
 
   const downloadWorkbook = useCallback(
     async (suffix: "notes" | "infographic" | "foto3") => {
-      if (!wb) return;
+      if (!wb || !scan) return;
       try {
+        const ws = wb.getWorksheet(scan.sheetName);
+        if (ws) ensureAiColumns(ws, scan.headerRow);
         const blob = await writeWorkbookToBlob(wb);
         downloadBlob(blob, defaultPodruzhkaDownloadName(fileName, suffix));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Не удалось сохранить Excel");
       }
     },
-    [wb, fileName, downloadBlob]
+    [wb, scan, fileName, downloadBlob]
+  );
+
+  const syncSheetInfo = useCallback(
+    (workbook: ExcelJS.Workbook, scanned: WorkbookScan, m: PodruzhkaColumnMapping) => {
+      const info = buildSheetFromMapping(workbook, scanned, m);
+      if (info) setSheetInfo(info);
+      const ws = workbook.getWorksheet(scanned.sheetName);
+      if (ws) setAiColumns(listAiColumnsOnSheet(ws, scanned.headerRow));
+      return info;
+    },
+    []
   );
 
   const confirmMapping = useCallback(() => {
@@ -127,66 +143,112 @@ export function PodruzhkaOzonTool() {
       setError(err);
       return;
     }
-    const info = buildSheetFromMapping(wb, scan, mapping);
-    if (!info) {
-      setError("Нет строк с данными по выбранным колонкам");
+    const ws = wb.getWorksheet(scan.sheetName);
+    if (!ws) {
+      setError("Лист не найден");
       return;
     }
-    setSheetInfo(info);
-    setMappingOk(true);
+    ensureAiColumns(ws, scan.headerRow);
+    const fresh = refreshWorkbookScan(wb, scan) ?? scan;
+    setScan(fresh);
+    const info = syncSheetInfo(wb, fresh, mapping);
+    if (!info) {
+      setError("Нет строк с данными — проверьте бренд или foto в выбранных колонках");
+      return;
+    }
+    setMappingConfirmed(true);
     setError(null);
     setStep(1);
-  }, [wb, scan, mapping]);
+  }, [wb, scan, mapping, syncSheetInfo]);
 
-  const onFile = useCallback(async (file: File) => {
-    setBusy(true);
-    setError(null);
-    setNotesDone(false);
-    setNotesStats(null);
-    setInfographicDone(false);
-    setRenderStats(null);
-    setPreviewUrl(null);
-    setMappingOk(false);
-    setSheetInfo(null);
-    setProgress("Читаем Excel…");
+  const onMappingChange = useCallback((field: PodruzhkaFieldKey, col: number | undefined) => {
+    setMapping((m) => ({ ...m, [field]: col }));
+  }, []);
 
-    try {
-      const workbook = await readWorkbookFromFile(file);
-      const scanned = scanWorkbookHeaders(workbook);
-      if (!scanned) {
-        setError("Не найдена строка заголовков в Excel");
-        return;
+  const finishUpload = useCallback(
+    (
+      workbook: ExcelJS.Workbook,
+      scanned: WorkbookScan,
+      m: PodruzhkaColumnMapping,
+      detected: AutoDetectResult
+    ) => {
+      const ws = workbook.getWorksheet(scanned.sheetName);
+      if (!ws) {
+        setError("Лист не найден");
+        return false;
       }
-      const guessed = guessColumnMapping(scanned.headers);
-      setWb(workbook);
-      setScan(scanned);
-      setMapping(guessed);
-      setFileName(file.name);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка чтения Excel");
-    } finally {
-      setBusy(false);
-      setProgress(null);
-    }
-  }, []);
-
-  const onReference = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) {
-      setError("Референс: загрузите PNG или JPG");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const data = String(reader.result ?? "");
-      setTemplateBase64(data);
-      setTemplatePreview(data);
+      ensureAiColumns(ws, scanned.headerRow);
+      const fresh = refreshWorkbookScan(workbook, scanned) ?? scanned;
+      setScan(fresh);
+      const info = syncSheetInfo(workbook, fresh, m);
+      if (!info) {
+        setError(
+          "Нет строк с товарами — проверьте, что в колонках brand name и foto есть данные"
+        );
+        return false;
+      }
+      setDetection(detected);
+      setMappingConfirmed(true);
+      setManualMapping(false);
+      setStep(1);
       setError(null);
-    };
-    reader.readAsDataURL(file);
-  }, []);
+      return true;
+    },
+    [syncSheetInfo]
+  );
+
+  const onFile = useCallback(
+    async (file: File) => {
+      setBusy(true);
+      setError(null);
+      setNotesDone(false);
+      setNotesStats(null);
+      setInfographicDone(false);
+      setRenderStats(null);
+      setPreviewUrl(null);
+      setMappingConfirmed(false);
+      setSheetInfo(null);
+      setAiColumns([]);
+      setDetection(null);
+      setManualMapping(false);
+      setProgress("Читаем Excel…");
+
+      try {
+        const workbook = await readWorkbookFromFile(file);
+        const scanned = scanWorkbookHeaders(workbook);
+        if (!scanned) {
+          setError("Не найдена строка заголовков в Excel");
+          return;
+        }
+        const detected = autoDetectPodruzhkaMapping(scanned.headers);
+        setWb(workbook);
+        setScan(scanned);
+        setMapping(detected.mapping);
+        setFileName(file.name);
+
+        if (!detected.isReady) {
+          setManualMapping(true);
+          setError(
+            `Файл не похож на образец. Не найдены колонки: ${detected.missing
+              .map((k) => PODRUZHKA_FIELD_LABELS[k])
+              .join(", ")}. Используйте шаблон с заголовками name, brand name, foto…`
+          );
+          return;
+        }
+
+        finishUpload(workbook, scanned, detected.mapping, detected);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка чтения Excel");
+      } finally {
+        setBusy(false);
+        setProgress(null);
+      }
+    },
+    [finishUpload]
+  );
 
   const runNotes = useCallback(async () => {
-    if (!wb || !sheetInfo) return;
+    if (!wb || !scan || !sheetInfo) return;
     const key = openaiKey.trim();
     if (!key.startsWith("sk-")) {
       setError("Введите ключ OpenAI API (sk-…)");
@@ -199,7 +261,6 @@ export function PodruzhkaOzonTool() {
 
     setBusy(true);
     setError(null);
-    setNotesDone(false);
     setNotesStats(null);
 
     const ws = wb.getWorksheet(sheetInfo.sheetName);
@@ -209,10 +270,27 @@ export function PodruzhkaOzonTool() {
       return;
     }
 
-    const pending = sheetInfo.rows.filter((row) => {
-      const ai = readAiFromSheet(ws, sheetInfo, row);
-      return ai.status !== "ok";
-    });
+    ensureAiColumns(ws, scan.headerRow);
+
+    const pending = sheetInfo.rows.filter((row) =>
+      rowNeedsAiGeneration(ws, sheetInfo, row, forceAiRegenerate)
+    );
+
+    if (pending.length === 0) {
+      const ready = countAiReadyRows(ws, sheetInfo);
+      if (ready === 0) {
+        setError(
+          "Нет готовых строк. Запустите AI — он заполнит model и note 1–3 по образцу для инфографики."
+        );
+        setBusy(false);
+        return;
+      }
+      setNotesStats({ ok: ready, fail: 0, written: 0 });
+      setNotesDone(true);
+      setStep(2);
+      setBusy(false);
+      return;
+    }
 
     const results: PodruzhkaAiResult[] = [];
     let ok = 0;
@@ -222,7 +300,7 @@ export function PodruzhkaOzonTool() {
       if (pending.length > 0) {
         for (let i = 0; i < pending.length; i += NOTES_CHUNK) {
           const chunk = pending.slice(i, i + NOTES_CHUNK);
-          setProgress(`Ноты и model: ${i} / ${pending.length}…`);
+          setProgress(`AI: model и ноты — ${i} / ${pending.length}…`);
 
           const res = await fetch("/api/podruzhka/notes", {
             method: "POST",
@@ -243,24 +321,37 @@ export function PodruzhkaOzonTool() {
         }
       }
 
-      const written = applyAiResults(ws, sheetInfo, results);
-      const skipped = sheetInfo.rows.length - pending.length;
-      setNotesStats({ ok: ok + skipped, fail, written: written || pending.length + skipped });
+      applyAiResults(ws, sheetInfo, results);
+      const readyAfter = countAiReadyRows(ws, sheetInfo);
+      if (readyAfter === 0) {
+        setError(
+          "AI не смог заполнить model и ноты. Проверьте ключ OpenAI и названия товаров в Excel."
+        );
+        setBusy(false);
+        return;
+      }
+      setNotesStats({
+        ok: readyAfter,
+        fail,
+        written: results.length
+      });
       setNotesDone(true);
+      setForceAiRegenerate(false);
+
+      const fresh = refreshWorkbookScan(wb, scan) ?? scan;
+      setScan(fresh);
+      syncSheetInfo(wb, fresh, mapping);
+      setStep(2);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка шага 1");
     } finally {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, openaiKey, rememberKey]);
+  }, [wb, scan, sheetInfo, mapping, openaiKey, rememberKey, syncSheetInfo, forceAiRegenerate]);
 
   const runRender = useCallback(async () => {
-    if (!wb || !sheetInfo) return;
-    if (!notesDone) {
-      setError("Сначала завершите шаг 1.");
-      return;
-    }
+    if (!wb || !sheetInfo || !notesDone) return;
 
     setBusy(true);
     setError(null);
@@ -278,6 +369,8 @@ export function PodruzhkaOzonTool() {
     const urls = new Map<number, string>();
     let ok = 0;
     let fail = 0;
+    let noFoto = 0;
+    let sampleFotoError: string | null = null;
     const todo: typeof sheetInfo.rows = [];
 
     for (const row of sheetInfo.rows) {
@@ -285,18 +378,12 @@ export function PodruzhkaOzonTool() {
       if (ai.status !== "ok" || !ai.model || !ai.notes.every((n) => n.title && n.desc)) {
         continue;
       }
-      if (
-        sheetInfo.foto2Col &&
-        cellAsUrl(ws.getCell(row.row, sheetInfo.foto2Col).value)
-      ) {
-        continue;
-      }
       todo.push(row);
     }
 
     if (todo.length === 0) {
       setError(
-        "Нет строк для инфографики: нужен notes_status=ok, model, 3 ноты. Скачайте Excel после шага 1 и проверьте колонки."
+        "Нет строк для картинок: нужны model и note 1–3 (заполните вручную или шаг 1 AI)."
       );
       setBusy(false);
       return;
@@ -305,7 +392,7 @@ export function PodruzhkaOzonTool() {
     try {
       for (let i = 0; i < todo.length; i += RENDER_CHUNK) {
         const chunk = todo.slice(i, i + RENDER_CHUNK);
-        setProgress(`Формируем инфографику: ${i} / ${todo.length}…`);
+        setProgress(`Инфографика: ${i} / ${todo.length}…`);
 
         await Promise.all(
           chunk.map(async (row) => {
@@ -320,17 +407,25 @@ export function PodruzhkaOzonTool() {
                   model: ai.model,
                   ml: row.ml,
                   fotoUrl: row.foto,
-                  notes: ai.notes,
-                  templateBase64: templateBase64 ?? undefined
+                  notes: ai.notes
                 })
               });
-              const data = (await res.json()) as { url?: string; error?: string };
+              const data = (await res.json()) as {
+                url?: string;
+                error?: string;
+                fotoLoaded?: boolean;
+                fotoError?: string;
+              };
               if (!res.ok || !data.url) {
                 fail++;
                 return;
               }
               urls.set(row.row, data.url);
               ok++;
+              if (!data.fotoLoaded) {
+                noFoto++;
+                if (!sampleFotoError && data.fotoError) sampleFotoError = data.fotoError;
+              }
               if (!previewUrl) setPreviewUrl(data.url);
             } catch {
               fail++;
@@ -341,15 +436,15 @@ export function PodruzhkaOzonTool() {
 
       const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
-      setRenderStats({ ok, fail });
+      setRenderStats({ ok, fail, noFoto, sampleFotoError });
       setInfographicDone(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка формирования инфографики");
+      setError(e instanceof Error ? e.message : "Ошибка инфографики");
     } finally {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, notesDone, previewUrl, templateBase64]);
+  }, [wb, sheetInfo, notesDone, previewUrl]);
 
   const pipeline = useMemo(() => {
     if (!wb || !sheetInfo || !infographicDone) return null;
@@ -363,6 +458,10 @@ export function PodruzhkaOzonTool() {
       }
     };
   }, [wb, sheetInfo, fileName, infographicDone]);
+
+  const headerOptions = scan?.headers ?? [];
+  const step1Ready = Boolean(wb && mappingConfirmed && sheetInfo);
+  const step2Ready = step1Ready && notesDone;
 
   const stepBtn = (n: Step, label: string, enabled: boolean) => (
     <button
@@ -379,24 +478,35 @@ export function PodruzhkaOzonTool() {
     </button>
   );
 
-  const headerOptions = scan?.headers ?? [];
-
   return (
     <div className="space-y-6">
       <section className={homeCard}>
         <div className={homeCardHeader}>
-          <h2 className={homeCardTitle}>Этапы</h2>
+          <h2 className={homeCardTitle}>Порядок работы</h2>
         </div>
-        <div className={`${homeCardBody} space-y-3 text-sm text-slate-600`}>
-          <div className="flex flex-wrap gap-2">
-            {stepBtn(1, "1. Ноты", mappingOk)}
-            {stepBtn(2, "2. Инфографика", notesDone)}
+        <div className={`${homeCardBody} text-sm text-slate-600 space-y-2`}>
+          <p>
+            <strong>1.</strong> Загрузить Excel как <strong>образец.xlsx</strong> — колонки
+            распознаются сами (name, brand name, foto, note 1…).
+          </p>
+          <p>
+            <strong>2.</strong> AI заполняет <strong>model</strong> и <strong>note 1–3</strong> по
+            образцу (как Nasomatto Pardon) — обязательно перед инфографикой.
+          </p>
+          <p>
+            <strong>3.</strong> Инфографика 1080×1350 → ссылки в <strong>foto 2</strong>.
+          </p>
+          <p>
+            <strong>4.</strong> При необходимости — публичные https в <strong>foto 3</strong>.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-2">
+            {stepBtn(1, "1. Ноты (AI)", Boolean(wb))}
+            {stepBtn(2, "2. Инфографика", step2Ready)}
             {stepBtn(3, "3. Foto 3", infographicDone)}
           </div>
         </div>
       </section>
 
-      {/* Excel */}
       <section className={homeCard}>
         <div className={homeCardHeader}>
           <h2 className={homeCardTitle}>Excel-фид</h2>
@@ -424,8 +534,11 @@ export function PodruzhkaOzonTool() {
           {fileName ? (
             <p className="text-sm text-slate-600">
               <strong>{fileName}</strong>
-              {sheetInfo ? ` — ${sheetInfo.rows.length} строк` : " — укажите соответствие колонок"}
+              {sheetInfo ? ` — ${sheetInfo.rows.length} товаров` : ""}
             </p>
+          ) : null}
+          {detection?.isReady && sheetInfo && mappingConfirmed && !manualMapping ? (
+            <PodruzhkaDetectedLayout detection={detection} rowCount={sheetInfo.rows.length} />
           ) : null}
           {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
           {error ? (
@@ -436,115 +549,64 @@ export function PodruzhkaOzonTool() {
         </div>
       </section>
 
-      {/* Сопоставление колонок */}
-      {wb && scan && !mappingOk ? (
+      {wb && scan && manualMapping && !mappingConfirmed ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Соответствие полей</h2>
+            <h2 className={homeCardTitle}>Другая структура Excel — вручную</h2>
+          </div>
+          <div className={`${homeCardBody} space-y-4`}>
+            <PodruzhkaColumnMappingUI
+              mapping={mapping}
+              headers={headerOptions}
+              aiColumns={aiColumns}
+              onChange={onMappingChange}
+            />
+            <button type="button" className={homeBtnPrimary} onClick={confirmMapping}>
+              Применить и перейти к AI
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {wb && scan && mappingConfirmed && detection?.isReady ? (
+        <p className="text-sm text-slate-600">
+          <button
+            type="button"
+            className="underline"
+            onClick={() => {
+              setMappingConfirmed(false);
+              setManualMapping(true);
+            }}
+          >
+            Файл не как образец — настроить колонки вручную
+          </button>
+        </p>
+      ) : null}
+
+      {mappingConfirmed && !notesDone && step === 1 ? (
+        <section className={homeCard}>
+          <div className={homeCardHeader}>
+            <h2 className={homeCardTitle}>Шаг 1 — model и ноты (AI)</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              Укажите, какая колонка Excel куда попадает в инфографику и в AI.
+              <strong>model</strong> и <strong>note 1–3</strong> на карточке пишет только AI — в
+              формате образца: заголовок ноты ЗАГЛАВНЫМИ, описание с маленькой буквы (например «ПРЯНЫЙ
+              пикантный характер»). Без этого шага инфографика будет пустой или кривой.
             </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {FIELD_ORDER.map((field) => (
-                <label key={field} className="block text-sm">
-                  <span className="mb-1 block font-medium text-slate-700">
-                    {PODRUZHKA_FIELD_LABELS[field]}
-                    {REQUIRED_FEED_FIELDS.includes(field) ? (
-                      <span className="text-red-600"> *</span>
-                    ) : null}
-                  </span>
-                  <select
-                    className={homeInput}
-                    value={mapping[field] ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setMapping((m) => ({
-                        ...m,
-                        [field]: v ? Number(v) : undefined
-                      }));
-                    }}
-                  >
-                    <option value="">— не выбрано —</option>
-                    {headerOptions.map((h) => (
-                      <option key={h.col} value={h.col}>
-                        {h.label} (столбец {h.col})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </div>
-            <button type="button" className={homeBtnPrimary} onClick={confirmMapping}>
-              Сохранить соответствие и продолжить
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      {/* Референс шаблона */}
-      {mappingOk ? (
-        <section className={homeCard}>
-          <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Референс шаблона (PNG/JPG)</h2>
-          </div>
-          <div className={`${homeCardBody} space-y-4`}>
-            <p className="text-xs text-slate-500">
-              Загрузите макет 900×1200 (как ваш пример Подружка Global). Текст и фото товара программа
-              нарисует поверх. Без референса — серый фон по умолчанию.
-            </p>
-            <input
-              ref={refFileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onReference(f);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-              onClick={() => refFileRef.current?.click()}
-            >
-              {templatePreview ? "Заменить референс" : "Загрузить референс"}
-            </button>
-            {templatePreview ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={templatePreview}
-                alt="Референс"
-                className="max-h-48 rounded-lg border border-slate-200 object-contain"
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={forceAiRegenerate}
+                onChange={(e) => setForceAiRegenerate(e.target.checked)}
               />
+              Перезаписать model и ноты у всех строк (даже если уже были)
+            </label>
+            {aiColumns.length > 0 ? (
+              <p className="text-xs text-violet-800 bg-violet-50 rounded-lg px-3 py-2">
+                Столбцы AI: {aiColumns.map((c) => `${c.header} (${c.col})`).join(", ")}
+              </p>
             ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {/* Скачать — всегда видно после шага 1 */}
-      {notesDone && wb ? (
-        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center gap-3">
-          <span className="text-sm font-semibold text-amber-950">Файл с нотами готов</span>
-          <button
-            type="button"
-            className={homeBtnPrimary}
-            disabled={busy}
-            onClick={() => void downloadWorkbook("notes")}
-          >
-            Скачать Excel с model и нотами
-          </button>
-        </section>
-      ) : null}
-
-      {mappingOk && sheetInfo && step === 1 && (
-        <section className={homeCard}>
-          <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Шаг 1 — model и ноты</h2>
-          </div>
-          <div className={`${homeCardBody} space-y-4`}>
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-slate-700">Ключ OpenAI</span>
               <input
@@ -556,106 +618,120 @@ export function PodruzhkaOzonTool() {
                 autoComplete="off"
               />
             </label>
-            {!notesDone ? (
-              <button
-                type="button"
-                className={homeBtnPrimary}
-                disabled={busy}
-                onClick={() => void runNotes()}
-              >
-                {busy ? "Идёт AI…" : "Прописать model и ноты"}
-              </button>
-            ) : null}
-
-            {notesDone && notesStats ? (
-              <StepDoneBanner title="Шаг 1 завершён">
-                <p className="text-sm text-emerald-800">
-                  Записано в Excel: {notesStats.written} строк. Успешно: {notesStats.ok}, без
-                  данных: {notesStats.fail}.
-                </p>
-                <button
-                  type="button"
-                  className={homeBtnPrimary}
-                  disabled={busy}
-                  onClick={() => void downloadWorkbook("notes")}
-                >
-                  Скачать Excel с model и нотами
-                </button>
-                <button
-                  type="button"
-                  className="w-full rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-900 hover:bg-emerald-50"
-                  onClick={() => setStep(2)}
-                >
-                  Проверила файл — к инфографике →
-                </button>
-              </StepDoneBanner>
-            ) : null}
+            <button
+              type="button"
+              className={homeBtnPrimary}
+              disabled={busy}
+              onClick={() => void runNotes()}
+            >
+              {busy ? "Идёт AI…" : "Сгенерировать model и ноты (AI)"}
+            </button>
           </div>
+        </section>
+      ) : null}
+
+      {notesDone && (
+        <section className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center gap-3">
+          <span className="text-sm font-semibold text-amber-950">Шаг 1 готов — проверьте Excel</span>
+          <button
+            type="button"
+            className={homeBtnPrimary}
+            disabled={busy}
+            onClick={() => void downloadWorkbook("notes")}
+          >
+            Скачать Excel (модель + ноты)
+          </button>
+          {!infographicDone ? (
+            <button
+              type="button"
+              className="rounded-lg border border-amber-700 bg-white px-4 py-2 text-sm font-semibold text-amber-950"
+              onClick={() => setStep(2)}
+            >
+              К инфографике →
+            </button>
+          ) : null}
         </section>
       )}
 
-      {mappingOk && sheetInfo && step === 2 && (
+      {notesDone && notesStats && step === 1 ? (
+        <StepDoneBanner title="Шаг 1 завершён">
+          <p className="text-sm text-emerald-800">
+            Записано строк: {notesStats.written}. Успешно: {notesStats.ok}, без данных: {notesStats.fail}.
+            Откройте Excel — колонки model, note 1, note 2, note 3.
+          </p>
+        </StepDoneBanner>
+      ) : null}
+
+      {step2Ready && step === 2 ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>Шаг 2 — инфографика</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
-            {!infographicDone ? (
-              <button
-                type="button"
-                className={homeBtnPrimary}
-                disabled={busy || !notesDone}
-                onClick={() => void runRender()}
-              >
-                {busy ? "Формируем…" : "Сформировать инфографику"}
-              </button>
-            ) : null}
+            <p className="text-xs text-slate-500">
+              Каждая строка — новая карточка: brand name, product_type, model, note 1–3, ml, foto →
+              JPG в <strong>foto 2</strong>.
+            </p>
+            <button
+              type="button"
+              className={homeBtnPrimary}
+              disabled={busy}
+              onClick={() => void runRender()}
+            >
+              {busy ? "Формируем…" : infographicDone ? "Перегенерировать все карточки" : "Сформировать инфографику"}
+            </button>
 
             {infographicDone && renderStats ? (
               <StepDoneBanner title="Инфографика готова">
                 <p className="text-sm text-emerald-800">
-                  Ссылок в foto 2: {renderStats.ok}
-                  {renderStats.fail > 0 ? `, ошибок: ${renderStats.fail}` : ""}.
+                  Готово: {renderStats.ok}
+                  {renderStats.fail > 0 ? `, ошибок: ${renderStats.fail}` : ""}
+                  {renderStats.noFoto > 0 ? `, без фото: ${renderStats.noFoto}` : ""}.
                 </p>
-                <button
-                  type="button"
-                  className={homeBtnPrimary}
-                  disabled={busy}
-                  onClick={() => void downloadWorkbook("infographic")}
-                >
-                  Скачать готовый Excel (все колонки + foto 2)
-                </button>
+                {renderStats.noFoto > 0 ? (
+                  <p className="text-sm text-amber-900">
+                    Проверьте сопоставление <strong>Фото товара</strong> и ссылки в Excel.
+                    {renderStats.sampleFotoError ? ` (${renderStats.sampleFotoError})` : ""}
+                  </p>
+                ) : null}
                 {previewUrl ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img src={previewUrl} alt="Превью" className="max-w-xs rounded-lg border" />
                 ) : null}
                 <button
                   type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy}
+                  onClick={() => void downloadWorkbook("infographic")}
+                >
+                  Скачать Excel с foto 2
+                </button>
+                <button
+                  type="button"
                   className="w-full rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-900"
                   onClick={() => setStep(3)}
                 >
-                  Шаг 3 — Foto 3 для Ozon →
+                  Шаг 3 — Foto 3 →
                 </button>
               </StepDoneBanner>
             ) : null}
           </div>
         </section>
-      )}
+      ) : null}
 
-      {infographicDone && wb && (
+      {infographicDone && wb ? (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap gap-3">
-          <span className="text-sm font-semibold text-amber-950">Готовый Excel</span>
           <button
             type="button"
             className={homeBtnPrimary}
             onClick={() => void downloadWorkbook("infographic")}
           >
-            Скачать Excel с инфографикой
+            Скачать готовый Excel
           </button>
         </section>
-      )}
+      ) : null}
 
-      {mappingOk && sheetInfo && step === 3 && infographicDone && (
+      {step2Ready && step === 3 && infographicDone && (
         <OzonImageConverter embedded pipeline={pipeline} />
       )}
     </div>

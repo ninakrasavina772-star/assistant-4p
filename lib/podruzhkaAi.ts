@@ -1,3 +1,4 @@
+import { PODRUZHKA_AI_OBRAZEC } from "@/lib/podruzhkaAiExamples";
 import type { PodruzhkaAiResult, PodruzhkaFeedRow, PodruzhkaNoteBlock } from "@/lib/podruzhkaTypes";
 
 export type NotesBatchIn = {
@@ -14,17 +15,25 @@ type AiJson = {
   error?: string;
 };
 
-const SYSTEM = `Ты эксперт по парфюмерии. Заполняешь поля для фиксированной инфографики Ozon (бренд Подружка).
-Нельзя выдумывать факты. Название аромата (model) и три блока нот — только если их можно подтвердить несколькими источниками.
+const EX = PODRUZHKA_AI_OBRAZEC;
 
-Правила:
-1. model — короткое коммерческое имя аромата (например «212 Sexy»), не полное название SKU. Опирайся на brand name, product name и name.
-2. notes — ровно 3 пары: title (одно слово или короткая фраза ЗАГЛАВНЫМИ на русском, как «ДРЕВЕСНЫЙ») и desc (2–5 слов, строчными, как «тёплый и глубокий»).
-3. Бери семейства/характеры, которые повторяются минимум на 3 независимых сайтах (официальный сайт бренда, Fragrantica, Parfumista и т.п.).
-4. Если model или ноты не подтверждаются — found: false, не заполняй выдумками.
+const SYSTEM = `Ты эксперт по парфюмерии. Заполняешь ТОЛЬКО поля model и три ноты (note 1–3) для инфографики Ozon «Подружка Global» 1080×1350.
+Текст попадёт на карточку крупным шрифтом — стиль должен совпадать с эталоном.
+
+ЭТАЛОН (Nasomatto, образец.xlsx):
+- model: «${EX.model}» (короткое имя аромата, не SKU)
+- note 1: ${EX.excelCells[0]}
+- note 2: ${EX.excelCells[1]}
+- note 3: ${EX.excelCells[2]}
+
+Правила оформления (обязательно):
+1. model — 1–3 слова, коммерческое имя аромата (из product name / name, без бренда и без «мл»).
+2. notes — ровно 3 блока. title: 1–2 слова ЗАГЛАВНЫМИ по-русски (ДРЕВЕСНЫЙ, ПРЯНЫЙ). desc: 2–6 слов, с маленькой буквы, без точки в конце (тёплый и глубокий, пикантный характер).
+3. Ноты — доминирующие семейства/характер, подтверждённые Fragrantica, официальным сайтом бренда, Parfumista и т.п. Не выдумывай редкие ноты.
+4. Если аромат или ноты не находятся в источниках — found: false.
 
 Ответ строго JSON:
-{"found":true,"model":"...","notes":[{"title":"...","desc":"..."},...],"sources":["url1",...]}
+{"found":true,"model":"...","notes":[{"title":"ДРЕВЕСНЫЙ","desc":"тёплый и глубокий"},...],"sources":["url1",...]}
 или {"found":false,"model":"","notes":[],"sources":[],"error":"причина"}`;
 
 function buildUserMessage(row: PodruzhkaFeedRow): string {
@@ -37,11 +46,17 @@ function buildUserMessage(row: PodruzhkaFeedRow): string {
   ].join("\n");
 }
 
+function normalizeDesc(s: string): string {
+  const t = s.trim().replace(/\.$/, "");
+  if (!t) return "";
+  return t.charAt(0).toLowerCase() + t.slice(1);
+}
+
 function parseNotes(raw: AiJson): PodruzhkaNoteBlock[] {
   const notes = Array.isArray(raw.notes) ? raw.notes : [];
   return notes.slice(0, 3).map((n) => ({
     title: String(n.title ?? "").trim().toUpperCase(),
-    desc: String(n.desc ?? "").trim()
+    desc: normalizeDesc(String(n.desc ?? ""))
   }));
 }
 
