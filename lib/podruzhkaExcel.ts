@@ -5,7 +5,13 @@ import {
   type PodruzhkaFeedRow,
   type PodruzhkaNoteBlock
 } from "@/lib/podruzhkaTypes";
-import { cellAsUrl, cellPlainValue, isFoto2Header } from "@/lib/ozonImageExcel";
+import {
+  cellAsUrl,
+  cellPlainValue,
+  isFoto2Header,
+  isFoto3Header,
+  type Foto2ColumnInfo
+} from "@/lib/ozonImageExcel";
 
 export { readWorkbookFromFile, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 
@@ -197,7 +203,7 @@ export function applyFoto2Urls(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaSheetInfo,
   urls: Map<number, string>
-): number {
+): { filled: number; foto2Col: number } {
   const col = ensureFoto2Column(ws, info);
   let n = 0;
   for (const [row, url] of urls) {
@@ -205,5 +211,46 @@ export function applyFoto2Urls(
     ws.getCell(row, col).value = url;
     n++;
   }
-  return n;
+  return { filled: n, foto2Col: col };
+}
+
+/** Для шага 3: foto 2 → Foto 3 (тот же формат, что у OzonImageConverter). */
+export function buildFoto2ColumnInfo(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaSheetInfo
+): Foto2ColumnInfo | null {
+  const foto2Col = ensureFoto2Column(ws, info);
+  const rows: { row: number; url: string }[] = [];
+
+  for (const feed of info.rows) {
+    const url = cellAsUrl(ws.getCell(feed.row, foto2Col).value);
+    if (url) rows.push({ row: feed.row, url });
+  }
+  if (rows.length === 0) return null;
+
+  let foto3Col = foto2Col + 1;
+  const maxCol = ws.columnCount || foto2Col + 5;
+  for (let c = 1; c <= maxCol; c++) {
+    const v = ws.getCell(info.headerRow, c).value;
+    if (isFoto3Header(v) || isFoto3Header(cellPlainValue(v))) {
+      foto3Col = c;
+      break;
+    }
+  }
+
+  return {
+    sheetName: info.sheetName,
+    headerRow: info.headerRow,
+    foto2Col,
+    foto3Col,
+    rows
+  };
+}
+
+export function defaultPodruzhkaDownloadName(
+  baseFileName: string | null,
+  suffix: "notes" | "infographic" | "foto3"
+): string {
+  const base = (baseFileName ?? "feed").replace(/\.xlsx?$/i, "");
+  return `${base}-${suffix}.xlsx`;
 }

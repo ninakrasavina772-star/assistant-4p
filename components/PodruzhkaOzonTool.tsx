@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   homeBtnPrimary,
   homeCard,
@@ -15,6 +15,8 @@ import {
   analyzePodruzhkaWorkbook,
   applyAiResults,
   applyFoto2Urls,
+  buildFoto2ColumnInfo,
+  defaultPodruzhkaDownloadName,
   readAiFromSheet,
   readWorkbookFromFile,
   writeWorkbookToBlob
@@ -151,7 +153,7 @@ export function PodruzhkaOzonTool() {
       applyAiResults(ws, sheetInfo, results);
 
       const blob = await writeWorkbookToBlob(wb);
-      const outName = (fileName ?? "feed").replace(/\.xlsx?$/i, "") + "-notes.xlsx";
+      const outName = defaultPodruzhkaDownloadName(fileName, "notes");
       setResultBlob({ blob, name: outName });
       const skipped = sheetInfo.rows.length - all.length;
       setNotesStats({ ok: ok + skipped, fail });
@@ -240,9 +242,10 @@ export function PodruzhkaOzonTool() {
         );
       }
 
-      applyFoto2Urls(ws, sheetInfo, urls);
+      const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
+      setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
       const blob = await writeWorkbookToBlob(wb);
-      const outName = (fileName ?? "feed").replace(/\.xlsx?$/i, "") + "-infographic.xlsx";
+      const outName = defaultPodruzhkaDownloadName(fileName, "infographic");
       setResultBlob({ blob, name: outName });
       setRenderStats({ ok, fail });
       setStep(3);
@@ -254,14 +257,47 @@ export function PodruzhkaOzonTool() {
     }
   }, [wb, sheetInfo, fileName, previewUrl]);
 
-  const download = useCallback(() => {
-    if (!resultBlob) return;
+  const downloadBlob = useCallback((blob: Blob, name: string) => {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(resultBlob.blob);
-    a.download = resultBlob.name;
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
     a.click();
     URL.revokeObjectURL(a.href);
-  }, [resultBlob]);
+  }, []);
+
+  const download = useCallback(() => {
+    if (!resultBlob) return;
+    downloadBlob(resultBlob.blob, resultBlob.name);
+  }, [resultBlob, downloadBlob]);
+
+  const downloadCurrentExcel = useCallback(
+    async (suffix: "notes" | "infographic" | "current" = "current") => {
+      if (!wb) return;
+      const blob = await writeWorkbookToBlob(wb);
+      const name =
+        suffix === "current"
+          ? (fileName ?? "feed.xlsx")
+          : defaultPodruzhkaDownloadName(fileName, suffix);
+      downloadBlob(blob, name);
+    },
+    [wb, fileName, downloadBlob]
+  );
+
+  const pipeline = useMemo(() => {
+    if (!wb || !sheetInfo) return null;
+    return {
+      workbook: wb,
+      fileName: fileName ?? "feed.xlsx",
+      getFoto2Info: () => {
+        const ws = wb.getWorksheet(sheetInfo.sheetName);
+        if (!ws) return null;
+        return buildFoto2ColumnInfo(ws, sheetInfo);
+      },
+      onDone: (blob: Blob, name: string) => {
+        setResultBlob({ blob, name });
+      }
+    };
+  }, [wb, sheetInfo, fileName]);
 
   const stepBtn = (n: Step, label: string) => (
     <button
@@ -304,7 +340,7 @@ export function PodruzhkaOzonTool() {
         </div>
       </section>
 
-      {(step === 1 || step === 2) && (
+      {wb && sheetInfo && (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>Excel фид</h2>
@@ -340,11 +376,21 @@ export function PodruzhkaOzonTool() {
                 {error}
               </p>
             ) : null}
-            {resultBlob ? (
-              <button type="button" className={homeBtnPrimary} onClick={download}>
-                Скачать {resultBlob.name}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                disabled={busy}
+                onClick={() => void downloadCurrentExcel("current")}
+              >
+                Скачать текущий Excel
               </button>
-            ) : null}
+              {resultBlob ? (
+                <button type="button" className={homeBtnPrimary} onClick={download}>
+                  Скачать {resultBlob.name}
+                </button>
+              ) : null}
+            </div>
           </div>
         </section>
       )}
@@ -384,8 +430,18 @@ export function PodruzhkaOzonTool() {
             </button>
             {notesStats ? (
               <p className="text-sm text-emerald-700">
-                Готово: {notesStats.ok} ok, {notesStats.fail} без данных — скачайте Excel и переходите к шагу 2
+                Готово: {notesStats.ok} ok, {notesStats.fail} без данных — переходите к шагу 2
               </p>
+            ) : null}
+            {wb && notesStats ? (
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy}
+                onClick={() => void downloadCurrentExcel("notes")}
+              >
+                Скачать Excel с нотами
+              </button>
             ) : null}
             <p className="text-xs text-slate-500">
               Добавятся колонки: model, note1_title, note1_desc, … notes_status.
@@ -414,8 +470,30 @@ export function PodruzhkaOzonTool() {
             </button>
             {renderStats ? (
               <p className="text-sm text-emerald-700">
-                Заполнено foto 2: {renderStats.ok}, ошибок: {renderStats.fail}
+                Заполнено foto 2: {renderStats.ok}, ошибок: {renderStats.fail}. Переходите к шагу 3 —
+                файл уже в системе.
               </p>
+            ) : null}
+            {wb ? (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy}
+                  onClick={() => void downloadCurrentExcel("infographic")}
+                >
+                  Скачать Excel с foto 2
+                </button>
+                {resultBlob?.name.includes("infographic") ? (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    onClick={download}
+                  >
+                    {resultBlob.name}
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             {previewUrl ? (
               <div>
@@ -432,7 +510,7 @@ export function PodruzhkaOzonTool() {
         </section>
       )}
 
-      {step === 3 && <OzonImageConverter embedded />}
+      {step === 3 && <OzonImageConverter embedded pipeline={pipeline} />}
     </div>
   );
 }

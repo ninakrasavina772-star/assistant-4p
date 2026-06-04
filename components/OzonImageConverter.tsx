@@ -25,7 +25,17 @@ const EXAMPLE =
 type Mode = "replace" | "rehost";
 type InputKind = "excel" | "list";
 
-export function OzonImageConverter({ embedded }: { embedded?: boolean } = {}) {
+export type OzonPipelineWorkbook = {
+  workbook: import("exceljs").Workbook;
+  fileName: string;
+  getFoto2Info: () => import("@/lib/ozonImageExcel").Foto2ColumnInfo | null;
+  onDone?: (blob: Blob, fileName: string) => void;
+};
+
+export function OzonImageConverter({
+  embedded,
+  pipeline
+}: { embedded?: boolean; pipeline?: OzonPipelineWorkbook | null } = {}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [inputKind, setInputKind] = useState<InputKind>("excel");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -94,26 +104,8 @@ export function OzonImageConverter({ embedded }: { embedded?: boolean } = {}) {
     }
   }, [text, convertOptions]);
 
-  const runExcel = useCallback(async (file: File) => {
-    setBusy(true);
-    setError(null);
-    setRows(null);
-    setResultBlob(null);
-    setExcelStats(null);
-    setProgress("Читаем Excel…");
-
-    try {
-      const wb = await readWorkbookFromFile(file);
-      const info = analyzeWorkbook(wb);
-      if (!info) {
-        setError('Не найден столбец «foto 2» (или «foto2») в первой строке заголовков');
-        return;
-      }
-      if (info.rows.length === 0) {
-        setError("В столбце foto 2 нет ссылок для преобразования");
-        return;
-      }
-
+  const processWorkbook = useCallback(
+    async (wb: import("exceljs").Workbook, info: NonNullable<ReturnType<typeof analyzeWorkbook>>, outName: string) => {
       const urls = info.rows.map((r) => r.url);
       setProgress(`Преобразуем 0 / ${urls.length}…`);
 
@@ -129,20 +121,79 @@ export function OzonImageConverter({ embedded }: { embedded?: boolean } = {}) {
 
       const ok = applyFoto3Column(ws, info, map);
       const blob = await writeWorkbookToBlob(wb);
-      const outName = file.name.replace(/\.xlsx?$/i, "") + "-foto3.xlsx";
 
       setResultBlob({ blob, name: outName });
       setExcelStats({ total: info.rows.length, ok });
       setRows(
         info.rows.map(({ url }) => map.get(url) ?? { input: url, output: "", ok: false, error: "Нет ответа" })
       );
+      pipeline?.onDone?.(blob, outName);
+    },
+    [convertOptions, pipeline]
+  );
+
+  const runExcel = useCallback(
+    async (file: File) => {
+      setBusy(true);
+      setError(null);
+      setRows(null);
+      setResultBlob(null);
+      setExcelStats(null);
+      setProgress("Читаем Excel…");
+
+      try {
+        const wb = await readWorkbookFromFile(file);
+        const info = analyzeWorkbook(wb);
+        if (!info) {
+          setError('Не найден столбец «foto 2» (или «foto2») в первой строке заголовков');
+          return;
+        }
+        if (info.rows.length === 0) {
+          setError("В столбце foto 2 нет ссылок для преобразования");
+          return;
+        }
+
+        const outName = file.name.replace(/\.xlsx?$/i, "") + "-foto3.xlsx";
+        await processWorkbook(wb, info, outName);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка обработки Excel");
+      } finally {
+        setBusy(false);
+        setProgress(null);
+      }
+    },
+    [processWorkbook]
+  );
+
+  const runPipelineExcel = useCallback(async () => {
+    if (!pipeline?.workbook) return;
+    setBusy(true);
+    setError(null);
+    setRows(null);
+    setResultBlob(null);
+    setExcelStats(null);
+    setProgress(null);
+
+    try {
+      const info = pipeline.getFoto2Info();
+      if (!info) {
+        setError("В колонке foto 2 нет ссылок. Сначала завершите шаг 2.");
+        return;
+      }
+      if (info.rows.length === 0) {
+        setError("В столбце foto 2 нет ссылок для преобразования");
+        return;
+      }
+
+      const outName = pipeline.fileName.replace(/\.xlsx?$/i, "") + "-foto3.xlsx";
+      await processWorkbook(pipeline.workbook, info, outName);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка обработки Excel");
     } finally {
       setBusy(false);
       setProgress(null);
     }
-  }, [convertOptions]);
+  }, [pipeline, processWorkbook]);
 
   const onFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -257,8 +308,17 @@ export function OzonImageConverter({ embedded }: { embedded?: boolean } = {}) {
             <h2 className={homeCardTitle}>Шаг 3 — публичные ссылки</h2>
           </div>
           <div className={`${homeCardBody} text-sm text-slate-600`}>
-            Загрузите Excel с колонкой <strong>foto 2</strong> после шага 2 — появится{" "}
-            <strong>Foto 3</strong> с https для Ozon.
+            {pipeline?.workbook ? (
+              <>
+                Используется Excel из шагов 1–2: <strong>{pipeline.fileName}</strong>. Нажмите кнопку
+                ниже — файл заново выбирать не нужно.
+              </>
+            ) : (
+              <>
+                Загрузите Excel с колонкой <strong>foto 2</strong> после шага 2 — появится{" "}
+                <strong>Foto 3</strong> с https для Ozon.
+              </>
+            )}
           </div>
         </section>
       )}
@@ -363,18 +423,41 @@ export function OzonImageConverter({ embedded }: { embedded?: boolean } = {}) {
                 onChange={onFileChange}
               />
               <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  className={homeBtnPrimary}
-                  disabled={busy}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  {busy ? "Обрабатываем…" : "Выбрать Excel"}
-                </button>
-                {fileName ? (
+                {pipeline?.workbook ? (
+                  <button
+                    type="button"
+                    className={homeBtnPrimary}
+                    disabled={busy}
+                    onClick={() => void runPipelineExcel()}
+                  >
+                    {busy ? "Обрабатываем…" : "Создать Foto 3 из текущего Excel"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={homeBtnPrimary}
+                    disabled={busy}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {busy ? "Обрабатываем…" : "Выбрать Excel"}
+                  </button>
+                )}
+                {pipeline?.workbook ? (
+                  <span className="text-sm text-slate-600">{pipeline.fileName}</span>
+                ) : fileName ? (
                   <span className="text-sm text-slate-600">{fileName}</span>
                 ) : null}
               </div>
+              {pipeline?.workbook ? (
+                <button
+                  type="button"
+                  className="text-xs font-medium text-sky-700 underline"
+                  disabled={busy}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  Или загрузить другой Excel
+                </button>
+              ) : null}
               <p className="text-xs text-slate-500">
                 Нужен столбец <strong>foto 2</strong>. Рядом появится <strong>Foto 3</strong> с https-ссылками.
                 Все остальные колонки (name, foto, ml, картинки…) остаются на месте.
