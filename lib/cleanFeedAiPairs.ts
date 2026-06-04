@@ -1,4 +1,4 @@
-import { buildAiCandidatesAmongNovelties } from "./cleanNovelties";
+import { buildAiCandidatesAmongNovelties } from "./cleanNoveltiesAi";
 import { dupPairKey, type DupPairRefineIn } from "./openaiDupRefine";
 import { toCompareProduct } from "./product";
 import type {

@@ -128,7 +128,7 @@ import {
   homeInput,
 } from "@/components/homeTheme";
 import { RubricCascadeSelect } from "@/components/RubricCascadeSelect";
-import { buildAiCandidatesAmongNovelties } from "@/lib/cleanNovelties";
+import { buildAiCandidatesAmongNovelties } from "@/lib/cleanNoveltiesAi";
 import {
   buildCleanFeedAlgorithmPairKeys,
   cleanFeedAiScopeBreakdown,
