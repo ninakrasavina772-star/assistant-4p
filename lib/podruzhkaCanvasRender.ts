@@ -5,7 +5,7 @@ import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { fitProductPng } from "@/lib/podruzhkaImageProcess";
-import { getResizedTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
+import { getTemplateBgBuffer, getHeaderPlaqueBuffer } from "@/lib/podruzhkaTemplateAssets";
 import { PODRUZHKA_LAYOUT, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 
@@ -108,57 +108,23 @@ function drawFilledBar(
   ctx.fillRect(x, y, w, h);
 }
 
-function roundRectPath(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-): void {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-/** Шаблон: только фон + петля. Шапку из PNG затираем — рисуем одну плашку в конце */
+/** Слой 0: фон + петля без шапки (template-bg.png) */
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, W, H);
-
-  const buf = await getResizedTemplateBuffer(W, H);
+  const buf = await getTemplateBgBuffer();
   const base = await loadImage(buf);
   ctx.drawImage(base, 0, 0, W, H);
-
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, W, S.headerMaskHeight);
 }
 
-function drawHeaderSolid(ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>): void {
+/** Слой шапки: PNG из шаблона (header.png), поверх всего */
+async function overlayHeader(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
+): Promise<void> {
   const hdr = S.header;
-  const r = hdr.h / 2;
-
-  ctx.fillStyle = "#000000";
-  roundRectPath(ctx, hdr.x, hdr.y, hdr.w, hdr.h, r);
-  ctx.fill();
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "600 17px MontserratBold, Montserrat, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("✈   подружка Global", hdr.x + hdr.w / 2, hdr.y + hdr.h / 2 + 2);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "alphabetic";
+  const buf = await getHeaderPlaqueBuffer();
+  const img = await loadImage(buf);
+  ctx.drawImage(img, hdr.x, hdr.y, hdr.w, hdr.h);
 }
 
 /** Фиксированная сетка как в референсе — ноты не «плывут» */
@@ -320,7 +286,7 @@ export async function renderInfographicDetailed(
   overlayDynamicText(ctx, opts.data);
   const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
   overlayMl(ctx, opts.data.ml);
-  drawHeaderSolid(ctx);
+  await overlayHeader(ctx);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
