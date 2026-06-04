@@ -95,6 +95,7 @@ export function PodruzhkaOzonTool() {
     visionNote: string | null;
     skipped: { row: number; brand: string; reasons: string }[];
     noFotoRows: { row: number; brand: string; error: string }[];
+    layoutWarnings: { row: number; brand: string; warning: string }[];
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
@@ -380,6 +381,7 @@ export function PodruzhkaOzonTool() {
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
     const noFotoRows: { row: number; brand: string; error: string }[] = [];
+    const layoutWarnings: { row: number; brand: string; warning: string }[] = [];
 
     for (const row of sheetInfo.rows) {
       const el = getRowRenderEligibility(ws, sheetInfo, row);
@@ -429,6 +431,8 @@ export function PodruzhkaOzonTool() {
                 error?: string;
                 fotoLoaded?: boolean;
                 fotoError?: string;
+                layoutWarning?: string;
+                layoutValidationOk?: boolean;
                 visionUsed?: boolean;
                 visionScore?: number;
                 visionReasoning?: string;
@@ -464,6 +468,13 @@ export function PodruzhkaOzonTool() {
               }
               urls.set(row.row, data.url);
               ok++;
+              if (data.layoutWarning) {
+                layoutWarnings.push({
+                  row: row.row,
+                  brand: row.brandName || row.name.slice(0, 30),
+                  warning: data.layoutWarning
+                });
+              }
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 if (data.visionError) {
@@ -484,7 +495,16 @@ export function PodruzhkaOzonTool() {
 
       const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
-      setRenderStats({ ok, fail, noFoto, sampleFotoError, visionNote, skipped, noFotoRows });
+      setRenderStats({
+        ok,
+        fail,
+        noFoto,
+        sampleFotoError,
+        visionNote,
+        skipped,
+        noFotoRows,
+        layoutWarnings
+      });
       setInfographicDone(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка инфографики");
@@ -750,6 +770,21 @@ export function PodruzhkaOzonTool() {
                       {renderStats.skipped.map((s) => (
                         <li key={s.row}>
                           строка {s.row} — {s.brand}: {s.reasons}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {renderStats.layoutWarnings.length > 0 ? (
+                  <div className="text-sm text-slate-700">
+                    <p>
+                      Сохранено с замечанием по композиции ({renderStats.layoutWarnings.length}
+                      ):
+                    </p>
+                    <ul className="mt-1 list-inside list-disc">
+                      {renderStats.layoutWarnings.map((s) => (
+                        <li key={s.row}>
+                          строка {s.row} — {s.brand}
                         </li>
                       ))}
                     </ul>

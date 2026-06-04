@@ -115,10 +115,10 @@ function resolveModelFontSize(
 ): { size: number; lines: string[] } {
   const maxW = L.model.w;
   const maxH = L.model.h;
-  const ratio = S.fonts.model.ratioOfBrand ?? 0.75;
+  const ratio = S.fonts.model.ratioOfBrand ?? 0.68;
   const target = Math.round(brandSize * ratio);
-  const cap = Math.min(S.fonts.model.max, Math.round(brandSize * 0.85));
-  const minSize = Math.max(S.fonts.model.min, target);
+  const cap = Math.min(S.fonts.model.max, Math.round(brandSize * 0.72));
+  const minSize = Math.max(S.fonts.model.min, Math.round(brandSize * 0.62));
 
   for (let size = cap; size >= minSize; size -= 2) {
     const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
@@ -293,9 +293,13 @@ function drawProductShadow(
   width: number
 ): void {
   ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.14)";
+  ctx.beginPath();
+  ctx.ellipse(centerX, baseY + 6, width * 0.44, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
   ctx.beginPath();
-  ctx.ellipse(centerX, baseY + 4, width * 0.36, 10, 0, 0, Math.PI * 2);
+  ctx.ellipse(centerX, baseY + 3, width * 0.38, 11, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -412,14 +416,12 @@ async function renderOnce(
   }
 
   const placement = resolved.placement;
-  if (!placement?.validationOk) {
-    const msg = formatValidationFailure(placement?.failureMessages ?? []);
+  if (!placement?.fit?.buffer?.length) {
     return {
       buffer: Buffer.alloc(0),
       fotoLoaded: true,
       layoutValidationOk: false,
-      layoutValidationPasses: placement?.validationPasses,
-      layoutValidationError: msg
+      layoutValidationError: formatValidationFailure(placement?.failureMessages ?? [])
     };
   }
 
@@ -429,8 +431,8 @@ async function renderOnce(
 
   const placementFinal = await resolveProductPlacement(data.fotoUrl, textEst, adj);
   const finalPlacement = placementFinal.placement;
-  if (!finalPlacement?.validationOk) {
-    const msg = formatValidationFailure(finalPlacement?.failureMessages ?? []);
+  if (!finalPlacement?.fit?.buffer?.length) {
+    const msg = formatValidationFailure(finalPlacement?.failureMessages ?? ["нет placement"]);
     return {
       buffer: Buffer.alloc(0),
       fotoLoaded: true,
@@ -439,6 +441,10 @@ async function renderOnce(
       layoutValidationError: msg
     };
   }
+
+  const validationWarning = finalPlacement.validationOk
+    ? undefined
+    : formatValidationFailure(finalPlacement.failureMessages);
 
   await drawTemplateBase(ctx);
   overlayDynamicText(ctx, data, Lfinal, adj);
@@ -450,8 +456,9 @@ async function renderOnce(
   return {
     buffer,
     fotoLoaded: true,
-    layoutValidationOk: true,
-    layoutValidationPasses: finalPlacement.validationPasses
+    layoutValidationOk: finalPlacement.validationOk,
+    layoutValidationPasses: finalPlacement.validationPasses,
+    layoutValidationError: validationWarning
   };
 }
 

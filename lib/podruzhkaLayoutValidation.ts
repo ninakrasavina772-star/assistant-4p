@@ -227,7 +227,7 @@ const BASE_ADJ: VisionLayoutAdjustment = {
   productTopYOffset: 0,
   productBottomYOffset: 0,
   productLeftOffset: 0,
-  productScaleMultiplier: 1.12,
+  productScaleMultiplier: 1.22,
   brandFontDelta: 0,
   modelFontDelta: 0
 };

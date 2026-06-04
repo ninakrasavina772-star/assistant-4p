@@ -50,10 +50,8 @@ export function computeTextFlowLayout(input: {
 
   const accentY = modelLastBaseline + G.afterModel + (input.accentYOffset ?? 0);
   const flowNotesStart = accentY + LR.accentBar.h + G.afterAccentToNotes;
-  const notesStartY = Math.max(
-    LR.blocks.notes.y,
-    flowNotesStart + (input.notesStartYOffset ?? 0)
-  );
+  /** CH: ноты сразу под акцентом, без принудительного Y=668 */
+  const notesStartY = flowNotesStart + (input.notesStartYOffset ?? 0);
 
   return {
     brandTopY,

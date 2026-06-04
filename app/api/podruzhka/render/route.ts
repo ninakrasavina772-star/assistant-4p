@@ -90,12 +90,10 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!rendered.layoutValidationOk || rendered.buffer.length === 0) {
+    if (!rendered.buffer.length) {
       return NextResponse.json(
         {
-          error:
-            rendered.layoutValidationError ??
-            "Композиция не соответствует эталону Carolina Herrera",
+          error: rendered.layoutValidationError ?? "Не удалось собрать карточку",
           layoutValidationOk: false,
           layoutValidationPasses: rendered.layoutValidationPasses
         },
@@ -110,6 +108,10 @@ export async function POST(req: Request) {
       ok: true,
       url,
       fotoLoaded: rendered.fotoLoaded,
+      layoutValidationOk: rendered.layoutValidationOk ?? true,
+      ...(rendered.layoutValidationError
+        ? { layoutWarning: rendered.layoutValidationError }
+        : {}),
       ...(rendered.fotoError ? { fotoError: rendered.fotoError } : {}),
       ...(rendered.visionUsed
         ? {

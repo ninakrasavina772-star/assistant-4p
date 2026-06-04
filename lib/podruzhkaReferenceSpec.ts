@@ -13,12 +13,12 @@ export const PODRUZHKA_REFERENCE = {
     separator: "#D9D9D9"
   },
   gaps: {
-    /** CH: заметный зазор под чёрной плашкой (шапка в PNG может быть выше блока 85px) */
     headerToBrandTop: 168,
-    afterBrand: 20,
-    afterProductType: 10,
-    afterModel: 12,
-    afterAccentToNotes: 40
+    /** CH: заметный зазор бренд → «духи» */
+    afterBrand: 38,
+    afterProductType: 14,
+    afterModel: 14,
+    afterAccentToNotes: 22
   },
   blocks: {
     header: { x: 250, y: 35, w: 500, h: 85 },
@@ -33,7 +33,7 @@ export const PODRUZHKA_REFERENCE = {
     /** CH-эталон: крупный, но товар всё равно доминирует */
     brand: { max: 76, min: 52, weight: 800, maxLines: 2 },
     productType: { size: 22, weight: 400 },
-    model: { max: 64, min: 48, weight: 800, maxLines: 2, ratioOfBrand: 0.75 },
+    model: { max: 58, min: 44, weight: 800, maxLines: 2, ratioOfBrand: 0.68 },
     noteTitle: { max: 22, min: 18, weight: 700 },
     noteDesc: { max: 16, min: 14, weight: 400 },
     ml: { max: 32, min: 26, weight: 500, italic: true }
@@ -52,7 +52,7 @@ export const PODRUZHKA_REFERENCE = {
     bottomAlignY: 1163,
     heightRatioMin: 0.48,
     heightRatioMax: 0.58,
-    heightRatioTarget: 0.55,
+    heightRatioTarget: 0.56,
     widthRatioMin: 0.5,
     widthRatioTarget: 0.55,
     narrowAspectBoost: 1.28,
@@ -65,7 +65,7 @@ export const PODRUZHKA_REFERENCE = {
     /** product_area >= brand_area * N */
     productVsBrandAreaMultiplier: 2,
     /** product_area >= textArea * N */
-    productVsTextAreaMultiplier: 1.5,
+    productVsTextAreaMultiplier: 1.35,
     gapAboveVolumeMinPx: 20,
     gapAboveVolumeMaxPx: 50,
     referenceEmptyRightPx: 28,
