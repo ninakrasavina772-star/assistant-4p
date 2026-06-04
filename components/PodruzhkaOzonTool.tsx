@@ -37,6 +37,7 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
+import { resolveProductTypeForCard } from "@/lib/podruzhkaProductType";
 import type { PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
 
@@ -421,7 +422,11 @@ export function PodruzhkaOzonTool() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   brandName: row.brandName,
-                  productType: row.productType,
+                  productType: resolveProductTypeForCard({
+                    productType: row.productType,
+                    productName: row.productName,
+                    name: row.name
+                  }),
                   model: ai.model,
                   ml: row.ml,
                   fotoUrl: row.foto,
@@ -563,9 +568,9 @@ export function PodruzhkaOzonTool() {
             распознаются сами (name, brand name, foto, note 1…).
           </p>
           <p>
-            <strong>2.</strong> AI заполняет <strong>model</strong>, <strong>note 1–3</strong> и при
-            ошибке в таблице правит <strong>product_type</strong> (не оставляет голое «духи») по
-            образцу (как Nasomatto Pardon) — обязательно перед инфографикой.
+            <strong>2.</strong> AI заполняет <strong>model</strong> и <strong>note 1–3</strong> по
+            образцу (как Nasomatto Pardon). Тип на карточке — из колонки <strong>product_type</strong>{" "}
+            или по <strong>name</strong> / <strong>product name</strong> (Excel не меняется).
           </p>
           <p>
             <strong>3.</strong> Инфографика 1080×1350 → ссылки в <strong>foto 2</strong>.
@@ -664,8 +669,7 @@ export function PodruzhkaOzonTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              <strong>model</strong>, <strong>note 1–3</strong> и при необходимости исправленный{" "}
-              <strong>product_type</strong> пишет AI — в
+              <strong>model</strong> и <strong>note 1–3</strong> пишет AI — в
               формате образца: заголовок ноты ЗАГЛАВНЫМИ, описание с маленькой буквы (например «ПРЯНЫЙ
               пикантный характер»). Без этого шага инфографика будет пустой или кривой.
             </p>

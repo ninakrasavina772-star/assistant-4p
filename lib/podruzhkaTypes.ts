@@ -21,8 +21,6 @@ export type PodruzhkaAiResult = {
   model: string;
   notes: PodruzhkaNoteBlock[];
   sources: string[];
-  /** Исправленный product_type для серой строки (если в таблице ошибка) */
-  productTypeCorrected?: string;
   error?: string;
 };
 

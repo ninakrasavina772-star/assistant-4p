@@ -360,14 +360,9 @@ export function applyAiResults(
   const aiCols = ensureAiColumns(ws, info.headerRow);
   let written = 0;
 
-  const productTypeCol = info.mapping.productType;
-
   for (const r of results) {
     const row = r.row;
     if (aiCols.model) ws.getCell(row, aiCols.model).value = r.model;
-    if (productTypeCol && r.productTypeCorrected) {
-      ws.getCell(row, productTypeCol).value = r.productTypeCorrected;
-    }
     for (let i = 0; i < 3; i++) {
       writeNoteBlock(ws, row, aiCols, (i + 1) as 1 | 2 | 3, r.notes[i]);
     }
