@@ -13,8 +13,6 @@ const { w: W, h: H } = PODRUZHKA_SIZE;
 const L = PODRUZHKA_LAYOUT;
 const C = S.colors;
 
-const LOGO_PATH = path.join(process.cwd(), "public", "podruzhka", "logo-global.png");
-
 let fontsReady = false;
 
 function ensureFonts(): void {
@@ -131,47 +129,28 @@ function roundRectPath(
   ctx.closePath();
 }
 
+/** Шаблон: только фон + петля. Шапку из PNG затираем — рисуем одну плашку в конце */
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
   const buf = await getResizedTemplateBuffer(W, H);
   const base = await loadImage(buf);
   ctx.drawImage(base, 0, 0, W, H);
 
-  const hdr = S.header;
   ctx.fillStyle = C.bg;
-  ctx.fillRect(hdr.x - 20, hdr.y - 12, hdr.w + 40, hdr.h + 24);
-
-  const fadeX = Math.round(W * S.ratios.loopFadeX);
-  ctx.fillStyle = `rgba(240, 240, 240, ${S.ratios.loopFadeOpacity})`;
-  ctx.fillRect(fadeX, S.ratios.loopFadeY, W - fadeX, H - S.ratios.loopFadeY - 100);
+  ctx.fillRect(0, 0, W, S.headerMaskHeight);
 }
 
-/** Чистая плашка из Figma (чёрный pill), без артефактов шаблона */
-async function drawHeaderSolid(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
-): Promise<void> {
+function drawHeaderSolid(ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>): void {
   const hdr = S.header;
   const r = hdr.h / 2;
 
   ctx.fillStyle = "#000000";
   roundRectPath(ctx, hdr.x, hdr.y, hdr.w, hdr.h, r);
   ctx.fill();
-
-  if (fs.existsSync(LOGO_PATH)) {
-    try {
-      const logoBuf = await fs.promises.readFile(LOGO_PATH);
-      const logo = await loadImage(logoBuf);
-      const maxW = hdr.w - 40;
-      const scale = Math.min(maxW / logo.width, (hdr.h - 16) / logo.height, 1);
-      const lw = logo.width * scale;
-      const lh = logo.height * scale;
-      ctx.drawImage(logo, hdr.x + (hdr.w - lw) / 2, hdr.y + (hdr.h - lh) / 2, lw, lh);
-      return;
-    } catch {
-      /* fallback text */
-    }
-  }
 
   ctx.fillStyle = "#ffffff";
   ctx.font = "600 17px MontserratBold, Montserrat, sans-serif";
@@ -182,11 +161,11 @@ async function drawHeaderSolid(
   ctx.textBaseline = "alphabetic";
 }
 
-/** Вертикальный поток как в Figma: розовая черта сразу после модели (не между строками) */
+/** Фиксированная сетка как в референсе — ноты не «плывут» */
 function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   data: PodruzhkaInfographicData
-): number {
+): void {
   const x = L.textX;
   const modelSize = S.fonts.model.size;
   const typeSize = S.fonts.productType.size;
@@ -194,12 +173,11 @@ function overlayDynamicText(
   const { size: brandSize, lines: brandLines } = resolveBrandFontSize(ctx, data.brandName);
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
-  let y = L.textStartY + brandSize;
+  let brandBaseline = L.brand.y + brandSize;
   for (const line of brandLines) {
-    ctx.fillText(line, x, y);
-    y += Math.round(brandSize * 1.05);
+    ctx.fillText(line, x, brandBaseline);
+    brandBaseline += Math.round(brandSize * 1.05);
   }
-  y += S.gaps.afterBrand;
 
   ctx.fillStyle = C.muted;
   ctx.font = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
@@ -211,21 +189,19 @@ function overlayDynamicText(
     1
   )[0];
   if (typeLine) {
-    ctx.fillText(typeLine, x, y + typeSize);
-    y += typeSize + S.gaps.afterType;
+    ctx.fillText(typeLine, L.productType.x, L.productType.y + typeSize);
   }
 
   ctx.fillStyle = C.text;
   ctx.font = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
   const modelLines = wrapLines(ctx, data.model, L.model.w, ctx.font, S.fonts.model.maxLines);
+  let modelBaseline = L.model.y + modelSize;
   for (const line of modelLines) {
-    ctx.fillText(line, x, y + modelSize);
-    y += Math.round(modelSize * 1.08);
+    ctx.fillText(line, L.model.x, modelBaseline);
+    modelBaseline += Math.round(modelSize * 1.08);
   }
-  y += S.gaps.afterModel;
 
-  drawFilledBar(ctx, S.accentBar.x, y, S.accentBar.w, S.accentBar.h, C.accent);
-  y += S.accentBar.h + S.gaps.afterAccent;
+  drawFilledBar(ctx, L.accent.x, L.accent.y, L.accent.w, L.accent.h, C.accent);
 
   const fNoteTitle = `700 ${S.fonts.noteTitle.size}px MontserratBold, Montserrat, sans-serif`;
   const fNoteDesc = `400 ${S.fonts.noteDesc.size}px Montserrat, NotoSans, sans-serif`;
@@ -233,22 +209,21 @@ function overlayDynamicText(
 
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i]!;
-    const blockY = y + i * L.notes.blockH;
+    const blockY = L.notes.startY + i * L.notes.blockH;
 
     ctx.fillStyle = C.accent;
     ctx.font = fNoteTitle;
-    ctx.fillText(n.title.toUpperCase(), L.notes.x, blockY + S.fonts.noteTitle.size);
+    ctx.fillText(n.title.toUpperCase(), L.notes.x, blockY + S.noteTitleDy);
 
     ctx.fillStyle = C.muted;
     ctx.font = fNoteDesc;
-    ctx.fillText(n.desc, L.notes.x, blockY + S.noteDescOffset);
+    ctx.fillText(n.desc, L.notes.x, blockY + S.noteDescDy);
 
     if (i < 2) {
-      drawFilledBar(ctx, L.notes.x, blockY + L.notes.blockH - 1, L.separator.width, 1, C.separator);
+      const sepY = blockY + L.notes.blockH - 10;
+      drawFilledBar(ctx, L.notes.x, sepY, L.separator.width, 1, C.separator);
     }
   }
-
-  return y + notes.length * L.notes.blockH;
 }
 
 function drawProductShadow(
@@ -258,9 +233,9 @@ function drawProductShadow(
   width: number
 ): void {
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.07)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.06)";
   ctx.beginPath();
-  ctx.ellipse(centerX, baseY + 6, width * 0.38, 12, 0, 0, Math.PI * 2);
+  ctx.ellipse(centerX, baseY + 4, width * 0.36, 10, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -282,7 +257,8 @@ async function overlayProductPhoto(
       productBuf,
       zone.w,
       availH,
-      S.ratios.productFillHeight
+      S.product.fillHeight,
+      S.product.minHeightRatio
     );
 
     const prodImg = await loadImage(buffer);
@@ -344,7 +320,7 @@ export async function renderInfographicDetailed(
   overlayDynamicText(ctx, opts.data);
   const foto = await overlayProductPhoto(ctx, opts.data.fotoUrl);
   overlayMl(ctx, opts.data.ml);
-  await drawHeaderSolid(ctx);
+  drawHeaderSolid(ctx);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();

@@ -1,29 +1,33 @@
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 
-const { w: W, h: H } = S.size;
-const R = S.ratios;
+const { w: W } = S.size;
 
 export const PODRUZHKA_SIZE = S.size;
 
 export const PODRUZHKA_LAYOUT = {
   textX: S.textX,
-  textStartY: S.textStartY,
   brand: {
     x: S.textX,
-    y: S.textStartY,
-    w: Math.round(W * R.brandMaxWidth),
-    h: Math.round(H * R.brandMaxHeight)
+    y: S.fixed.brandY,
+    w: Math.round(W * S.ratios.brandMaxWidth),
+    h: Math.round(S.size.h * S.ratios.brandMaxHeight)
   },
-  productType: { x: S.textX, w: Math.round(W * 0.46) },
-  model: { x: S.textX, w: Math.round(W * 0.46) },
-  notes: { x: S.textX, w: 300, blockH: S.noteBlockHeight },
+  productType: { x: S.textX, y: S.fixed.productTypeY, w: Math.round(W * 0.46) },
+  model: { x: S.textX, y: S.fixed.modelY, w: Math.round(W * 0.46) },
+  accent: { x: S.accentBar.x, y: S.fixed.accentY, w: S.accentBar.w, h: S.accentBar.h },
+  notes: {
+    x: S.textX,
+    startY: S.fixed.notesStartY,
+    w: 300,
+    blockH: S.noteBlockHeight
+  },
   ml: S.ml,
   mlAccent: S.mlAccent,
   product: {
-    x: Math.round(W * R.productX),
-    y: Math.round(H * R.productY),
-    w: Math.round(W * R.productW),
-    bottom: H - S.margins.bottom
+    x: Math.round(W * S.product.xRatio),
+    y: S.product.topY,
+    w: Math.round(W * S.product.wRatio),
+    bottom: S.product.bottomY
   },
   separator: { width: S.separatorWidth }
 } as const;

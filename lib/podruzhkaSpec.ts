@@ -1,22 +1,17 @@
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 
-/** Макет 1000×1400 — копия пропорций AI-референса */
 export const PODRUZHKA_SPEC = {
   size: R.size,
   colors: R.colors,
   header: R.header,
-  margins: { bottom: R.product.bottomMargin },
+  headerMaskHeight: R.headerMaskHeight,
+  margins: { bottom: R.size.h - R.product.bottomY },
   ratios: {
     brandMaxWidth: R.text.brandMaxWidthRatio,
-    brandMaxHeight: R.text.brandMaxHeightRatio,
-    productX: R.product.xRatio,
-    productY: R.product.yRatio,
-    productW: R.product.wRatio,
-    productFillHeight: R.product.fillHeight,
-    loopFadeX: 0.48,
-    loopFadeY: 200,
-    loopFadeOpacity: 0.68
+    brandMaxHeight: R.text.brandMaxHeightRatio
   },
+  product: R.product,
+  fixed: R.text,
   gaps: R.gaps,
   fonts: {
     brand: {
@@ -32,10 +27,10 @@ export const PODRUZHKA_SPEC = {
     ml: { size: 30, weight: 500, italic: true }
   },
   accentBar: R.accentBar,
-  textStartY: R.text.startY,
   textX: R.text.x,
   noteBlockHeight: R.text.noteBlockHeight,
-  noteDescOffset: 48,
+  noteTitleDy: R.text.noteTitleDy,
+  noteDescDy: R.text.noteDescDy,
   separatorWidth: R.separatorWidth,
   ml: { x: R.text.x + 5, y: R.text.mlY },
   mlAccent: { x: 60, y: R.text.mlAccentY, w: 50, h: 6 }

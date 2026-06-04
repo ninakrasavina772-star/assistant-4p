@@ -1,6 +1,5 @@
 import sharp from "sharp";
 
-/** Убирает белый / почти белый фон Ozon */
 export async function stripNearWhiteBackground(
   input: Buffer,
   threshold = 238
@@ -37,15 +36,13 @@ async function trimTransparent(input: Buffer): Promise<Buffer> {
   }
 }
 
-/**
- * contain + upscaling: обрезка пустых полей, приоритет высоты (~97% зоны).
- * Без trim маленький флакон в центре большого PNG Ozon не увеличивался.
- */
+/** contain + upscale; минимальная высота — чтобы флакон всегда крупный у низа */
 export async function fitProductPng(
   input: Buffer,
   maxW: number,
   maxH: number,
-  fillHeightRatio = 0.97
+  fillHeightRatio = 0.98,
+  minHeightRatio = 0.88
 ): Promise<{ buffer: Buffer; width: number; height: number }> {
   const stripped = await stripNearWhiteBackground(input);
   const trimmed = await trimTransparent(stripped);
@@ -54,9 +51,21 @@ export async function fitProductPng(
   const srcH = meta.height ?? 1;
 
   const targetH = Math.round(maxH * fillHeightRatio);
-  const scale = Math.min(targetH / srcH, maxW / srcW);
-  const width = Math.max(1, Math.round(srcW * scale));
-  const height = Math.max(1, Math.round(srcH * scale));
+  const minH = Math.round(maxH * minHeightRatio);
+  let scale = Math.min(targetH / srcH, maxW / srcW);
+  let width = Math.max(1, Math.round(srcW * scale));
+  let height = Math.max(1, Math.round(srcH * scale));
+
+  if (height < minH) {
+    scale = minH / srcH;
+    width = Math.round(srcW * scale);
+    height = minH;
+    if (width > maxW) {
+      const s = maxW / width;
+      width = maxW;
+      height = Math.max(1, Math.round(height * s));
+    }
+  }
 
   const buffer = await sharp(trimmed)
     .resize(width, height, { fit: "inside" })
