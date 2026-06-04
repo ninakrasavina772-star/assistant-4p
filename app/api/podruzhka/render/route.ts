@@ -3,7 +3,7 @@ import { renderInfographicDetailed } from "@/lib/podruzhkaCanvasRender";
 import { uploadOzonImage, getOzonStorageBackend } from "@/lib/ozonImageStorage";
 import type { PodruzhkaInfographicData, PodruzhkaNoteBlock } from "@/lib/podruzhkaTypes";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 type Body = {
   brandName?: string;
@@ -39,7 +39,10 @@ export async function POST(req: Request) {
   const ml = String(body.ml ?? "").trim();
   const fotoUrl = String(body.fotoUrl ?? "").trim();
   const notes = Array.isArray(body.notes) ? body.notes.slice(0, 3) : [];
-  const openaiKey = typeof body.openaiKey === "string" ? body.openaiKey.trim() : undefined;
+  const openaiKey =
+    (typeof body.openaiKey === "string" ? body.openaiKey.trim() : "") ||
+    process.env.OPENAI_API_KEY?.trim() ||
+    undefined;
 
   if (!brandName || !model || notes.length < 3) {
     return NextResponse.json(
@@ -76,7 +79,15 @@ export async function POST(req: Request) {
       url,
       fotoLoaded: rendered.fotoLoaded,
       ...(rendered.fotoError ? { fotoError: rendered.fotoError } : {}),
-      ...(rendered.visionUsed ? { visionUsed: true, visionReasoning: rendered.visionReasoning } : {})
+      ...(rendered.visionUsed
+        ? {
+            visionUsed: true,
+            visionPasses: rendered.visionPasses,
+            visionScore: rendered.visionScore,
+            visionReasoning: rendered.visionReasoning
+          }
+        : {}),
+      ...(rendered.visionError ? { visionError: rendered.visionError } : {})
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка рендера";

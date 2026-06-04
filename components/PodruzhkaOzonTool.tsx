@@ -42,7 +42,8 @@ import type ExcelJS from "exceljs";
 const SK_OPENAI = "fp_podruzhka_openai_key";
 const SK_OPENAI_REM = "fp_podruzhka_openai_remember";
 const NOTES_CHUNK = 3;
-const RENDER_CHUNK = 2;
+/** С Vision — по 1 карточке (дольше, но не упираемся в таймаут API) */
+const RENDER_CHUNK = 1;
 
 type Step = 1 | 2 | 3;
 
@@ -90,6 +91,7 @@ export function PodruzhkaOzonTool() {
     fail: number;
     noFoto: number;
     sampleFotoError: string | null;
+    visionNote: string | null;
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
@@ -371,6 +373,7 @@ export function PodruzhkaOzonTool() {
     let fail = 0;
     let noFoto = 0;
     let sampleFotoError: string | null = null;
+    let visionNote: string | null = null;
     const todo: typeof sheetInfo.rows = [];
 
     for (const row of sheetInfo.rows) {
@@ -416,6 +419,10 @@ export function PodruzhkaOzonTool() {
                 error?: string;
                 fotoLoaded?: boolean;
                 fotoError?: string;
+                visionUsed?: boolean;
+                visionScore?: number;
+                visionReasoning?: string;
+                visionError?: string;
               };
               if (!res.ok || !data.url) {
                 fail++;
@@ -428,6 +435,16 @@ export function PodruzhkaOzonTool() {
                 if (!sampleFotoError && data.fotoError) sampleFotoError = data.fotoError;
               }
               if (!previewUrl) setPreviewUrl(data.url);
+              if (!visionNote) {
+                if (data.visionError) {
+                  visionNote = `AI-подгонка: ${data.visionError}`;
+                } else if (data.visionUsed) {
+                  visionNote = `AI-подгонка к референсу: оценка ${data.visionScore ?? "?"}/10 — ${data.visionReasoning ?? ""}`;
+                } else if (!openaiKey.trim()) {
+                  visionNote =
+                    "AI-подгонка не запускалась: укажите OpenAI API key (шаг 1) для сравнения с референсом.";
+                }
+              }
             } catch {
               fail++;
             }
@@ -437,7 +454,7 @@ export function PodruzhkaOzonTool() {
 
       const { foto2Col } = applyFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
-      setRenderStats({ ok, fail, noFoto, sampleFotoError });
+      setRenderStats({ ok, fail, noFoto, sampleFotoError, visionNote });
       setInfographicDone(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка инфографики");
@@ -445,7 +462,7 @@ export function PodruzhkaOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, notesDone, previewUrl]);
+  }, [wb, sheetInfo, notesDone, previewUrl, openaiKey]);
 
   const pipeline = useMemo(() => {
     if (!wb || !sheetInfo || !infographicDone) return null;
@@ -670,8 +687,9 @@ export function PodruzhkaOzonTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-xs text-slate-500">
-              Каждая строка — новая карточка: brand name, product_type, model, note 1–3, ml, foto →
-              JPG в <strong>foto 2</strong>.
+              Шаблон + данные из Excel. С ключом OpenAI каждая карточка сравнивается с{" "}
+              <strong>референсом</strong> (GPT-4o Vision, до 2 проходов): подгоняются отступы текста,
+              размер и положение фото. Дольше, но ближе к образцу Xerjoff.
             </p>
             <button
               type="button"
@@ -689,6 +707,9 @@ export function PodruzhkaOzonTool() {
                   {renderStats.fail > 0 ? `, ошибок: ${renderStats.fail}` : ""}
                   {renderStats.noFoto > 0 ? `, без фото: ${renderStats.noFoto}` : ""}.
                 </p>
+                {renderStats.visionNote ? (
+                  <p className="text-sm text-slate-700">{renderStats.visionNote}</p>
+                ) : null}
                 {renderStats.noFoto > 0 ? (
                   <p className="text-sm text-amber-900">
                     Проверьте сопоставление <strong>Фото товара</strong> и ссылки в Excel.

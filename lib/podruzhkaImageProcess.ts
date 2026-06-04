@@ -38,51 +38,53 @@ async function trimTransparent(input: Buffer): Promise<Buffer> {
 
 export type FitResult = {
   buffer: Buffer;
-  /** Rendered width — может быть шире зоны для landscape продуктов */
   width: number;
   height: number;
-  /** true если ширина превышает maxW (нужна clip-зона при рендере) */
   overflowsWidth: boolean;
 };
 
 /**
- * Fit product into zone:
- * - Для portrait/square: contain внутри maxW × (maxH * fillHeightRatio)
- * - Для landscape (широкие коробки): масштаб по высоте minHeightRatio,
- *   разрешаем ширину больше maxW — рендерер сам отрежет края при drawImage
+ * Масштаб товара под референс:
+ * - portrait / square: contain в maxW × maxH
+ * - landscape (коробки): по высоте minHeightRatio, ширина может выходить за maxW (clip при рендере)
  */
 export async function fitProductPng(
   input: Buffer,
   maxW: number,
   maxH: number,
-  fillHeightRatio = 0.98,
-  minHeightRatio = 0.88
+  fillHeightRatio = 0.96,
+  minHeightRatio = 0.92
 ): Promise<FitResult> {
   const stripped = await stripNearWhiteBackground(input);
   const trimmed = await trimTransparent(stripped);
   const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
+  const aspect = srcW / srcH;
 
   const targetH = Math.round(maxH * fillHeightRatio);
   const minH = Math.round(maxH * minHeightRatio);
+  const isLandscape = aspect > 1.15;
 
-  // Шаг 1: стандартный contain (не превышаем maxW и targetH)
-  let scale = Math.min(targetH / srcH, maxW / srcW);
-  let width = Math.max(1, Math.round(srcW * scale));
-  let height = Math.max(1, Math.round(srcH * scale));
+  let width: number;
+  let height: number;
 
-  // Шаг 2: если высота меньше минимальной — масштабируем по высоте
-  // и РАЗРЕШАЕМ ширину превысить maxW (обрезка будет при рендере)
-  if (height < minH) {
-    scale = minH / srcH;
+  if (isLandscape) {
+    height = Math.max(minH, Math.min(targetH, Math.round(maxH * 0.98)));
+    const scale = height / srcH;
     width = Math.round(srcW * scale);
-    height = minH;
-    // Только если ширина не больше чем в 2 раза превышает — иначе оставляем contain
-    if (width > maxW * 2) {
-      const s = maxW / srcW;
-      width = maxW;
-      height = Math.max(1, Math.round(srcH * s));
+  } else {
+    let scale = Math.min(targetH / srcH, maxW / srcW);
+    width = Math.max(1, Math.round(srcW * scale));
+    height = Math.max(1, Math.round(srcH * scale));
+    if (height < minH) {
+      scale = minH / srcH;
+      width = Math.round(srcW * scale);
+      height = minH;
+      if (width > maxW) {
+        width = maxW;
+        height = Math.max(1, Math.round(srcH * (maxW / srcW)));
+      }
     }
   }
 

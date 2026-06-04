@@ -4,14 +4,14 @@ import path from "path";
 import sharp from "sharp";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
-import { fitProductPng, type FitResult } from "@/lib/podruzhkaImageProcess";
-import type { VisionPhotoAdjustment } from "@/lib/podruzhkaVisionAdjust";
+import { fitProductPng } from "@/lib/podruzhkaImageProcess";
+import type { VisionLayoutAdjustment } from "@/lib/podruzhkaVisionAdjust";
 import { getFullTemplateBuffer } from "@/lib/podruzhkaTemplateAssets";
-import { PODRUZHKA_LAYOUT, PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
+import { buildPodruzhkaLayout, type PodruzhkaRuntimeLayout } from "@/lib/podruzhkaLayout";
+import { PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
-const L = PODRUZHKA_LAYOUT;
 const C = S.colors;
 
 let fontsReady = false;
@@ -73,7 +73,8 @@ function wrapLines(
 
 function resolveBrandFontSize(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  brandName: string
+  brandName: string,
+  L: PodruzhkaRuntimeLayout
 ): { size: number; lines: string[] } {
   const maxW = L.brand.w;
   const maxH = L.brand.h;
@@ -109,7 +110,6 @@ function drawFilledBar(
   ctx.fillRect(x, y, w, h);
 }
 
-/** Слой 0: полный template-base.png (шапка как в макете) */
 async function drawTemplateBase(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): Promise<void> {
@@ -118,16 +118,16 @@ async function drawTemplateBase(
   ctx.drawImage(base, 0, 0, W, H);
 }
 
-/** Фиксированная сетка как в референсе — ноты не «плывут» */
 function overlayDynamicText(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  data: PodruzhkaInfographicData
+  data: PodruzhkaInfographicData,
+  L: PodruzhkaRuntimeLayout
 ): void {
   const x = L.textX;
   const modelSize = S.fonts.model.size;
   const typeSize = S.fonts.productType.size;
 
-  const { size: brandSize, lines: brandLines } = resolveBrandFontSize(ctx, data.brandName);
+  const { size: brandSize, lines: brandLines } = resolveBrandFontSize(ctx, data.brandName, L);
   ctx.fillStyle = C.text;
   ctx.font = brandFont(brandSize);
   let brandBaseline = L.brand.y + brandSize;
@@ -200,7 +200,8 @@ function drawProductShadow(
 async function overlayProductPhoto(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   fotoUrl: string,
-  photoAdj?: VisionPhotoAdjustment
+  L: PodruzhkaRuntimeLayout,
+  layoutAdj?: VisionLayoutAdjustment
 ): Promise<{ loaded: boolean; error?: string }> {
   const url = fotoUrl?.trim();
   if (!url) return { loaded: false, error: "Колонка foto пуста" };
@@ -211,35 +212,24 @@ async function overlayProductPhoto(
   try {
     const zone = L.product;
     const availH = zone.bottom - zone.y;
-    const fillH = photoAdj?.fillHeightRatio ?? S.product.fillHeight;
-    const minHR = photoAdj?.minHeightRatio ?? S.product.minHeightRatio;
+    const fillH = layoutAdj?.fillHeightRatio ?? S.product.fillHeight;
+    const minHR = layoutAdj?.minHeightRatio ?? S.product.minHeightRatio;
 
-    const fit: FitResult = await fitProductPng(productBuf, zone.w, availH, fillH, minHR);
+    const fit = await fitProductPng(productBuf, zone.w, availH, fillH, minHR);
+    const prodImg = await loadImage(fit.buffer);
 
-    let { buffer, width, height } = fit;
-
-    // AI сказал увеличить — принудительно масштабируем по высоте зоны
-    if (photoAdj?.forceHeightFill && fit.overflowsWidth) {
-      // уже overflow → используем как есть (overflow обрезается при drawImage)
-    }
-
-    const prodImg = await loadImage(buffer);
-
-    // Центрируем по X; если шире зоны — clip-регион
-    const drawX = zone.x + (zone.w - width) / 2;
-    const bottomOffset = photoAdj?.bottomOffsetPx ?? 0;
+    const drawX = zone.x + (zone.w - fit.width) / 2;
+    const bottomOffset = layoutAdj?.bottomOffsetPx ?? 0;
     const anchorY = zone.bottom + bottomOffset;
-    const drawY = anchorY - height;
+    const drawY = anchorY - fit.height;
 
-    // Clip region чтобы широкие коробки не залезали на текст
     ctx.save();
     ctx.beginPath();
-    ctx.rect(zone.x, zone.y, zone.w + 10, zone.bottom - zone.y + 60);
+    ctx.rect(zone.x - 4, zone.y, zone.w + 12, zone.bottom - zone.y + 80);
     ctx.clip();
 
-    drawProductShadow(ctx, zone.x + zone.w / 2, anchorY + 4, Math.min(width, zone.w));
-    ctx.drawImage(prodImg, drawX, drawY, width, height);
-
+    drawProductShadow(ctx, zone.x + zone.w / 2, anchorY + 4, Math.min(fit.width, zone.w));
+    ctx.drawImage(prodImg, drawX, drawY, fit.width, fit.height);
     ctx.restore();
     return { loaded: true };
   } catch (e) {
@@ -250,7 +240,11 @@ async function overlayProductPhoto(
   }
 }
 
-function overlayMl(ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>, ml: string): void {
+function overlayMl(
+  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
+  ml: string,
+  L: PodruzhkaRuntimeLayout
+): void {
   drawFilledBar(ctx, L.mlAccent.x, L.mlAccent.y, L.mlAccent.w, L.mlAccent.h, C.accent);
   ctx.fillStyle = C.text;
   ctx.font = `500 italic ${S.fonts.ml.size}px MontserratMediumItalic, Montserrat, sans-serif`;
@@ -261,11 +255,16 @@ export type RenderInfographicResult = {
   buffer: Buffer;
   fotoLoaded: boolean;
   fotoError?: string;
+  visionUsed?: boolean;
+  visionPasses?: number;
+  visionScore?: number;
+  visionReasoning?: string;
+  visionError?: string;
 };
 
 export type RenderInfographicOptions = {
   data: PodruzhkaInfographicData;
-  photoAdj?: VisionPhotoAdjustment;
+  layoutAdj?: VisionLayoutAdjustment;
 };
 
 export function isRenderOptions(v: unknown): v is RenderInfographicOptions {
@@ -281,16 +280,17 @@ export async function renderInfographicPng(
 
 async function renderOnce(
   data: PodruzhkaInfographicData,
-  photoAdj?: VisionPhotoAdjustment
+  layoutAdj?: VisionLayoutAdjustment
 ): Promise<RenderInfographicResult> {
   ensureFonts();
+  const L = buildPodruzhkaLayout(layoutAdj);
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
   await drawTemplateBase(ctx);
-  overlayDynamicText(ctx, data);
-  const foto = await overlayProductPhoto(ctx, data.fotoUrl, photoAdj);
-  overlayMl(ctx, data.ml);
+  overlayDynamicText(ctx, data, L);
+  const foto = await overlayProductPhoto(ctx, data.fotoUrl, L, layoutAdj);
+  overlayMl(ctx, data.ml, L);
 
   const png = canvas.toBuffer("image/png");
   const buffer = await sharp(png).jpeg({ quality: 92 }).toBuffer();
@@ -300,37 +300,56 @@ async function renderOnce(
 export async function renderInfographicDetailed(
   dataOrOpts: PodruzhkaInfographicData | RenderInfographicOptions,
   openaiKey?: string
-): Promise<RenderInfographicResult & { visionUsed?: boolean; visionReasoning?: string }> {
+): Promise<RenderInfographicResult> {
   const opts: RenderInfographicOptions = isRenderOptions(dataOrOpts)
     ? dataOrOpts
     : { data: dataOrOpts };
 
-  // Первый рендер — стандартные настройки
-  const first = await renderOnce(opts.data, opts.photoAdj);
+  let layoutAdj = opts.layoutAdj;
+  let result = await renderOnce(opts.data, layoutAdj);
 
-  // AI Vision loop: если передан ключ и фото загружено
-  if (openaiKey && first.fotoLoaded) {
-    try {
-      const { getVisionAdjustment } = await import("@/lib/podruzhkaVisionAdjust");
-      const { adjustment, verdict } = await getVisionAdjustment(first.buffer, openaiKey);
+  const key = openaiKey?.trim();
+  if (!key || !result.fotoLoaded) {
+    return result;
+  }
 
-      const needsRedo =
-        verdict.photoSizeVerdict !== "ok" || verdict.photoPositionVerdict !== "ok";
+  const { reviewAgainstReference } = await import("@/lib/podruzhkaVisionAdjust");
+  let passes = 0;
+  let lastReason = "";
+  let lastScore = 0;
+  let visionError: string | undefined;
 
-      if (needsRedo) {
-        const second = await renderOnce(opts.data, adjustment);
+  try {
+    for (let pass = 0; pass < 2; pass++) {
+      passes++;
+      const review = await reviewAgainstReference(result.buffer, key, layoutAdj);
+      lastReason = review.reasoning;
+      lastScore = review.overallScore;
+      layoutAdj = review.adjustment;
+
+      if (!review.needsAdjustment || review.overallScore >= 8) {
+        result = await renderOnce(opts.data, layoutAdj);
         return {
-          ...second,
+          ...result,
           visionUsed: true,
-          visionReasoning: verdict.reasoning
+          visionPasses: passes,
+          visionScore: lastScore,
+          visionReasoning: lastReason
         };
       }
 
-      return { ...first, visionUsed: true, visionReasoning: verdict.reasoning };
-    } catch {
-      // Vision упал — возвращаем первый рендер без ошибки
+      result = await renderOnce(opts.data, layoutAdj);
     }
-  }
 
-  return first;
+    return {
+      ...result,
+      visionUsed: true,
+      visionPasses: passes,
+      visionScore: lastScore,
+      visionReasoning: lastReason
+    };
+  } catch (e) {
+    visionError = e instanceof Error ? e.message : "Vision error";
+    return { ...result, visionUsed: false, visionError, visionReasoning: visionError };
+  }
 }
