@@ -1,3 +1,4 @@
+import { collectProductsForCleanFeedAiLookup } from "./cleanFeedAiPairs";
 import { productBrandName } from "./brand-filter";
 import { collectEans, firstImageUrl, toCompareProduct } from "./product";
 import type {
@@ -399,23 +400,31 @@ function buildAiDupRows(
   nameLocale: NameLocale,
   verdicts: CleanAiVerdictForExport[]
 ): Record<string, string>[] {
-  const idToNovelty = new Map<number, FpProduct>();
-  for (const p of result.noveltiesAll) idToNovelty.set(p.id, p);
-  const idToCleanA = new Map<number, CompareProduct>();
-  for (const cn of result.cleanNovelties) {
-    for (const cand of cn.aiCandidates ?? []) {
-      idToCleanA.set(cand.productOnAId, cand.productOnA);
-    }
-  }
+  const byId = collectProductsForCleanFeedAiLookup(result);
+  const fpById = new Map<number, FpProduct>();
+  for (const p of result.noveltiesAll) fpById.set(p.id, p);
   const positives = verdicts
     .filter((v) => v.duplicate)
     .sort((a, b) => b.confidence - a.confidence);
   const rows: Record<string, string>[] = [];
   for (const v of positives) {
-    const novelty = idToNovelty.get(v.noveltyBId);
-    const productA = idToCleanA.get(v.productOnAId);
-    if (!novelty || !productA) continue;
-    const bBlock = baseColsForB(novelty, nameLocale);
+    const idLo = Math.min(v.noveltyBId, v.productOnAId);
+    const idHi = Math.max(v.noveltyBId, v.productOnAId);
+    const cardLo = byId.get(idLo);
+    const cardHi = byId.get(idHi);
+    const fpLo = fpById.get(idLo);
+    const fpHi = fpById.get(idHi);
+    if (!cardLo || !cardHi) continue;
+    const bFp = fpLo ?? fpHi;
+    const aCard = cardLo.id === idLo ? cardLo : cardHi;
+    const bCard = cardLo.id === idLo ? cardHi : cardLo;
+    const bBlock = bFp
+      ? baseColsForB(bFp, nameLocale)
+      : {
+          "ID товара": String(bCard.id),
+          Название: nameLocale === "ru" ? bCard.nameRu : bCard.nameEn,
+          Бренд: bCard.brand
+        };
     const bWithPrefix: Record<string, string> = {};
     for (const [k, val] of Object.entries(bBlock)) {
       const key =
@@ -424,13 +433,17 @@ function buildAiDupRows(
           : `${k} (B / ${result.siteBLabel})`;
       bWithPrefix[key] = val;
     }
+    const aLabel =
+      result.stats.countA > 0 ? result.siteALabel : result.siteBLabel;
     rows.push(
       clipRow({
         "AI вердикт": "дубль",
         "AI уверенность %": String(Math.round(v.confidence * 100)),
         "AI комментарий": v.note ?? "",
+        "ID карточки 1": String(idLo),
+        "ID карточки 2": String(idHi),
         ...bWithPrefix,
-        ...colsForA(productA, nameLocale, result.siteALabel)
+        ...colsForA(aCard, nameLocale, aLabel)
       })
     );
   }

@@ -128,6 +128,15 @@ import {
   homeInput,
 } from "@/components/homeTheme";
 import { RubricCascadeSelect } from "@/components/RubricCascadeSelect";
+import { buildAiCandidatesAmongNovelties } from "@/lib/cleanNovelties";
+import {
+  buildCleanFeedAlgorithmPairKeys,
+  cleanFeedAiScopeBreakdown,
+  collectCleanFeedDupPairsForOpenAi,
+  collectProductsForCleanFeedAiLookup,
+  DEFAULT_CLEAN_FEED_AI_SCOPE,
+  type CleanFeedAiScope
+} from "@/lib/cleanFeedAiPairs";
 import { toCompareProduct } from "@/lib/product";
 import {
   buildAlgorithmPairKeys,
@@ -687,8 +696,12 @@ export default function ComparePage() {
   }>({ done: 0, total: 0 });
   /** Использовать ли превью фото в AI-проверке чистых (vision на gpt-4o-mini). */
   const [cleanAiUseVision, setCleanAiUseVision] = useState(true);
-  /** Ограничение: сколько чистых новинок проверять за раз (защита от перегрузки). */
-  const [cleanAiNoveltyLimit, setCleanAiNoveltyLimit] = useState(50);
+  /** Ограничение: сколько пар отправить в OpenAI за один запуск. */
+  const [cleanAiMaxPairs, setCleanAiMaxPairs] = useState(200);
+  /** Какие группы дублей включать в AI-проверку. */
+  const [cleanAiScope, setCleanAiScope] = useState<CleanFeedAiScope>(
+    DEFAULT_CLEAN_FEED_AI_SCOPE
+  );
   /**
    * Модель OpenAI для AI-проверки чистых.
    * - быстрые/дешёвые: gpt-4o-mini, gpt-4.1-mini, gpt-4.1-nano.
@@ -828,6 +841,13 @@ export default function ComparePage() {
     }
   }, [cleanNoveltiesData]);
 
+  const cleanAiPairsBreakdown = useMemo(() => {
+    if (!cleanNoveltiesData) {
+      return { internalB: 0, vsA: 0, cleanDiscovery: 0, total: 0 };
+    }
+    return cleanFeedAiScopeBreakdown(cleanNoveltiesData, cleanAiScope);
+  }, [cleanNoveltiesData, cleanAiScope]);
+
   /** Скачивание отдельных листов «Чистого фида»: новинки / дубли с A / чистые / не проверено / дубли среди новинок. */
   const downloadCleanNoveltiesPart = useCallback(
     async (
@@ -872,12 +892,7 @@ export default function ComparePage() {
       const { downloadAiDuplicatesOnlyExcel } = await import(
         "@/lib/exportCleanNovelties"
       );
-      const autoPairKeys = new Set<string>();
-      for (const p of cleanNoveltiesData.duplicatePairs) {
-        const x = p.novelty.id;
-        const y = p.productOnAId;
-        autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
-      }
+      const autoPairKeys = buildCleanFeedAlgorithmPairKeys(cleanNoveltiesData);
       const verdicts = Object.values(cleanAiVerdicts)
         .filter((v) => {
           if (!v.duplicate) return false;
@@ -978,11 +993,7 @@ export default function ComparePage() {
     scrollToCleanPairsList();
   }, [scrollToCleanPairsList]);
 
-  /**
-   * AI-проверка чистых новинок: смотрим на пары «новинка B ↔ кандидат на A того же бренда»
-   * (формирует сервер при подсчёте чистых) и спрашиваем gpt-4o-mini как «квалифицированного
-   * специалиста»: дубль/не дубль по фото и названию. EAN не учитывается.
-   */
+  /** AI по всем выбранным дублям: B↔B, B↔A и поиск среди чистых новинок. */
   const runCleanAiCheck = useCallback(async () => {
     if (!cleanNoveltiesData) return;
     const key = openAiKey.trim();
@@ -990,45 +1001,24 @@ export default function ComparePage() {
       setCleanAiErr("Нужен ключ OpenAI API (sk-… или sk-proj-…)");
       return;
     }
-    /** Все пары «чистая новинка B → топ-K кандидатов A» */
-    const allPairs: {
-      idA: number;
-      idB: number;
-      titleA: string;
-      titleB: string;
-      brandA: string;
-      brandB: string;
-      layer: string;
-      imageUrlA?: string | null;
-      imageUrlB?: string | null;
-    }[] = [];
-    const cleanList = cleanNoveltiesData.cleanNovelties.filter(
-      (n) => !n.unverifiable && n.aiCandidates && n.aiCandidates.length > 0
-    );
-    const limited = cleanList.slice(0, Math.max(1, cleanAiNoveltyLimit));
-    const nl = cleanNoveltiesData.nameLocale;
-    for (const item of limited) {
-      const b = toCompareProduct(item.product);
-      const titleB = nl === "ru" ? b.nameRu : b.nameEn;
-      for (const cand of item.aiCandidates ?? []) {
-        const a = cand.productOnA;
-        const titleA = nl === "ru" ? a.nameRu : a.nameEn;
-        allPairs.push({
-          idA: a.id,
-          idB: b.id,
-          titleA,
-          titleB,
-          brandA: a.brand,
-          brandB: b.brand,
-          layer: "clean_novelties:ai",
-          imageUrlA: a.firstImage,
-          imageUrlB: b.firstImage
-        });
+    const excludePairKeys = new Set(Object.keys(cleanAiVerdicts));
+    const allPairs = collectCleanFeedDupPairsForOpenAi(
+      cleanNoveltiesData,
+      Math.max(1, cleanAiMaxPairs),
+      {
+        scope: cleanAiScope,
+        excludePairKeys,
+        maxCleanNovelties: 50
       }
-    }
+    );
     if (allPairs.length === 0) {
+      const b = cleanFeedAiScopeBreakdown(cleanNoveltiesData, cleanAiScope);
       setCleanAiErr(
-        "Нет кандидатов для AI: у чистых новинок нет товаров того же бренда на A с похожими названиями."
+        excludePairKeys.size > 0
+          ? "Все пары в выбранных категориях уже проверены. Сбросьте вердикты или включите другие галочки."
+          : b.total === 0
+            ? "Нет пар для проверки: включите «B↔B», «B↔A» или «чистые новинки» и убедитесь, что сравнение нашло дубли / чистые позиции."
+            : "Нет пар в лимите. Увеличьте «Сколько пар проверять»."
       );
       return;
     }
@@ -1075,19 +1065,15 @@ export default function ComparePage() {
         for (const v of json.verdicts ?? []) {
           const [x, y] = v.pairKey.split("-").map((n) => Number(n));
           if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-          const noveltyId = limited.find((n) => n.product.id === x)
-            ? x
-            : limited.find((n) => n.product.id === y)
-              ? y
-              : null;
-          if (noveltyId == null) continue;
-          const productOnAId = noveltyId === x ? y : x;
-          merged[v.pairKey] = {
+          const idLo = Math.min(x, y);
+          const idHi = Math.max(x, y);
+          const pk = dupPairKey(idLo, idHi);
+          merged[pk] = {
             duplicate: v.duplicate,
             confidence: v.confidence,
             note: v.note,
-            productOnAId,
-            noveltyBId: noveltyId
+            noveltyBId: idLo,
+            productOnAId: idHi
           };
         }
         doneCount += chunk.length;
@@ -1102,10 +1088,7 @@ export default function ComparePage() {
       }
       const allVerdicts = { ...cleanAiVerdicts, ...merged };
       setCleanAiVerdicts(allVerdicts);
-      const autoPairKeys = new Set<string>();
-      for (const p of cleanNoveltiesData.duplicatePairs) {
-        autoPairKeys.add(dupPairKey(p.novelty.id, p.productOnAId));
-      }
+      const autoPairKeys = buildCleanFeedAlgorithmPairKeys(cleanNoveltiesData);
       const newAiPos = Object.values(allVerdicts).filter((v) => {
         if (!v.duplicate) return false;
         return !autoPairKeys.has(dupPairKey(v.noveltyBId, v.productOnAId));
@@ -1136,8 +1119,9 @@ export default function ComparePage() {
     cleanAiVerdicts,
     openAiKey,
     cleanAiUseVision,
-    cleanAiNoveltyLimit,
+    cleanAiMaxPairs,
     cleanAiModel,
+    cleanAiScope,
     rememberOpenAiKey
   ]);
 
@@ -8003,15 +7987,9 @@ export default function ComparePage() {
             })()}
           </div>
           {(() => {
-            const cleanCandidatesCount = cleanNoveltiesData.cleanNovelties.filter(
-              (c) => !c.unverifiable && (c.aiCandidates?.length ?? 0) > 0
-            ).length;
-            const autoPairKeys = new Set<string>();
-            for (const p of cleanNoveltiesData.duplicatePairs) {
-              const x = p.novelty.id;
-              const y = p.productOnAId;
-              autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
-            }
+            const cleanPairsAvailable = cleanAiPairsBreakdown.total;
+            const catalogAEmpty = cleanNoveltiesData.stats.countA === 0;
+            const autoPairKeys = buildCleanFeedAlgorithmPairKeys(cleanNoveltiesData);
             const positiveAi = Object.values(cleanAiVerdicts).filter((v) => {
               if (!v.duplicate) return false;
               const k =
@@ -8026,12 +8004,19 @@ export default function ComparePage() {
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div>
                     <p className="text-sm font-semibold text-purple-900">
-                      🤖 AI-проверка чистых новинок (фото + название, без EAN)
+                      🤖 AI-проверка дублей (фото + название, без EAN)
                     </p>
                     <p className="text-xs text-purple-800">
-                      ИИ смотрит как живой мерчандайзер: сравнивает обложку и
-                      полное название новинки B с кандидатами того же бренда на A
-                      и решает, дубль это или нет. EAN не учитывается.
+                      ИИ проверяет выбранные пары: дубли среди новинок B↔B,
+                      дубли B↔A и/или скрытые дубли у «чистых» новинок. EAN не
+                      учитывается.
+                      {catalogAEmpty && (
+                        <>
+                          {" "}
+                          На A после фильтров <strong>0 товаров</strong> — для
+                          B↔A включите фид A; B↔B и чистые новинки работают без A.
+                        </>
+                      )}
                     </p>
                   </div>
                   {checkedAi > 0 && (
@@ -8043,6 +8028,44 @@ export default function ComparePage() {
                       сбросить вердикты ({checkedAi})
                     </button>
                   )}
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-purple-900">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cleanAiScope.internalB}
+                      onChange={(e) =>
+                        setCleanAiScope((s) => ({
+                          ...s,
+                          internalB: e.target.checked
+                        }))
+                      }
+                    />
+                    B↔B ({cleanAiPairsBreakdown.internalB})
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cleanAiScope.vsA}
+                      onChange={(e) =>
+                        setCleanAiScope((s) => ({ ...s, vsA: e.target.checked }))
+                      }
+                    />
+                    B↔A ({cleanAiPairsBreakdown.vsA})
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cleanAiScope.cleanDiscovery}
+                      onChange={(e) =>
+                        setCleanAiScope((s) => ({
+                          ...s,
+                          cleanDiscovery: e.target.checked
+                        }))
+                      }
+                    />
+                    Чистые ({cleanAiPairsBreakdown.cleanDiscovery})
+                  </label>
                 </div>
                 <div className="flex flex-wrap items-end gap-2">
                   <label className="flex flex-col text-xs text-purple-900">
@@ -8057,18 +8080,18 @@ export default function ComparePage() {
                     />
                   </label>
                   <label className="flex flex-col text-xs text-purple-900">
-                    <span>Сколько новинок проверять</span>
+                    <span>Сколько пар проверять</span>
                     <input
                       type="number"
                       min={1}
-                      max={500}
-                      value={cleanAiNoveltyLimit}
+                      max={2000}
+                      value={cleanAiMaxPairs}
                       onChange={(e) => {
                         const n = Math.max(
                           1,
-                          Math.min(500, Number(e.target.value) || 1)
+                          Math.min(2000, Number(e.target.value) || 1)
                         );
-                        setCleanAiNoveltyLimit(n);
+                        setCleanAiMaxPairs(n);
                       }}
                       className="mt-0.5 rounded-md border border-purple-300 bg-white px-2 py-1 text-xs w-24"
                     />
@@ -8106,7 +8129,13 @@ export default function ComparePage() {
                   <button
                     type="button"
                     onClick={() => void runCleanAiCheck()}
-                    disabled={cleanAiBusy || cleanCandidatesCount === 0}
+                    disabled={
+                      cleanAiBusy ||
+                      cleanPairsAvailable === 0 ||
+                      (!cleanAiScope.internalB &&
+                        !cleanAiScope.vsA &&
+                        !cleanAiScope.cleanDiscovery)
+                    }
                     className="rounded-md border border-purple-700 bg-purple-700 px-3 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {cleanAiBusy
@@ -8114,9 +8143,14 @@ export default function ComparePage() {
                       : "Запустить AI-проверку"}
                   </button>
                   <span className="text-[11px] text-purple-700">
-                    Кандидатов есть у{" "}
-                    <b className="tabular-nums">{cleanCandidatesCount}</b> новинок
-                    из {cleanNoveltiesData.stats.clean}
+                    Пар в очереди:{" "}
+                    <b className="tabular-nums">{cleanPairsAvailable}</b>
+                    {cleanPairsAvailable === 0 && (
+                      <span className="text-purple-600">
+                        {" "}
+                        — включите категории выше или перезапустите сравнение
+                      </span>
+                    )}
                   </span>
                 </div>
                 {cleanAiErr && (
@@ -8165,7 +8199,7 @@ export default function ComparePage() {
               unverifiable: `Не удалось проверить — нет EAN и фото (до 100)`,
               all: `Все новинки ${cleanNoveltiesData.siteBLabel} со статусом (до 100)`,
               internalDups: `Дубли среди новинок ${cleanNoveltiesData.siteBLabel} (один товар под разными id, до 100)`,
-              aiDups: `AI-дубли: новые пары «новинка ${cleanNoveltiesData.siteBLabel} ↔ кандидат на ${cleanNoveltiesData.siteALabel}» (до 100)`
+              aiDups: `AI: новые дубли сверх автоматики (до 100)`
             };
             const noveltyIdToStatus = new Map<
               number,
@@ -8325,6 +8359,11 @@ export default function ComparePage() {
                             {pair.reasons.length > 0 && (
                               <p className="text-xs text-slate-600">{pair.reasons.join(" + ")}</p>
                             )}
+                            <AiDupVerdictNote
+                              verdicts={cleanAiVerdicts}
+                              idA={pair.productOnAId}
+                              idB={pair.novelty.id}
+                            />
                           </div>
                           );
                         })}
@@ -8348,20 +8387,34 @@ export default function ComparePage() {
                     const sortedItems =
                       cleanNoveltiesView === "clean"
                         ? [...items].sort((a, b) => {
-                            const aDup =
-                              (a.aiCandidates ?? []).some((c) => {
-                                const k = dupPairKey(a.product.id, c.productOnAId);
-                                return cleanAiVerdicts[k]?.duplicate;
-                              })
-                                ? 1
-                                : 0;
-                            const bDup =
-                              (b.aiCandidates ?? []).some((c) => {
-                                const k = dupPairKey(b.product.id, c.productOnAId);
-                                return cleanAiVerdicts[k]?.duplicate;
-                              })
-                                ? 1
-                                : 0;
+                            const aCands =
+                              a.aiCandidates && a.aiCandidates.length > 0
+                                ? a.aiCandidates
+                                : buildAiCandidatesAmongNovelties(
+                                    a.product,
+                                    cleanNoveltiesData.noveltiesAll,
+                                    cleanNoveltiesData.nameLocale
+                                  );
+                            const bCands =
+                              b.aiCandidates && b.aiCandidates.length > 0
+                                ? b.aiCandidates
+                                : buildAiCandidatesAmongNovelties(
+                                    b.product,
+                                    cleanNoveltiesData.noveltiesAll,
+                                    cleanNoveltiesData.nameLocale
+                                  );
+                            const aDup = aCands.some((c) => {
+                              const k = dupPairKey(a.product.id, c.productOnAId);
+                              return cleanAiVerdicts[k]?.duplicate;
+                            })
+                              ? 1
+                              : 0;
+                            const bDup = bCands.some((c) => {
+                              const k = dupPairKey(b.product.id, c.productOnAId);
+                              return cleanAiVerdicts[k]?.duplicate;
+                            })
+                              ? 1
+                              : 0;
                             return bDup - aDup;
                           })
                         : items;
@@ -8369,7 +8422,15 @@ export default function ComparePage() {
                       <>
                         {sortedItems.slice(0, 100).map((cn) => {
                           const cp = toCompareProduct(cn.product);
-                          const verdictsForItem = (cn.aiCandidates ?? [])
+                          const aiCands =
+                            cn.aiCandidates && cn.aiCandidates.length > 0
+                              ? cn.aiCandidates
+                              : buildAiCandidatesAmongNovelties(
+                                  cn.product,
+                                  cleanNoveltiesData.noveltiesAll,
+                                  cleanNoveltiesData.nameLocale
+                                );
+                          const verdictsForItem = aiCands
                             .map((cand) => {
                               const k = dupPairKey(
                                 cn.product.id,
@@ -8495,12 +8556,8 @@ export default function ComparePage() {
                   )}
                   {cleanNoveltiesView === "aiDups" && (() => {
                     /** Все пары AI-дублей, исключая пересечения с автоматикой. */
-                    const autoPairKeys = new Set<string>();
-                    for (const p of cleanNoveltiesData.duplicatePairs) {
-                      const x = p.novelty.id;
-                      const y = p.productOnAId;
-                      autoPairKeys.add(x < y ? `${x}-${y}` : `${y}-${x}`);
-                    }
+                    const autoPairKeys =
+                      buildCleanFeedAlgorithmPairKeys(cleanNoveltiesData);
                     const positivesAll = Object.values(cleanAiVerdicts)
                       .filter((v) => v.duplicate)
                       .filter((v) => {
@@ -8532,20 +8589,8 @@ export default function ComparePage() {
                         </p>
                       );
                     }
-                    /** Карты для подтягивания CompareProduct по id. */
-                    const noveltyById = new Map<number, CompareProduct>();
-                    for (const cn of cleanNoveltiesData.cleanNovelties) {
-                      noveltyById.set(
-                        cn.product.id,
-                        toCompareProduct(cn.product)
-                      );
-                    }
-                    const productAById = new Map<number, CompareProduct>();
-                    for (const cn of cleanNoveltiesData.cleanNovelties) {
-                      for (const cand of cn.aiCandidates ?? []) {
-                        productAById.set(cand.productOnAId, cand.productOnA);
-                      }
-                    }
+                    const productById =
+                      collectProductsForCleanFeedAiLookup(cleanNoveltiesData);
                     return (
                       <>
                         <div className="sticky top-0 z-10 -mx-1 -mt-1 px-1 pt-1 pb-2 bg-white border-b border-slate-100 flex flex-wrap items-center gap-2 mb-2">
@@ -8571,11 +8616,12 @@ export default function ComparePage() {
                           </p>
                         )}
                         {positives.slice(0, 100).map((v, idx) => {
-                          const novelty = noveltyById.get(v.noveltyBId);
-                          const productA = productAById.get(v.productOnAId);
-                          if (!novelty || !productA) return null;
+                          const cardA = productById.get(v.noveltyBId);
+                          const cardB = productById.get(v.productOnAId);
+                          if (!cardA || !cardB) return null;
                           const pk = dupPairKey(v.noveltyBId, v.productOnAId);
                           const processed = cleanProcessedKeys.has(pk);
+                          const onA = cleanNoveltiesData.stats.countA > 0;
                           return (
                             <div
                               key={`aid-${v.noveltyBId}-${v.productOnAId}-${idx}`}
@@ -8603,11 +8649,15 @@ export default function ComparePage() {
                               </div>
                               <div className="grid sm:grid-cols-2 gap-2">
                                 <ProductCell
-                                  c={productA}
-                                  siteLabel={cleanNoveltiesData.siteALabel}
+                                  c={cardA}
+                                  siteLabel={
+                                    onA
+                                      ? cleanNoveltiesData.siteALabel
+                                      : cleanNoveltiesData.siteBLabel
+                                  }
                                 />
                                 <ProductCell
-                                  c={novelty}
+                                  c={cardB}
                                   siteLabel={cleanNoveltiesData.siteBLabel}
                                 />
                               </div>
@@ -8754,6 +8804,11 @@ export default function ComparePage() {
                                 {pair.reasons.join(" + ")}
                               </p>
                             )}
+                            <AiDupVerdictNote
+                              verdicts={cleanAiVerdicts}
+                              idA={pair.aId}
+                              idB={pair.bId}
+                            />
                           </div>
                           );
                         })}

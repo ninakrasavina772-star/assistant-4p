@@ -25,7 +25,7 @@ const EXAMPLE =
 type Mode = "replace" | "rehost";
 type InputKind = "excel" | "list";
 
-export function OzonImageConverter() {
+export function OzonImageConverter({ embedded }: { embedded?: boolean } = {}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [inputKind, setInputKind] = useState<InputKind>("excel");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -187,6 +187,7 @@ export function OzonImageConverter() {
 
   return (
     <div className="space-y-6">
+      {!embedded ? (
       <section className={homeCard}>
         <div className={homeCardHeader}>
           <h2 className={homeCardTitle}>Как работает</h2>
@@ -250,6 +251,17 @@ export function OzonImageConverter() {
           </details>
         </div>
       </section>
+      ) : (
+        <section className={homeCard}>
+          <div className={homeCardHeader}>
+            <h2 className={homeCardTitle}>Шаг 3 — публичные ссылки</h2>
+          </div>
+          <div className={`${homeCardBody} text-sm text-slate-600`}>
+            Загрузите Excel с колонкой <strong>foto 2</strong> после шага 2 — появится{" "}
+            <strong>Foto 3</strong> с https для Ozon.
+          </div>
+        </section>
+      )}
 
       <section className={homeCard}>
         <div className={homeCardHeader}>

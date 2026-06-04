@@ -1,11 +1,18 @@
-import { productBrandName } from "./brand-filter";
+import { normalizeBrandName, productBrandName } from "./brand-filter";
 import {
   NAME_TAB_MODEL_MIN as _DEPRECATED_NAME_TAB_MODEL_MIN,
   resolveNameTabPair
 } from "./dupTiers";
 import { prefetchPhashes, type PhashCache } from "./imagePhash";
+import { nameAndModelScore } from "./nameModel";
 import { normBrand } from "./pairScoring";
-import { collectEanIndexKeys, toCompareProduct } from "./product";
+import { collectEanIndexKeys, pickComparableName, toCompareProduct } from "./product";
+import type {
+  AttrMatchOptions,
+  CompareProduct,
+  FpProduct,
+  NameLocale
+} from "./types";
 
 /** Максимум кандидатов с A на одну чистую новинку для AI-проверки. */
 const MAX_AI_CANDIDATES_PER_NOVELTY = 4;
@@ -26,12 +33,6 @@ function tokenJaccard(a: Set<string>, b: Set<string>): number {
   const union = a.size + b.size - inter;
   return union > 0 ? inter / union : 0;
 }
-import type {
-  AttrMatchOptions,
-  CompareProduct,
-  FpProduct,
-  NameLocale
-} from "./types";
 
 // keep import alive to highlight that thresholds in this module come from dupTiers
 void _DEPRECATED_NAME_TAB_MODEL_MIN;
@@ -54,9 +55,101 @@ export type NoveltyDupMatch = {
 export type NoveltyAiCandidate = {
   productOnA: CompareProduct;
   productOnAId: number;
-  /** 0..1 — оценка похожести названия (jaccard) — для отладки */
+  /** 0..1 — max(jaccard токенов, model nameAndModelScore) */
   textScore: number;
 };
+
+function brandBucketKey(p: FpProduct): string {
+  return normalizeBrandName(productBrandName(p)) || "__empty_brand__";
+}
+
+function rankPoolForAi(
+  b: FpProduct,
+  cB: CompareProduct,
+  pool: FpProduct[],
+  nameLocale: NameLocale,
+  maxScan: number
+): { p: FpProduct; score: number }[] {
+  const slice = pool.length > maxScan ? pool.slice(0, maxScan) : pool;
+  const na = pickComparableName(cB, nameLocale);
+  const tokB = titleTokens(cB.nameRu + " " + cB.nameEn + " " + (b.name || ""));
+  const scored: { p: FpProduct; score: number }[] = [];
+  for (const other of slice) {
+    if (other.id === b.id) continue;
+    const cO = toCompareProduct(other);
+    const nb = pickComparableName(cO, nameLocale);
+    const tokO = titleTokens(
+      cO.nameRu + " " + cO.nameEn + " " + (other.name || "")
+    );
+    const jac = tokenJaccard(tokO, tokB);
+    const { model } = nameAndModelScore(na, nb, cB.brand, cO.brand);
+    scored.push({ p: other, score: Math.max(jac, model) });
+  }
+  scored.sort((x, y) => y.score - x.score);
+  return scored;
+}
+
+function scoredToAiCandidates(
+  scored: { p: FpProduct; score: number }[]
+): NoveltyAiCandidate[] {
+  return scored.slice(0, MAX_AI_CANDIDATES_PER_NOVELTY).map(({ p, score }) => {
+    const c = toCompareProduct(p);
+    return { productOnA: c, productOnAId: p.id, textScore: score };
+  });
+}
+
+/**
+ * Кандидаты для AI: A (тот же бренд → весь A → новинки B того же бренда → весь список новинок B).
+ * Поле productOnA — карточка для сравнения (может быть с B, если каталог A пуст).
+ */
+function buildAiCandidatesForClean(
+  b: FpProduct,
+  cB: CompareProduct,
+  aByBrand: Map<string, FpProduct[]>,
+  productsA: FpProduct[],
+  bByBrand: Map<string, FpProduct[]>,
+  noveltiesB: FpProduct[],
+  nameLocale: NameLocale
+): NoveltyAiCandidate[] {
+  const brandKey = brandBucketKey(b);
+  const pools: { items: FpProduct[]; maxScan: number }[] = [
+    { items: aByBrand.get(brandKey) ?? [], maxScan: 10_000 },
+    { items: productsA, maxScan: 500 },
+    { items: bByBrand.get(brandKey) ?? [], maxScan: 10_000 },
+    { items: noveltiesB, maxScan: 200 }
+  ];
+  for (const { items, maxScan } of pools) {
+    if (!items.length) continue;
+    const scored = rankPoolForAi(b, cB, items, nameLocale, maxScan);
+    if (scored.length > 0) return scoredToAiCandidates(scored);
+  }
+  return [];
+}
+
+/** Для UI без перезапуска сравнения: кандидаты только среди новинок B. */
+export function buildAiCandidatesAmongNovelties(
+  novelty: FpProduct,
+  noveltiesPool: FpProduct[],
+  nameLocale: NameLocale
+): NoveltyAiCandidate[] {
+  const cB = toCompareProduct(novelty);
+  const byBrand = new Map<string, FpProduct[]>();
+  for (const p of noveltiesPool) {
+    const k = brandBucketKey(p);
+    const arr = byBrand.get(k) ?? [];
+    arr.push(p);
+    byBrand.set(k, arr);
+  }
+  return buildAiCandidatesForClean(
+    novelty,
+    cB,
+    new Map(),
+    [],
+    byBrand,
+    noveltiesPool,
+    nameLocale
+  );
+}
 
 export type NoveltyClassification =
   | {
@@ -250,16 +343,24 @@ export async function classifyNoveltiesAgainstA(
   /** Индекс A по нормализованному бренду. Бренд пустой → ключ "__empty_brand__". */
   const aByBrand = new Map<string, FpProduct[]>();
   for (const pA of productsA) {
-    const k = normBrand(productBrandName(pA)) || "__empty_brand__";
+    const k = brandBucketKey(pA);
     const arr = aByBrand.get(k) ?? [];
     arr.push(pA);
     aByBrand.set(k, arr);
   }
 
+  const bByBrand = new Map<string, FpProduct[]>();
+  for (const pB of noveltiesB) {
+    const k = brandBucketKey(pB);
+    const arr = bByBrand.get(k) ?? [];
+    arr.push(pB);
+    bByBrand.set(k, arr);
+  }
+
   /** Собираем URL для phash-предзагрузки — только пары, у которых первое фото отличается. */
   const candidatePairs: { b: FpProduct; aSameBrand: FpProduct[] }[] = [];
   for (const b of noveltiesB) {
-    const k = normBrand(productBrandName(b)) || "__empty_brand__";
+    const k = brandBucketKey(b);
     const aSameBrand = aByBrand.get(k) ?? [];
     candidatePairs.push({ b, aSameBrand });
   }
@@ -330,9 +431,7 @@ export async function classifyNoveltiesAgainstA(
 
     // 2) Бренд + модель + фото — только если по EAN ничего не нашли
     if (dups.length === 0) {
-      const sameBrand = aByBrand.get(
-        normBrand(productBrandName(b)) || "__empty_brand__"
-      );
+      const sameBrand = aByBrand.get(brandBucketKey(b));
       if (sameBrand) {
         for (const pA of sameBrand) {
           if (pA.id === b.id) continue;
@@ -369,36 +468,15 @@ export async function classifyNoveltiesAgainstA(
       });
       unverifiable++;
     } else {
-      /** Для чистых — собираем top-K кандидатов с A того же бренда для последующей AI-проверки. */
-      const sameBrand = aByBrand.get(
-        normBrand(productBrandName(b)) || "__empty_brand__"
+      const candidates = buildAiCandidatesForClean(
+        b,
+        cB,
+        aByBrand,
+        productsA,
+        bByBrand,
+        noveltiesB,
+        nameLocale
       );
-      const tokB = titleTokens(cB.nameRu + " " + cB.nameEn + " " + (b.name || ""));
-      const candidates: NoveltyAiCandidate[] = [];
-      if (sameBrand && sameBrand.length > 0) {
-        const scored: { p: FpProduct; score: number }[] = [];
-        for (const pA of sameBrand) {
-          if (pA.id === b.id) continue;
-          const cA = toCompareProduct(pA);
-          const tokA = titleTokens(
-            cA.nameRu + " " + cA.nameEn + " " + (pA.name || "")
-          );
-          const sc = tokenJaccard(tokA, tokB);
-          if (sc > 0) scored.push({ p: pA, score: sc });
-        }
-        scored.sort((x, y) => y.score - x.score);
-        for (const { p: pA, score } of scored.slice(
-          0,
-          MAX_AI_CANDIDATES_PER_NOVELTY
-        )) {
-          const cA = toCompareProduct(pA);
-          candidates.push({
-            productOnA: cA,
-            productOnAId: pA.id,
-            textScore: score
-          });
-        }
-      }
       classifications.push({
         novelty: b,
         status: "clean",

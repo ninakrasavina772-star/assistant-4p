@@ -33,7 +33,7 @@ export function isFoto3Header(value: unknown): boolean {
   return n === "foto 3" || n === "foto3";
 }
 
-function cellPlainValue(value: ExcelJS.CellValue): string {
+export function cellPlainValue(value: ExcelJS.CellValue): string {
   if (value == null) return "";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value).trim();
