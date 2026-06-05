@@ -24,6 +24,11 @@ import {
   getReferenceFixedTextLayout,
   REFERENCE_TEXT_ANCHORS
 } from "@/lib/podruzhkaReferenceAnchors";
+import {
+  DEFAULT_BRAND_BOX,
+  measureFromCanvasCtx,
+  resolveBrandLines
+} from "@/lib/podruzhkaBrandLayout";
 import { computeTextFlowLayout, type TextFlowLayout } from "@/lib/podruzhkaTextFlow";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
@@ -101,19 +106,16 @@ function resolveBrandFontSize(
 
   if (LAYOUT_RULES.replaceOnly) {
     const text = brandName.toUpperCase();
-    const cap = Math.max(S.fonts.brand.min, S.fonts.brand.max + fontDelta);
-    for (let size = cap; size >= S.fonts.brand.min; size -= 2) {
-      const font = brandFont(size);
-      const lines = wrapLines(ctx, text, maxW, font, maxLines);
-      if (maxLineWidth(ctx, lines, font) <= maxW) {
-        return { size, lines };
-      }
-    }
-    const size = S.fonts.brand.min;
-    return {
-      size,
-      lines: wrapLines(ctx, text, maxW, brandFont(size), maxLines)
-    };
+    return resolveBrandLines(measureFromCanvasCtx(ctx), {
+      brandName: text,
+      maxSize: Math.max(S.fonts.brand.min, S.fonts.brand.max + fontDelta),
+      minSize: S.fonts.brand.min,
+      maxWidth: maxW,
+      maxHeight: L.brand.h,
+      maxLines,
+      lineHeight: 1.05,
+      fontForSize: brandFont
+    });
   }
 
   const maxH = L.brand.h;

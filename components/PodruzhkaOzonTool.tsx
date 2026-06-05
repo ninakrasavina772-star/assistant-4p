@@ -519,7 +519,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: Canvas 2D + Inter/Libre Franklin, html-figma-v3.";
+                  "Рендер: Canvas 2D + Inter/Libre Franklin, html-figma-v4.";
               }
             } catch (e) {
               fail++;
@@ -906,7 +906,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v3).
+                      html-figma-v4).
                     </>
                   ) : null}
                 </p>

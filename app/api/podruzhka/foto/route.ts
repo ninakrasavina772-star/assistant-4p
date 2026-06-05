@@ -23,7 +23,10 @@ export async function GET(req: Request) {
   const fit = await fitProductPng(fetched.buf, F.product.w, F.product.h, {
     cardW: R.size.w,
     cardH: R.size.h,
-    referenceBoxOnly: true
+    referenceBoxOnly: true,
+    referenceBoxScale: 1.06,
+    referenceBoxMinHeightFill: 0.88,
+    referenceBoxMinWidthFill: 0.72
   });
 
   const drawX = F.product.x + F.product.w - fit.width;
