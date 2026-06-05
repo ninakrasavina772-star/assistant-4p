@@ -8,7 +8,7 @@ const TEMPLATE_FULL_PATH = path.join(process.cwd(), "public", "podruzhka", "temp
 let fullTemplate: Buffer | null = null;
 let templateMtime = 0;
 
-const BG = { r: 247, g: 247, b: 247, alpha: 1 };
+const BG = { r: 245, g: 245, b: 245, alpha: 1 };
 
 /** Пустой макет — contain в 1024×1365 (3:4), плашка не сжимается */
 export async function getFullTemplateBuffer(): Promise<Buffer> {

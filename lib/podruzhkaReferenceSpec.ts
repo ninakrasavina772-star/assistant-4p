@@ -13,7 +13,7 @@ const sy = (y: number) => Math.round(y * SY);
 export const PODRUZHKA_REFERENCE = {
   size: { w: 1024, h: 1365 },
   colors: {
-    bg: "#F7F7F7",
+    bg: "#F5F5F5",
     loop: "#EFEFEF",
     text: "#111111",
     muted: "#666666",

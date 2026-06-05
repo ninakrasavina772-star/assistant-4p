@@ -17,7 +17,6 @@ import { PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
 import {
-  eraseReferenceGhostMarks,
   getReferenceFixedTextLayout,
   REFERENCE_TEXT_ANCHORS
 } from "@/lib/podruzhkaReferenceAnchors";
@@ -244,11 +243,11 @@ function drawFilledBar(
   ctx.fillRect(x, y, w, h);
 }
 
+/** Пустой template-base.png без выжженного текста — зоны не затираем. */
 function eraseTemplateTextGhost(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
+  _ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>
 ): void {
-  if (!LAYOUT_RULES.replaceOnly) return;
-  eraseReferenceGhostMarks(ctx, C.bg);
+  // Раньше стирали textColumnErase 300×1120 под старый шаблон с призраками текста.
 }
 
 async function drawTemplateBase(
@@ -345,15 +344,6 @@ function overlayDynamicText(
   for (const line of modelLines) {
     ctx.fillText(line, L.model.x, modelBaseline);
     modelBaseline += flow.modelLineStep;
-  }
-
-  if (LAYOUT_RULES.replaceOnly) {
-    const gapTop = modelBaseline + 4;
-    const gapH = flow.notesStartY - gapTop - 6;
-    if (gapH > 0) {
-      ctx.fillStyle = C.bg;
-      ctx.fillRect(L.brand.x - 4, gapTop, L.brand.w + 24, gapH);
-    }
   }
 
   if (!LAYOUT_RULES.replaceOnly) {
