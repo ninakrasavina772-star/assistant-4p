@@ -56,8 +56,29 @@ function fitsLines(
   return lines.every((ln) => m.textWidth(ln) <= opts.maxWidth);
 }
 
+function brandLineCandidates(words: string[]): string[][] {
+  const candidates: string[][] = [];
+  if (words.length === 1) {
+    candidates.push([words[0]!]);
+    return candidates;
+  }
+  if (words.length === 2) {
+    candidates.push([words[0]!, words[1]!]);
+    return candidates;
+  }
+  for (let i = 1; i < words.length; i++) {
+    candidates.push([words.slice(0, i).join(" "), words.slice(i).join(" ")]);
+  }
+  return candidates;
+}
+
+function scoreLines(m: TextMeasure, size: number, lines: string[], font: string): number {
+  m.setFont(font);
+  return Math.max(...lines.map((ln) => m.textWidth(ln)), 0);
+}
+
 /**
- * Как reference-target: двухсловный бренд — по одному слову на строку (CAROLINA / HERRERA).
+ * Бренд: 2 слова — по слову на строку; 3+ — только 2 строки, без одной длинной.
  */
 export function resolveBrandLines(
   m: TextMeasure,
@@ -70,22 +91,22 @@ export function resolveBrandLines(
     return { size: input.maxSize, lines: [] };
   }
 
-  const candidates: string[][] = [];
-
-  if (words.length === 2) {
-    candidates.push([words[0]!, words[1]!]);
-  } else if (words.length > 2) {
-    const mid = Math.ceil(words.length / 2);
-    candidates.push([words.slice(0, mid).join(" "), words.slice(mid).join(" ")]);
-  }
+  const candidates = brandLineCandidates(words);
+  let best: { size: number; lines: string[]; score: number } | null = null;
 
   for (const lines of candidates) {
     for (let size = input.maxSize; size >= input.minSize; size -= 2) {
-      if (fitsLines(m, size, lines, input)) {
-        return { size, lines };
+      if (!fitsLines(m, size, lines, input)) continue;
+      const font = input.fontForSize(size);
+      const score = scoreLines(m, size, lines, font);
+      if (!best || size > best.size || (size === best.size && score < best.score)) {
+        best = { size, lines, score };
       }
+      break;
     }
   }
+
+  if (best) return { size: best.size, lines: best.lines };
 
   const text = words.join(" ");
   for (let size = input.maxSize; size >= input.minSize; size -= 2) {
@@ -124,7 +145,6 @@ export function measureFromCanvas2D(ctx: CanvasRenderingContext2D): TextMeasure 
   };
 }
 
-/** @napi-rs/canvas и браузерный Canvas2D */
 export function measureFromCanvasCtx(ctx: {
   font: string;
   measureText(text: string): { width: number };

@@ -6,11 +6,8 @@ import {
   PODRUZHKA_HTML_SPEC as S
 } from "@/lib/podruzhkaHtmlSpec";
 import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
-import {
-  DEFAULT_BRAND_BOX,
-  measureFromCanvas2D,
-  resolveBrandLines
-} from "@/lib/podruzhkaBrandLayout";
+import { measureFromCanvas2D } from "@/lib/podruzhkaBrandLayout";
+import { computeHeaderStack, drawTextBlock } from "@/lib/podruzhkaHeaderLayout";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 
 const FONT_DIR = "/podruzhka/fonts";
@@ -45,51 +42,6 @@ async function ensurePodruzhkaFonts(): Promise<void> {
     throw new Error("Шрифты Inter/Libre Franklin не загрузились — обновите страницу (Ctrl+F5)");
   }
   fontsReady = true;
-}
-
-function wrapLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  font: string,
-  maxLines: number
-): string[] {
-  ctx.font = font;
-  const words = text.split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
-  const lines: string[] = [];
-  let line = words[0]!;
-  for (let i = 1; i < words.length; i++) {
-    const w = words[i]!;
-    const test = `${line} ${w}`;
-    if (ctx.measureText(test).width > maxWidth) {
-      lines.push(line);
-      line = w;
-      if (lines.length >= maxLines) return lines;
-    } else line = test;
-  }
-  lines.push(line);
-  return lines.slice(0, maxLines);
-}
-
-function fitFontSize(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxSize: number,
-  minSize: number,
-  fontStr: (size: number) => string,
-  maxWidth: number,
-  maxLines: number
-): { size: number; lines: string[] } {
-  for (let size = maxSize; size >= minSize; size -= 2) {
-    const font = fontStr(size);
-    const lines = wrapLines(ctx, text, maxWidth, font, maxLines);
-    ctx.font = font;
-    const widest = Math.max(...lines.map((ln) => ctx.measureText(ln).width), 0);
-    if (widest <= maxWidth) return { size, lines };
-  }
-  const size = minSize;
-  return { size, lines: wrapLines(ctx, text, maxWidth, fontStr(size), maxLines) };
 }
 
 function brandFont(size: number): string {
@@ -170,62 +122,47 @@ export async function drawPodruzhkaCard(
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(templateImg, 0, 0, w, h);
 
-  drawBar(ctx, F.notesPinkBar.x, F.notesPinkBar.y, F.notesPinkBar.w, F.notesPinkBar.h, S.colors.accent);
-  drawBar(ctx, F.mlPinkBar.x, F.mlPinkBar.y, F.mlPinkBar.w, F.mlPinkBar.h, S.colors.accent);
-
-  const brand = resolveBrandLines(measureFromCanvas2D(ctx), {
+  const header = computeHeaderStack(measureFromCanvas2D(ctx), {
     brandName: data.brandName,
-    maxSize: S.fonts.brand.max,
-    minSize: S.fonts.brand.min,
-    maxWidth: DEFAULT_BRAND_BOX.maxWidth,
-    maxHeight: DEFAULT_BRAND_BOX.maxHeight,
-    maxLines: DEFAULT_BRAND_BOX.maxLines,
-    lineHeight: S.fonts.brand.lineHeight,
-    fontForSize: brandFont
+    productType: data.productType,
+    model: data.model,
+    brandFontForSize: brandFont,
+    bodyFontForSize: interFont,
+    brandLineHeight: S.fonts.brand.lineHeight,
+    typeLineHeight: S.fonts.productType.lineHeight,
+    modelLineHeight: S.fonts.model.lineHeight,
+    typeSize: S.fonts.productType.size,
+    modelMaxSize: S.fonts.model.max,
+    modelMinSize: S.fonts.model.min
   });
 
-  const model = fitFontSize(
+  drawTextBlock(ctx, header.brand, F.brand.x, brandFont(header.brand.size), S.colors.text);
+  if (header.productType.lines.length) {
+    drawTextBlock(
+      ctx,
+      header.productType,
+      F.productType.x,
+      interFont(S.fonts.productType.size, 400),
+      S.colors.muted
+    );
+  }
+  drawTextBlock(
     ctx,
-    data.model,
-    S.fonts.model.max,
-    S.fonts.model.min,
-    (size) => interFont(size, 800),
-    F.model.w,
-    2
+    header.model,
+    F.model.x,
+    interFont(header.model.size, 800),
+    S.colors.text
   );
 
-  const typeSize = S.fonts.productType.size;
-  const typeText = data.productType.trim().toLowerCase();
-  const typeLines = typeText
-    ? wrapLines(ctx, typeText, F.productType.w, interFont(typeSize, 400), 2)
-    : [];
-
-  ctx.fillStyle = S.colors.text;
-  ctx.font = brandFont(brand.size);
-  ctx.textBaseline = "top";
-  let brandY = F.brand.y;
-  for (const line of brand.lines) {
-    ctx.fillText(line, F.brand.x, brandY);
-    brandY += Math.round(brand.size * S.fonts.brand.lineHeight);
-  }
-
-  if (typeLines.length) {
-    ctx.fillStyle = S.colors.muted;
-    ctx.font = interFont(typeSize, 400);
-    let typeY = F.productType.y;
-    for (const line of typeLines) {
-      ctx.fillText(line, F.productType.x, typeY);
-      typeY += Math.round(typeSize * S.fonts.productType.lineHeight);
-    }
-  }
-
-  ctx.fillStyle = S.colors.text;
-  ctx.font = interFont(model.size, 800);
-  let modelY = F.model.y;
-  for (const line of model.lines) {
-    ctx.fillText(line, F.model.x, modelY);
-    modelY += Math.round(model.size * S.fonts.model.lineHeight);
-  }
+  drawBar(
+    ctx,
+    F.notesPinkBar.x,
+    header.notesPinkBarY,
+    F.notesPinkBar.w,
+    F.notesPinkBar.h,
+    S.colors.accent
+  );
+  drawBar(ctx, F.mlPinkBar.x, F.mlPinkBar.y, F.mlPinkBar.w, F.mlPinkBar.h, S.colors.accent);
 
   const notes = data.notes.slice(0, 3);
   for (let i = 0; i < notes.length; i++) {
@@ -234,6 +171,7 @@ export async function drawPodruzhkaCard(
 
     ctx.fillStyle = S.colors.accent;
     ctx.font = interFont(S.fonts.noteTitle.size, 700);
+    ctx.textBaseline = "top";
     ctx.fillText(n.title.toUpperCase(), F.textX, slot.titleY);
 
     ctx.fillStyle = S.colors.muted;
@@ -249,10 +187,10 @@ export async function drawPodruzhkaCard(
   if (ml) {
     ctx.fillStyle = S.colors.text;
     ctx.font = interFont(S.fonts.ml.size, 500, true);
+    ctx.textBaseline = "top";
     ctx.fillText(ml, F.ml.x, F.ml.y);
   }
 
-  // шаблон → черты → текст → фото
   ctx.drawImage(productImg, foto.drawX, foto.drawY, foto.width, foto.height);
 }
 

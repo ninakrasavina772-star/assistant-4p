@@ -24,9 +24,9 @@ export async function GET(req: Request) {
     cardW: R.size.w,
     cardH: R.size.h,
     referenceBoxOnly: true,
-    referenceBoxScale: 1.06,
-    referenceBoxMinHeightFill: 0.88,
-    referenceBoxMinWidthFill: 0.72
+    referenceBoxScale: 1.12,
+    referenceBoxMinHeightFill: 0.92,
+    referenceBoxMinWidthFill: 0.82
   });
 
   const drawX = F.product.x + F.product.w - fit.width;
