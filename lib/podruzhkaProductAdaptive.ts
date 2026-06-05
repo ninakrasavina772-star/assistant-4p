@@ -22,9 +22,10 @@ import {
 
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 import {
-  PODRUZHKA_COSMETICS_BOTTOM_LIFT_PX,
-  PODRUZHKA_COSMETICS_MAX_ZONE_HEIGHT_FILL,
-  PODRUZHKA_COSMETICS_PRODUCT_SCALE
+  PODRUZHKA_COSMETICS_PRODUCT_SCALE,
+  PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL,
+  PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL,
+  PODRUZHKA_COSMETICS_VERTICAL_CENTER_BIAS
 } from "@/lib/podruzhkaCosmeticsLayout";
 
 type VerticalAlign = "bottom" | "lower-third";
@@ -248,7 +249,7 @@ async function tryStrategy(
   return bestLocal;
 }
 
-/** Косметика: один масштаб и одна «посадка» — без подбора по SKU. */
+/** Косметика: фиксированная целевая площадь товара (как на макете с рамкой). */
 async function resolveCosmeticsUniformPlacement(
   prepared: PreparedProductImage,
   zoneW: number,
@@ -256,56 +257,56 @@ async function resolveCosmeticsUniformPlacement(
   cardW: number,
   cardH: number
 ): Promise<AdaptiveProductResult> {
-  const strategy: FitStrategy = {
-    id: "cosmetics-uniform-v2",
+  const isNarrow = prepared.aspect < 0.55;
+
+  const fit = await fitProductPng(prepared.buffer, zoneW, zoneH, {
+    cardW,
+    cardH,
+    referenceBoxOnly: true,
+    preparedInput: prepared.buffer,
+    fitMode: isNarrow ? "cover-height" : "contain",
     scaleMultiplier: PODRUZHKA_COSMETICS_PRODUCT_SCALE,
-    referenceBoxMinHeightFill: 0.88,
-    referenceBoxMinWidthFill: 0.86,
-    referenceBoxMinCardHeightFill: TARGET_H,
-    verticalAlign: "bottom"
-  };
+    referenceBoxMinHeightFill: PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL,
+    referenceBoxMinWidthFill: isNarrow ? 0 : PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL,
+    referenceBoxMinCardHeightFill: 0.52
+  });
 
-  const lift = PODRUZHKA_COSMETICS_BOTTOM_LIFT_PX;
+  let width = fit.width;
+  let height = fit.height;
 
-  for (const scaleMul of [PODRUZHKA_COSMETICS_PRODUCT_SCALE, 1]) {
-    const fit = await fitProductPng(prepared.buffer, zoneW, zoneH, {
-      cardW,
-      cardH,
-      referenceBoxOnly: true,
-      preparedInput: prepared.buffer,
-      fitMode: "contain",
-      scaleMultiplier: scaleMul,
-      referenceBoxMinHeightFill: strategy.referenceBoxMinHeightFill,
-      referenceBoxMinWidthFill: strategy.referenceBoxMinWidthFill,
-      referenceBoxMinCardHeightFill: strategy.referenceBoxMinCardHeightFill
-    });
-
-    let width = fit.width;
-    let height = fit.height;
-    const maxH = Math.round(zoneH * PODRUZHKA_COSMETICS_MAX_ZONE_HEIGHT_FILL);
-    if (height > maxH) {
-      const s = maxH / height;
-      width = Math.max(1, Math.round(width * s));
-      height = maxH;
-    }
-
-    const cappedFit: FitResult = { ...fit, width, height };
-    const rawX = PODRUZHKA_PRODUCT_VISUAL.x + zoneW - width;
-    const rawY = computeProductDrawY(cappedFit, "bottom", lift);
-    const { drawX, drawY } = clampProductDrawPlacement(cappedFit, rawX, rawY, lift);
-
-    if (isValidPlacement(drawX, drawY, cappedFit)) {
-      return {
-        fit: cappedFit,
-        drawX,
-        drawY,
-        strategyId: `${strategy.id}@scale${scaleMul}`,
-        visualScore: 100
-      };
-    }
+  const targetH = Math.round(zoneH * PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL);
+  const targetW = Math.round(zoneW * PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL);
+  const scaleUp = Math.min(
+    targetH / height,
+    targetW / width,
+    zoneH / height,
+    zoneW / width
+  );
+  if (scaleUp > 1.01) {
+    width = Math.max(1, Math.round(width * scaleUp));
+    height = Math.max(1, Math.round(height * scaleUp));
   }
 
-  throw new Error("Не удалось разместить foto (косметика)");
+  const cappedFit: FitResult = { ...fit, width, height };
+  const rawX = PODRUZHKA_PRODUCT_VISUAL.x + zoneW - width;
+  const zoneTop = PODRUZHKA_PRODUCT_VISUAL.y;
+  const zoneBottom = PODRUZHKA_PRODUCT_VISUAL.bottom;
+  const idealY =
+    zoneTop + zoneH * PODRUZHKA_COSMETICS_VERTICAL_CENTER_BIAS - height / 2;
+  const rawY = Math.max(zoneTop, Math.min(zoneBottom - height, Math.round(idealY)));
+  const { drawX, drawY } = clampProductDrawPlacement(cappedFit, rawX, rawY, 0);
+
+  if (!isValidPlacement(drawX, drawY, cappedFit)) {
+    throw new Error("Не удалось разместить foto (косметика)");
+  }
+
+  return {
+    fit: cappedFit,
+    drawX,
+    drawY,
+    strategyId: `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
+    visualScore: 100
+  };
 }
 
 /** Подбирает масштаб и позицию foto под конкретный исходник. */
