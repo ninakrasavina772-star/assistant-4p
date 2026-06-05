@@ -21,6 +21,11 @@ import {
 } from "@/lib/podruzhkaProductPlacement";
 
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
+import {
+  PODRUZHKA_COSMETICS_BOTTOM_LIFT_PX,
+  PODRUZHKA_COSMETICS_MAX_ZONE_HEIGHT_FILL,
+  PODRUZHKA_COSMETICS_PRODUCT_SCALE
+} from "@/lib/podruzhkaCosmeticsLayout";
 
 type VerticalAlign = "bottom" | "lower-third";
 
@@ -45,20 +50,14 @@ const TARGET_H = R.product.heightRatioTarget;
 const TARGET_W = R.product.widthRatioTarget;
 const WIDE_ASPECT = 1.08;
 
-function buildStrategies(
-  prepared: PreparedProductImage,
-  profile: PodruzhkaRenderProfile
-): FitStrategy[] {
-  const scaleBoost = profile === "cosmetics" ? 1.12 : 1;
+function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
   const { aspect, maxDim } = prepared;
   const isWide = aspect >= WIDE_ASPECT;
-
-  const mul = (n: number) => Math.round(n * scaleBoost * 1000) / 1000;
 
   const strategies: FitStrategy[] = [
     {
       id: isWide ? "wide-balanced" : "balanced",
-      scaleMultiplier: mul(1),
+      scaleMultiplier: 1,
       referenceBoxMinHeightFill: isWide ? 0.86 : 0.94,
       referenceBoxMinWidthFill: isWide ? 0.94 : 0.88,
       referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -66,7 +65,7 @@ function buildStrategies(
     },
     {
       id: isWide ? "wide-width-first" : "height-priority",
-      scaleMultiplier: mul(isWide ? 1.02 : 1.04),
+      scaleMultiplier: isWide ? 1.02 : 1.04,
       referenceBoxMinHeightFill: isWide ? 0.82 : 0.97,
       referenceBoxMinWidthFill: isWide ? 0.96 : 0.82,
       referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -77,7 +76,7 @@ function buildStrategies(
   if (isWide) {
     strategies.push({
       id: "wide-set-compact",
-      scaleMultiplier: mul(1.05),
+      scaleMultiplier: 1.05,
       referenceBoxMinHeightFill: 0.8,
       referenceBoxMinWidthFill: 0.98,
       referenceBoxMinCardHeightFill: 0,
@@ -88,7 +87,7 @@ function buildStrategies(
   if (aspect <= 0.75) {
     strategies.push({
       id: "tall-bottle",
-      scaleMultiplier: mul(1.03),
+      scaleMultiplier: 1.03,
       referenceBoxMinHeightFill: 0.98,
       referenceBoxMinWidthFill: 0.78,
       referenceBoxMinCardHeightFill: 0.6,
@@ -100,7 +99,7 @@ function buildStrategies(
     strategies.push(
       {
         id: "small-source-upscale",
-        scaleMultiplier: mul(1.12),
+        scaleMultiplier: 1.12,
         referenceBoxMinHeightFill: isWide ? 0.86 : 0.94,
         referenceBoxMinWidthFill: 0.92,
         referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -108,7 +107,7 @@ function buildStrategies(
       },
       {
         id: "small-source-upscale-strong",
-        scaleMultiplier: mul(1.2),
+        scaleMultiplier: 1.2,
         referenceBoxMinHeightFill: isWide ? 0.88 : 0.96,
         referenceBoxMinWidthFill: 0.94,
         referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -249,6 +248,66 @@ async function tryStrategy(
   return bestLocal;
 }
 
+/** Косметика: один масштаб и одна «посадка» — без подбора по SKU. */
+async function resolveCosmeticsUniformPlacement(
+  prepared: PreparedProductImage,
+  zoneW: number,
+  zoneH: number,
+  cardW: number,
+  cardH: number
+): Promise<AdaptiveProductResult> {
+  const strategy: FitStrategy = {
+    id: "cosmetics-uniform-v2",
+    scaleMultiplier: PODRUZHKA_COSMETICS_PRODUCT_SCALE,
+    referenceBoxMinHeightFill: 0.88,
+    referenceBoxMinWidthFill: 0.86,
+    referenceBoxMinCardHeightFill: TARGET_H,
+    verticalAlign: "bottom"
+  };
+
+  const lift = PODRUZHKA_COSMETICS_BOTTOM_LIFT_PX;
+
+  for (const scaleMul of [PODRUZHKA_COSMETICS_PRODUCT_SCALE, 1]) {
+    const fit = await fitProductPng(prepared.buffer, zoneW, zoneH, {
+      cardW,
+      cardH,
+      referenceBoxOnly: true,
+      preparedInput: prepared.buffer,
+      fitMode: "contain",
+      scaleMultiplier: scaleMul,
+      referenceBoxMinHeightFill: strategy.referenceBoxMinHeightFill,
+      referenceBoxMinWidthFill: strategy.referenceBoxMinWidthFill,
+      referenceBoxMinCardHeightFill: strategy.referenceBoxMinCardHeightFill
+    });
+
+    let width = fit.width;
+    let height = fit.height;
+    const maxH = Math.round(zoneH * PODRUZHKA_COSMETICS_MAX_ZONE_HEIGHT_FILL);
+    if (height > maxH) {
+      const s = maxH / height;
+      width = Math.max(1, Math.round(width * s));
+      height = maxH;
+    }
+
+    const cappedFit: FitResult = { ...fit, width, height };
+    const rawX = PODRUZHKA_PRODUCT_VISUAL.x + zoneW - width;
+    const rawY = computeProductDrawY(cappedFit, "bottom", lift);
+    const { drawX, drawY } = clampProductDrawPlacement(cappedFit, rawX, rawY, lift);
+
+    if (isValidPlacement(drawX, drawY, cappedFit)) {
+      return {
+        fit: cappedFit,
+        drawX,
+        drawY,
+        strategyId: `${strategy.id}@scale${scaleMul}`,
+        visualScore: 100
+      };
+    }
+  }
+
+  throw new Error("Не удалось разместить foto (косметика)");
+}
+
 /** Подбирает масштаб и позицию foto под конкретный исходник. */
 export async function resolveAdaptiveProductPlacement(
   input: Buffer,
@@ -260,7 +319,11 @@ export async function resolveAdaptiveProductPlacement(
   const cardW = R.size.w;
   const cardH = R.size.h;
 
-  const strategies = buildStrategies(prepared, profile);
+  if (profile === "cosmetics") {
+    return resolveCosmeticsUniformPlacement(prepared, zoneW, zoneH, cardW, cardH);
+  }
+
+  const strategies = buildStrategies(prepared);
   let best: AdaptiveProductResult | null = null;
 
   for (const strategy of strategies) {
@@ -282,12 +345,10 @@ export async function resolveAdaptiveProductPlacement(
   }
 
   const base = strategies[0]!;
-  const fineMuls =
-    profile === "cosmetics" ? [1.04, 1.08, 1.1, 1.14] : [1.03, 1.06, 1.08];
-  for (const mul of fineMuls) {
+  for (const mul of [1.03, 1.06, 1.08]) {
     const tuned = await tryStrategy(
       prepared,
-      { ...base, id: `fine-${mul}`, scaleMultiplier: mul * (profile === "cosmetics" ? 1.12 : 1) },
+      { ...base, id: `fine-${mul}`, scaleMultiplier: mul },
       zoneW,
       zoneH,
       cardW,

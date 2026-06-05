@@ -544,7 +544,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     let fail = 0;
     let noFoto = 0;
     let sampleFotoError: string | null = null;
-    const visionNote = "Рендер: cosmetics-v1 — крупнее foto и benefit desc, html-figma-cosmetics-v1.";
+    const visionNote = "Рендер: cosmetics-v2 — фикс. масштаб foto + benefit desc 22px.";
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
     const noFotoRows: { row: number; brand: string; error: string }[] = [];
@@ -972,7 +972,7 @@ export function PodruzhkaCosmeticsOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-cosmetics-v1).
+                      html-figma-cosmetics-v2).
                     </>
                   ) : null}
                 </p>
