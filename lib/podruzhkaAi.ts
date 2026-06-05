@@ -27,33 +27,35 @@ type AiJson = {
 
 const EX = PODRUZHKA_AI_OBRAZEC;
 
-const SYSTEM = `Ты эксперт по парфюмерии. Заполняешь model, три ноты (note 1–3) и проверяешь тип для карточки — инфографика Ozon «Подружка Global» 1024×1365 (3:4).
+const SYSTEM = `Ты эксперт по парфюмерии. Заполняешь model и три пары «название ноты + описание» для инфографики Ozon «Подружка Global».
 
-ЭТАЛОН КОМПОЗИЦИИ — Carolina Herrera «212 Sexy» (reference-target.png). Слева сверху вниз:
-1) brand name (крупно) — из Excel, не model
-2) product_type_card — серая строка под брендом (ты предлагаешь текст для карточки)
-3) model — короткое имя аромата: «212 Sexy», «Duro», «Red Hoba» (без бренда, без «мл»)
-4) три ноты — блок по центру-низу листа (title КАПС + desc серым)
-5) ml — объём внизу слева
+СТРУКТУРА EXCEL (строго):
+- note 1 → title (название, одно слово КАПС), note 1 (2) → desc (описание, 2–6 слов, lowercase)
+- note 2 → title, note 2 (1) → desc
+- note 3 → title, note 3 (1) → desc
 
-На макете одна розовая черта — только под блоком нот, перед ml. Под model черты нет.
-Справа — большое foto товара без отдельной тени.
+Пример: note 1 = «ДРЕВЕСНЫЙ», note 1 (2) = «тёплый и глубокий».
 
-ОБРАЗЕЦ ТЕКСТА (Nasomatto) — в Excel заголовок и описание в разных столбцах:
+В JSON: notes[0].title → note 1, notes[0].desc → note 1 (2); notes[1] → note 2 / note 2 (1); notes[2] → note 3 / note 3 (1).
+НЕ объединяй title и desc в одну строку. НЕ копируй title в desc.
+
+ОБРАЗЕЦ (Nasomatto):
 - model: «${EX.model}»
 - note 1 / note 1 (2): ${EX.notes[0]!.title} / ${EX.notes[0]!.desc}
 - note 2 / note 2 (1): ${EX.notes[1]!.title} / ${EX.notes[1]!.desc}
 - note 3 / note 3 (1): ${EX.notes[2]!.title} / ${EX.notes[2]!.desc}
 
 Правила:
-1. model — коммерческое имя из product name / name. Не SKU, не бренд.
-2. notes — 3 блока: title одно слово КАПС из списка ${allowedNoteTitlesPrompt()}; desc 2–6 слов, с маленькой буквы.
-3. product_type_card — правильный тип для серой строки на карточке, lowercase: «туалетная вода мужская», «парфюмерная вода», «духи», «набор». По Fragrantica / бренду. Колонку product_type в фиде НЕ меняем — только product_type_card в ответе.
-4. ЗАПРЕЩЕНО в notes: цветучий, цветение, цветочная, англ. в title, выдуманные термины.
-5. Источники: Fragrantica / сайт бренда. Иначе found: false.
-6. Три title нот — разные слова.
+1. model — короткое имя аромата из product name / name («Duro», «212 Sexy»). Без бренда, без «мл», без SKU.
+2. notes — ровно 3 объекта {title, desc}:
+   - title: одно слово из списка: ${allowedNoteTitlesPrompt()}
+   - desc: 2–6 слов по-русски, с маленькой буквы, без точки в конце
+3. Три title — РАЗНЫЕ семейства. Повторы запрещены.
+4. product_type_card — только если тип на карточке ≠ product_type в Excel; иначе "".
+5. Источники: Fragrantica / сайт бренда. Если не нашёл — found: false.
+6. ЗАПРЕЩЕНО: цветучий, цветение, англ. в title, выдуманные термины.
 
-JSON: {"found":true,"model":"...","product_type_card":"парфюмерная вода","notes":[...],"sources":[...]} или {"found":false,...}`;
+JSON: {"found":true,"model":"...","product_type_card":"","notes":[{"title":"ДРЕВЕСНЫЙ","desc":"тёплый и глубокий"},...],"sources":["..."]} или {"found":false,...}`;
 
 function buildUserMessage(row: PodruzhkaFeedRow): string {
   return [
@@ -86,11 +88,14 @@ function parseNotes(raw: AiJson): PodruzhkaNoteBlock[] {
 function validateNotes(notes: PodruzhkaNoteBlock[]): string | null {
   if (notes.length < 3) return "Меньше трёх нот";
   const titles = notes.map((n) => n.title);
-  if (new Set(titles).size < 3) return "Повторяющиеся семейства нот";
+  if (new Set(titles).size < 3) return "Повторяющиеся названия нот (note 1–3 должны быть разными)";
   for (const n of notes) {
-    if (!n.title || !n.desc) return "Пустой блок нот";
+    if (!n.title || !n.desc) return "Пустой блок: нужны и название (note N), и описание (note N desc)";
     if (!isAllowedNoteTitle(n.title)) {
-      return `Недопустимый заголовок ноты: ${n.title}`;
+      return `Недопустимое название ноты: ${n.title}`;
+    }
+    if (n.desc.toUpperCase() === n.title) {
+      return `Описание не должно повторять название: ${n.title}`;
     }
   }
   return null;
@@ -126,11 +131,12 @@ export async function fetchNotesForRows(
   );
 }
 
-async function fetchOne(
+async function callOpenAi(
   apiKey: string,
   model: string,
-  row: PodruzhkaFeedRow
-): Promise<PodruzhkaAiResult> {
+  row: PodruzhkaFeedRow,
+  extraUser?: string
+): Promise<AiJson> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -143,7 +149,10 @@ async function fetchOne(
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM },
-        { role: "user", content: buildUserMessage(row) }
+        {
+          role: "user",
+          content: extraUser ? `${buildUserMessage(row)}\n\n${extraUser}` : buildUserMessage(row)
+        }
       ]
     }),
     signal: AbortSignal.timeout(50_000)
@@ -162,13 +171,14 @@ async function fetchOne(
     throw new Error("OpenAI: некорректный ответ");
   }
 
-  let parsed: AiJson;
   try {
-    parsed = JSON.parse(content) as AiJson;
+    return JSON.parse(content) as AiJson;
   } catch {
     throw new Error("OpenAI: не JSON");
   }
+}
 
+function resultFromParsed(row: PodruzhkaFeedRow, parsed: AiJson): PodruzhkaAiResult {
   const productTypeCard = normalizeProductTypeCard(String(parsed.product_type_card ?? ""));
   const mismatch = productTypesDiffer(row.productType, productTypeCard);
 
@@ -211,4 +221,25 @@ async function fetchOne(
     productTypeMismatch: mismatch,
     sources: Array.isArray(parsed.sources) ? parsed.sources.map(String) : []
   };
+}
+
+async function fetchOne(
+  apiKey: string,
+  model: string,
+  row: PodruzhkaFeedRow
+): Promise<PodruzhkaAiResult> {
+  let parsed = await callOpenAi(apiKey, model, row);
+  let result = resultFromParsed(row, parsed);
+
+  if (!result.ok && result.error?.includes("Повтор")) {
+    parsed = await callOpenAi(
+      apiKey,
+      model,
+      row,
+      `ОШИБКА: ${result.error}. Верни три РАЗНЫХ title из списка семейств.`
+    );
+    result = resultFromParsed(row, parsed);
+  }
+
+  return result;
 }

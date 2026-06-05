@@ -519,7 +519,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: Canvas 2D + Inter/Libre Franklin, html-figma-v2.";
+                  "Рендер: Canvas 2D + Inter/Libre Franklin, html-figma-v3.";
               }
             } catch (e) {
               fail++;
@@ -760,10 +760,11 @@ export function PodruzhkaOzonTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              AI заполняет <strong>model</strong>, <strong>note 1–3</strong> (заголовок и описание в
-              отдельных столбцах) и проверяет тип для карточки. <strong>product_type</strong> в фиде
-              не меняется — при расхождении появится колонка <strong>product type card</strong>.
-              Ноты: <strong>note 1</strong> + <strong>note 1 (2)</strong>, и так для note 2–3.
+              AI заполняет <strong>model</strong> и ноты в отдельных столбцах:{" "}
+              <strong>note 1–3</strong> — название (ДРЕВЕСНЫЙ),{" "}
+              <strong>note 1 (2)</strong>, <strong>note 2 (1)</strong>, <strong>note 3 (1)</strong>{" "}
+              — описание (тёплый и глубокий). Три названия нот не повторяются.{" "}
+              <strong>product_type</strong> в фиде не меняется.
             </p>
             <p className="text-xs text-slate-500">
               Скорость: до {NOTES_CHUNK * NOTES_PARALLEL} ароматов параллельно — ~1900 позиций
@@ -904,8 +905,8 @@ export function PodruzhkaOzonTool() {
                   {layoutVersion ? (
                     <>
                       {" "}
-                      Макет: <code className="text-xs">{layoutVersion}</code> (ожидается
-                      figma-cursor-v1 — иначе Ctrl+F5).
+                      Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
+                      html-figma-v3).
                     </>
                   ) : null}
                 </p>

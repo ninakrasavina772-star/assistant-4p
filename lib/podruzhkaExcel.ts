@@ -6,6 +6,7 @@ import {
   type PodruzhkaColumnMapping,
   type PodruzhkaSheetInfo
 } from "@/lib/podruzhkaColumnMapping";
+import { sanitizeNoteTitle } from "@/lib/podruzhkaAiNotes";
 import { resolveProductTypeForRender } from "@/lib/podruzhkaProductType";
 import {
   PODRUZHKA_AI_COLUMN_DEFS,
@@ -247,6 +248,12 @@ function readNoteBlock(
   return parseNoteCellText(cellPlainValue(ws.getCell(row, mainCol).value));
 }
 
+function normalizeNoteDesc(s: string): string {
+  const t = s.trim().replace(/\.$/, "");
+  if (!t) return "";
+  return t.charAt(0).toLowerCase() + t.slice(1);
+}
+
 function writeNoteBlock(
   ws: ExcelJS.Worksheet,
   row: number,
@@ -258,8 +265,8 @@ function writeNoteBlock(
   const descCol = cols[`note${i}_desc` as PodruzhkaAiColumnKey];
   if (!mainCol) return;
 
-  const title = n?.title ?? "";
-  const desc = n?.desc ?? "";
+  const title = n?.title ? sanitizeNoteTitle(n.title) : "";
+  const desc = n?.desc ? normalizeNoteDesc(n.desc) : "";
   if (descCol) {
     ws.getCell(row, mainCol).value = title;
     ws.getCell(row, descCol).value = desc;
