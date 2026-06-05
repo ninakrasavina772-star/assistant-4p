@@ -6,6 +6,7 @@ import {
   PODRUZHKA_FIGMA as F,
   figmaTextBaseline
 } from "@/lib/podruzhkaFigmaLayout";
+import { PODRUZHKA_PRODUCT_FIT } from "@/lib/podruzhkaProductPlacement";
 import type { TextFlowLayout } from "@/lib/podruzhkaTextFlow";
 
 export const PODRUZHKA_LAYOUT_VERSION = "figma-cursor-v1";
@@ -22,9 +23,10 @@ export const REFERENCE_TEXT_ANCHORS = {
   noteBlockHeight: F.notes[1]!.titleY - F.notes[0]!.titleY,
   mlBarGapAfterNotes: F.mlPinkBar.y - (F.notes[2]!.descY + F.notes[2]!.descH),
   mlAccentY: F.mlPinkBar.y,
-  productBoxScale: 1.12,
-  productBoxMinHeightFill: 0.92,
-  productBoxMinWidthFill: 0.82,
+  productBoxScale: PODRUZHKA_PRODUCT_FIT.referenceBoxScale,
+  productBoxMinHeightFill: PODRUZHKA_PRODUCT_FIT.referenceBoxMinHeightFill,
+  productBoxMinWidthFill: PODRUZHKA_PRODUCT_FIT.referenceBoxMinWidthFill,
+  productBoxMinCardHeightFill: PODRUZHKA_PRODUCT_FIT.referenceBoxMinCardHeightFill,
   figmaNotes: F.notes,
   figmaNotesPinkBar: F.notesPinkBar,
   figmaMlPinkBar: F.mlPinkBar,

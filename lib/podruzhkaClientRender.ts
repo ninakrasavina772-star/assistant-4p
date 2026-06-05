@@ -8,6 +8,7 @@ import {
 import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { measureFromCanvas2D } from "@/lib/podruzhkaBrandLayout";
 import { computeHeaderStack, drawTextBlock } from "@/lib/podruzhkaHeaderLayout";
+import { PODRUZHKA_PRODUCT_VISUAL } from "@/lib/podruzhkaProductPlacement";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 
 const FONT_DIR = "/podruzhka/fonts";
@@ -84,10 +85,13 @@ export async function fetchProcessedFoto(fotoUrl: string): Promise<ProcessedFoto
     throw new Error(msg);
   }
 
-  const drawX = Number(res.headers.get("X-Podruzhka-Draw-X") ?? F.product.x);
-  const drawY = Number(res.headers.get("X-Podruzhka-Draw-Y") ?? F.product.y);
-  const width = Number(res.headers.get("X-Podruzhka-Width") ?? F.product.w);
-  const height = Number(res.headers.get("X-Podruzhka-Height") ?? F.product.h);
+  const drawX = Number(res.headers.get("X-Podruzhka-Draw-X") ?? PODRUZHKA_PRODUCT_VISUAL.x);
+  const drawY = Number(res.headers.get("X-Podruzhka-Draw-Y") ?? PODRUZHKA_PRODUCT_VISUAL.y);
+  const width = Number(res.headers.get("X-Podruzhka-Width") ?? PODRUZHKA_PRODUCT_VISUAL.w);
+  const height = Number(
+    res.headers.get("X-Podruzhka-Height") ??
+      PODRUZHKA_PRODUCT_VISUAL.bottom - PODRUZHKA_PRODUCT_VISUAL.y
+  );
   const blob = await res.blob();
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();

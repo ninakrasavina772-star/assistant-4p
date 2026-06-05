@@ -306,6 +306,9 @@ export async function autoCorrectProductLayout(
         : undefined,
       referenceBoxMinWidthFill: LAYOUT_RULES.replaceOnly
         ? REFERENCE_TEXT_ANCHORS.productBoxMinWidthFill
+        : undefined,
+      referenceBoxMinCardHeightFill: LAYOUT_RULES.replaceOnly
+        ? REFERENCE_TEXT_ANCHORS.productBoxMinCardHeightFill
         : undefined
     });
     lastFit = fit;

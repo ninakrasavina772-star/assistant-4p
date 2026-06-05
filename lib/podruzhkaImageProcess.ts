@@ -96,6 +96,63 @@ export async function stripNearWhiteBackground(
     .toBuffer();
 }
 
+/** Обрезка до bbox видимого товара (не прозрачный и не белый фон). */
+export async function cropToVisibleProduct(
+  input: Buffer,
+  whiteThreshold = 242
+): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  const isVisible = (pi: number): boolean => {
+    const a = data[pi + 3]!;
+    if (a < 14) return false;
+    const r = data[pi]!;
+    const g = data[pi + 1]!;
+    const b = data[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    return !(avg >= whiteThreshold && spread <= 28);
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isVisible((y * w + x) * 4)) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+
+  if (maxX < minX || maxY < minY) return input;
+
+  const padX = Math.max(2, Math.round((maxX - minX + 1) * 0.02));
+  const padY = Math.max(2, Math.round((maxY - minY + 1) * 0.02));
+  const left = Math.max(0, minX - padX);
+  const top = Math.max(0, minY - padY);
+  const width = Math.min(w - left, maxX - minX + 1 + padX * 2);
+  const height = Math.min(h - top, maxY - minY + 1 + padY * 2);
+
+  if (width < 8 || height < 8) return input;
+
+  return sharp(input)
+    .extract({ left, top, width, height })
+    .png()
+    .toBuffer();
+}
+
 async function trimTransparentSafe(input: Buffer): Promise<Buffer> {
   const before = await sharp(input).metadata();
   const origW = before.width ?? 1;
@@ -171,10 +228,12 @@ export type FitProductOptions = {
   referenceBoxOnly?: boolean;
   /** Доп. масштаб внутри рамки (replaceOnly, ≈1.12–1.16) */
   referenceBoxScale?: number;
-  /** Доля высоты рамки, которую должен занять товар (0.85–0.92) */
+  /** Доля высоты рамки, которую должен занять товар (0.85–0.96) */
   referenceBoxMinHeightFill?: number;
   /** Доля ширины рамки (наборы, коробка+флакон) */
   referenceBoxMinWidthFill?: number;
+  /** Доля высоты всей карточки (широкие наборы коробка+флакон) */
+  referenceBoxMinCardHeightFill?: number;
 };
 
 export type FitResult = {
@@ -232,8 +291,10 @@ export async function fitProductPng(
   const scaleMul = referenceBoxOnly ? 1 : (opts.scaleMultiplier ?? 1);
 
   const trimmed = referenceBoxOnly
-    ? await trimTransparentSafe(
-        await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
+    ? await cropToVisibleProduct(
+        await trimTransparentSafe(
+          await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
+        )
       )
     : await trimTransparentSafe(
         await stripGrayFloorShadow(await stripNearWhiteBackground(input))
@@ -291,6 +352,16 @@ export async function fitProductPng(
       const targetW = Math.round(maxW * minWFill);
       if (width < targetW && width < maxW) {
         const s = Math.min(targetW / width, maxH / height, maxW / width);
+        width = Math.round(width * s);
+        height = Math.round(height * s);
+      }
+    }
+    const cardMinHFill = opts.referenceBoxMinCardHeightFill ?? 0;
+    if (cardMinHFill > 0) {
+      const cardTargetH = Math.round(cardH * cardMinHFill);
+      const cappedTarget = Math.min(cardTargetH, maxH);
+      if (height < cappedTarget) {
+        const s = Math.min(cappedTarget / height, maxW / width, maxH / height);
         width = Math.round(width * s);
         height = Math.round(height * s);
       }

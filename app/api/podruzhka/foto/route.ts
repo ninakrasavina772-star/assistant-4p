@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { fitProductPng } from "@/lib/podruzhkaImageProcess";
-import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
+import {
+  computeProductDrawPlacement,
+  PODRUZHKA_PRODUCT_FIT,
+  PODRUZHKA_PRODUCT_VISUAL,
+  productVisualHeight
+} from "@/lib/podruzhkaProductPlacement";
 
 export const maxDuration = 60;
 
@@ -20,18 +25,20 @@ export async function GET(req: Request) {
     );
   }
 
-  const fit = await fitProductPng(fetched.buf, F.product.w, F.product.h, {
+  const zoneW = PODRUZHKA_PRODUCT_VISUAL.w;
+  const zoneH = productVisualHeight();
+
+  const fit = await fitProductPng(fetched.buf, zoneW, zoneH, {
     cardW: R.size.w,
     cardH: R.size.h,
     referenceBoxOnly: true,
-    referenceBoxScale: 1.12,
-    referenceBoxMinHeightFill: 0.92,
-    referenceBoxMinWidthFill: 0.82
+    referenceBoxScale: PODRUZHKA_PRODUCT_FIT.referenceBoxScale,
+    referenceBoxMinHeightFill: PODRUZHKA_PRODUCT_FIT.referenceBoxMinHeightFill,
+    referenceBoxMinWidthFill: PODRUZHKA_PRODUCT_FIT.referenceBoxMinWidthFill,
+    referenceBoxMinCardHeightFill: PODRUZHKA_PRODUCT_FIT.referenceBoxMinCardHeightFill
   });
 
-  const drawX = F.product.x + F.product.w - fit.width;
-  const inset = fit.bottomAlphaInset ?? 0;
-  const drawY = Math.max(F.product.y, F.product.y + F.product.h - fit.height + inset);
+  const { drawX, drawY } = computeProductDrawPlacement(fit);
 
   return new NextResponse(new Uint8Array(fit.buffer), {
     headers: {
