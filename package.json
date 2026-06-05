@@ -4,12 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/copy-podruzhka-fonts.mjs && next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "node scripts/copy-podruzhka-fonts.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/libre-franklin": "^5.2.8",
     "@fontsource/noto-sans": "^5.2.10",
     "@napi-rs/canvas": "^1.0.0",
     "@vercel/blob": "^0.27.0",

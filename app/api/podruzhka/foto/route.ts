@@ -1,15 +1,10 @@
 import { NextResponse } from "next/server";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
+import { fitProductPng } from "@/lib/podruzhkaImageProcess";
+import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
+import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 
 export const maxDuration = 60;
-
-function guessContentType(buf: Buffer): string {
-  if (buf[0] === 0x89 && buf[1] === 0x50) return "image/png";
-  if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
-  if (buf[0] === 0x47 && buf[1] === 0x49) return "image/gif";
-  if (buf.length > 12 && buf.slice(8, 12).toString() === "WEBP") return "image/webp";
-  return "application/octet-stream";
-}
 
 export async function GET(req: Request) {
   const url = new URL(req.url).searchParams.get("url")?.trim() ?? "";
@@ -25,10 +20,24 @@ export async function GET(req: Request) {
     );
   }
 
-  return new NextResponse(new Uint8Array(fetched.buf), {
+  const fit = await fitProductPng(fetched.buf, F.product.w, F.product.h, {
+    cardW: R.size.w,
+    cardH: R.size.h,
+    referenceBoxOnly: true
+  });
+
+  const drawX = F.product.x + F.product.w - fit.width;
+  const inset = fit.bottomAlphaInset ?? 0;
+  const drawY = Math.max(F.product.y, F.product.y + F.product.h - fit.height + inset);
+
+  return new NextResponse(new Uint8Array(fit.buffer), {
     headers: {
-      "Content-Type": guessContentType(fetched.buf),
-      "Cache-Control": "private, max-age=300"
+      "Content-Type": "image/png",
+      "Cache-Control": "private, max-age=300",
+      "X-Podruzhka-Draw-X": String(drawX),
+      "X-Podruzhka-Draw-Y": String(drawY),
+      "X-Podruzhka-Width": String(fit.width),
+      "X-Podruzhka-Height": String(fit.height)
     }
   });
 }

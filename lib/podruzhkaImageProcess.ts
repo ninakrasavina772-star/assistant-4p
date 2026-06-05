@@ -1,6 +1,73 @@
 import sharp from "sharp";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 
+/**
+ * Убирает только белый фон, связанный с краями кадра (типичный JPEG с Ozon).
+ * Белые детали внутри товара (светлая коробка) не трогаем.
+ */
+export async function stripEdgeNearWhiteBackground(
+  input: Buffer,
+  threshold = 242
+): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const visited = new Uint8Array(w * h);
+  const queue: number[] = [];
+
+  const nearWhiteAt = (pi: number): boolean => {
+    const r = pixels[pi]!;
+    const g = pixels[pi + 1]!;
+    const b = pixels[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    return avg >= threshold && spread <= 28;
+  };
+
+  const tryPush = (idx: number) => {
+    if (idx < 0 || idx >= w * h || visited[idx]) return;
+    if (!nearWhiteAt(idx * 4)) return;
+    queue.push(idx);
+  };
+
+  for (let x = 0; x < w; x++) {
+    tryPush(x);
+    tryPush((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    tryPush(y * w);
+    tryPush(y * w + (w - 1));
+  }
+
+  while (queue.length) {
+    const idx = queue.pop()!;
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    const pi = idx * 4;
+    if (!nearWhiteAt(pi)) continue;
+    pixels[pi + 3] = 0;
+    const x = idx % w;
+    const y = (idx - x) / w;
+    if (x > 0) tryPush(idx - 1);
+    if (x < w - 1) tryPush(idx + 1);
+    if (y > 0) tryPush(idx - w);
+    if (y < h - 1) tryPush(idx + w);
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 export async function stripNearWhiteBackground(
   input: Buffer,
   threshold = 238
@@ -164,9 +231,10 @@ export async function fitProductPng(
     : (opts.narrowAspectBoost ?? R.product.narrowAspectBoost);
   const scaleMul = referenceBoxOnly ? 1 : (opts.scaleMultiplier ?? 1);
 
-  // replaceOnly: foto с Ozon как есть — вырезка белого/серого ломает коробки и наборы
   const trimmed = referenceBoxOnly
-    ? input
+    ? await trimTransparentSafe(
+        await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
+      )
     : await trimTransparentSafe(
         await stripGrayFloorShadow(await stripNearWhiteBackground(input))
       );

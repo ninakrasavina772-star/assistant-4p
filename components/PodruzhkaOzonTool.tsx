@@ -519,7 +519,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: HTML в браузере (Inter + Libre Franklin, координаты Figma).";
+                  "Рендер: Canvas 2D + Inter/Libre Franklin, html-figma-v2.";
               }
             } catch (e) {
               fail++;

@@ -33,14 +33,14 @@ let fontsReady = false;
 
 function ensureFonts(): void {
   if (fontsReady) return;
-  const dir = path.join(process.cwd(), "public", "fonts");
+  const dir = path.join(process.cwd(), "public", "podruzhka", "fonts");
   const pairs: [string, string][] = [
-    ["Montserrat-Regular.ttf", "Montserrat"],
-    ["Montserrat-Bold.ttf", "MontserratBold"],
-    ["Montserrat-ExtraBold.ttf", "MontserratExtraBold"],
-    ["Montserrat-MediumItalic.ttf", "MontserratMediumItalic"],
-    ["NotoSans-Regular.ttf", "NotoSans"],
-    ["NotoSans-Bold.ttf", "NotoSansBold"]
+    ["libre-franklin-latin-800-normal.woff2", "Libre Franklin"],
+    ["inter-latin-400-normal.woff2", "Inter"],
+    ["inter-latin-500-normal.woff2", "Inter"],
+    ["inter-latin-500-italic.woff2", "Inter"],
+    ["inter-latin-700-normal.woff2", "Inter"],
+    ["inter-latin-800-normal.woff2", "Inter"]
   ];
   for (const [file, family] of pairs) {
     const p = path.join(dir, file);
@@ -58,7 +58,11 @@ function formatMl(ml: string): string {
 }
 
 function brandFont(size: number): string {
-  return `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+  return `800 ${size}px "Libre Franklin", Inter, sans-serif`;
+}
+
+function interFont(size: number, weight: number, italic = false): string {
+  return `${italic ? "italic " : ""}${weight} ${size}px Inter, sans-serif`;
 }
 
 function wrapLines(
@@ -145,7 +149,7 @@ function resolveModelFontSize(
 
   if (LAYOUT_RULES.replaceOnly) {
     for (let size = S.fonts.model.max; size >= S.fonts.model.min; size -= 2) {
-      const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+      const font = interFont(size, 800);
       const lines = wrapLines(ctx, model, maxW, font, maxLines);
       if (maxLineWidth(ctx, lines, font) <= maxW) {
         return { size, lines };
@@ -158,7 +162,7 @@ function resolveModelFontSize(
         ctx,
         model,
         maxW,
-        `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`,
+        interFont(size, 800),
         maxLines
       )
     };
@@ -171,7 +175,7 @@ function resolveModelFontSize(
   const minSize = Math.max(S.fonts.model.min, Math.round(brandSize * 0.62));
 
   for (let size = cap; size >= minSize; size -= 2) {
-    const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+    const font = interFont(size, 800);
     const lines = wrapLines(ctx, model, maxW, font, S.fonts.model.maxLines);
     const totalH = lines.length * Math.round(size * 1.08);
     if (totalH <= maxH) return { size, lines };
@@ -182,7 +186,7 @@ function resolveModelFontSize(
     ctx,
     model,
     maxW,
-    `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`,
+    interFont(size, 800),
     S.fonts.model.maxLines
   );
   return { size, lines };
@@ -200,9 +204,9 @@ function buildTextLayoutEstimate(
   const model = resolveModelFontSize(ctx, data.model, L, brand.size);
   const modelSize = Math.min(S.fonts.model.max, model.size + modelDelta);
   const brandFontStr = brandFont(brand.size);
-  const modelFontStr = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
+  const modelFontStr = interFont(modelSize, 800);
   const typeSize = S.fonts.productType.size;
-  const typeFont = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
+  const typeFont = interFont(typeSize, 400);
   const typeText = data.productType.trim().toLowerCase();
   const typeLinesEst = typeText
     ? wrapLines(ctx, typeText, L.productType.w, typeFont, 2)
@@ -282,7 +286,7 @@ function overlayDynamicText(
   );
 
   const typeSize = S.fonts.productType.size;
-  const typeFont = `400 ${typeSize}px Montserrat, NotoSans, sans-serif`;
+  const typeFont = interFont(typeSize, 400);
   const typeText = data.productType.trim().toLowerCase();
   const typeLines = typeText
     ? wrapLines(ctx, typeText, L.productType.w, typeFont, 2)
@@ -340,15 +344,15 @@ function overlayDynamicText(
   }
 
   ctx.fillStyle = C.text;
-  ctx.font = `800 ${modelSize}px MontserratExtraBold, MontserratBold, sans-serif`;
+  ctx.font = interFont(modelSize, 800);
   let modelBaseline = flow.modelFirstBaseline;
   for (const line of modelLines) {
     ctx.fillText(line, L.model.x, modelBaseline);
     modelBaseline += flow.modelLineStep;
   }
 
-  const fNoteTitle = `700 ${S.fonts.noteTitle.max}px MontserratBold, Montserrat, sans-serif`;
-  const fNoteDesc = `400 ${S.fonts.noteDesc.max}px Montserrat, NotoSans, sans-serif`;
+  const fNoteTitle = interFont(S.fonts.noteTitle.max, 700);
+  const fNoteDesc = interFont(S.fonts.noteDesc.max, 400);
   const notes = data.notes.slice(0, 3);
 
   if (LAYOUT_RULES.replaceOnly) {
@@ -467,7 +471,7 @@ function overlayMl(
   const x = S.mlAccent.x;
   drawFilledBar(ctx, x, flow.mlAccentY, S.mlAccent.w, S.mlAccent.h, C.accent);
   ctx.fillStyle = C.text;
-  ctx.font = `500 italic ${S.fonts.ml.max}px MontserratMediumItalic, Montserrat, sans-serif`;
+  ctx.font = interFont(S.fonts.ml.max, 500, true);
   ctx.fillText(formatMl(ml), S.ml.x, flow.mlBaseline);
 }
 
