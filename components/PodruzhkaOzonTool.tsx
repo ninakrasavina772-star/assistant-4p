@@ -519,7 +519,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: Canvas 2D + adaptive foto fit, html-figma-v7.";
+                  "Рендер: Canvas 2D + adaptive foto (white box fix), html-figma-v8.";
               }
             } catch (e) {
               fail++;
@@ -906,7 +906,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v7).
+                      html-figma-v8).
                     </>
                   ) : null}
                 </p>

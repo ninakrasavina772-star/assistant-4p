@@ -5,7 +5,7 @@
 import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 
-export const PODRUZHKA_HTML_LAYOUT_VERSION = "html-figma-v7";
+export const PODRUZHKA_HTML_LAYOUT_VERSION = "html-figma-v8";
 
 export const PODRUZHKA_HTML_SPEC = {
   frame: F.frame,

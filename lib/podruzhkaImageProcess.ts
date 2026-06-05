@@ -96,10 +96,10 @@ export async function stripNearWhiteBackground(
     .toBuffer();
 }
 
-/** Обрезка до bbox видимого товара (не прозрачный и не белый фон). */
+/** Обрезка до bbox непрозрачного товара (белая коробка Dior и т.п. сохраняется). */
 export async function cropToVisibleProduct(
   input: Buffer,
-  whiteThreshold = 242
+  alphaThreshold = 14
 ): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -115,20 +115,10 @@ export async function cropToVisibleProduct(
   let maxX = -1;
   let maxY = -1;
 
-  const isVisible = (pi: number): boolean => {
-    const a = data[pi + 3]!;
-    if (a < 14) return false;
-    const r = data[pi]!;
-    const g = data[pi + 1]!;
-    const b = data[pi + 2]!;
-    const avg = (r + g + b) / 3;
-    const spread = Math.max(r, g, b) - Math.min(r, g, b);
-    return !(avg >= whiteThreshold && spread <= 28);
-  };
-
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (!isVisible((y * w + x) * 4)) continue;
+      const a = data[(y * w + x) * 4 + 3]!;
+      if (a < alphaThreshold) continue;
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
       maxX = Math.max(maxX, x);
@@ -138,8 +128,8 @@ export async function cropToVisibleProduct(
 
   if (maxX < minX || maxY < minY) return input;
 
-  const padX = Math.max(2, Math.round((maxX - minX + 1) * 0.02));
-  const padY = Math.max(2, Math.round((maxY - minY + 1) * 0.02));
+  const padX = Math.max(2, Math.round((maxX - minX + 1) * 0.015));
+  const padY = Math.max(2, Math.round((maxY - minY + 1) * 0.015));
   const left = Math.max(0, minX - padX);
   const top = Math.max(0, minY - padY);
   const width = Math.min(w - left, maxX - minX + 1 + padX * 2);
@@ -202,7 +192,7 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (spread <= 38 && avg >= 110 && avg <= 242) {
+      if (spread <= 38 && avg >= 110 && avg <= 220) {
         pixels[i + 3] = 0;
       }
     }
