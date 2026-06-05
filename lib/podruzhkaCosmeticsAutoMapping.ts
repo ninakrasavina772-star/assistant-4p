@@ -48,9 +48,7 @@ export function autoDetectCosmeticsMapping(
     "name",
     "brandName",
     "productType",
-    "productName",
     "foto",
-    "ml",
     "foto2",
     "id"
   ];

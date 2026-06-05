@@ -24,6 +24,7 @@ import {
   ensureCosmeticsAiColumns,
   getCosmeticsRowRenderEligibility,
   getFeedRowAiSkipReason,
+  guessCosmeticsColumnMapping,
   listCosmeticsTextColumnsOnSheet,
   makeFeedRowAiErrorResult,
   readCosmeticsProductTypeForCard,
@@ -246,22 +247,41 @@ export function PodruzhkaCosmeticsOzonTool() {
           return;
         }
         const detected = autoDetectCosmeticsMapping(scanned.headers);
+        let finalMapping = detected.mapping;
+        let ready = detected.isReady;
+
+        if (!ready) {
+          const guessed = guessCosmeticsColumnMapping(scanned.headers);
+          const merged = { ...guessed, ...detected.mapping };
+          if (!cosmeticsMappingIsComplete(merged)) {
+            setManualMapping(true);
+            setError(
+              `Не найдены колонки: ${detected.missing
+                .map((k) => PODRUZHKA_COSMETICS_FIELD_LABELS[k])
+                .join(", ")}. Нужны: name, brand name, product_type, foto. Объём и product name не обязательны.`
+            );
+            setMapping(merged);
+            return;
+          }
+          finalMapping = merged;
+          ready = true;
+        }
+
         setWb(workbook);
         setScan(scanned);
-        setMapping(detected.mapping);
+        setMapping(finalMapping);
         setFileName(file.name);
 
-        if (!detected.isReady) {
-          setManualMapping(true);
-          setError(
-            `Файл не похож на образец. Не найдены колонки: ${detected.missing
-              .map((k) => PODRUZHKA_COSMETICS_FIELD_LABELS[k])
-              .join(", ")}. Используйте шаблон с заголовками name, brand name, foto…`
-          );
+        if (!ready) {
           return;
         }
 
-        finishUpload(workbook, scanned, detected.mapping, detected);
+        finishUpload(workbook, scanned, finalMapping, {
+          ...detected,
+          mapping: finalMapping,
+          isReady: true,
+          missing: []
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Ошибка чтения Excel");
       } finally {

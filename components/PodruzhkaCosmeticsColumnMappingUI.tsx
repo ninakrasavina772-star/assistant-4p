@@ -31,13 +31,13 @@ export function PodruzhkaCosmeticsColumnMappingUI({
         <p className="font-semibold mb-1">Как это работает</p>
         <ol className="list-decimal list-inside space-y-1 text-sky-900/90">
           <li>
-            Ниже вы один раз указываете, <strong>какая колонка вашего Excel</strong> — бренд, фото,
-            объём и т.д.
+            Ниже вы один раз указываете колонки Excel: <strong>brand name</strong>,{" "}
+            <strong>name</strong>, <strong>product_type</strong>, <strong>foto</strong>. Объём не
+            нужен.
           </li>
           <li>
-            <strong>model</strong> и <strong>benefit 1–3</strong> — заполняете вручную или через AI
-            (позже). Заголовок свойства — в <strong>benefit N</strong>, описание — в{" "}
-            <strong>benefit N (M)</strong>.
+            <strong>model</strong> и <strong>benefit 1–3</strong> — заполняет AI (шаг 1) или вручную
+            в Excel.
           </li>
           <li>Скачайте Excel после шага 1, при необходимости загрузите исправленный файл → шаг 2.</li>
         </ol>
