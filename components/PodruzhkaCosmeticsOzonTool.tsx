@@ -1,17 +1,19 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   homeBtnPrimary,
   homeCard,
   homeCardBody,
   homeCardHeader,
-  homeCardTitle
+  homeCardTitle,
+  homeInput
 } from "@/components/homeTheme";
 import { OzonImageConverter } from "@/components/OzonImageConverter";
 import { PodruzhkaCosmeticsColumnMappingUI } from "@/components/PodruzhkaCosmeticsColumnMappingUI";
 import { PodruzhkaCosmeticsDetectedLayout } from "@/components/PodruzhkaCosmeticsDetectedLayout";
 import {
+  applyCosmeticsAiResults,
   applyCosmeticsFoto2Urls,
   autoDetectCosmeticsMapping,
   buildCosmeticsFoto2ColumnInfo,
@@ -21,11 +23,14 @@ import {
   defaultCosmeticsDownloadName,
   ensureCosmeticsAiColumns,
   getCosmeticsRowRenderEligibility,
+  getFeedRowAiSkipReason,
   listCosmeticsTextColumnsOnSheet,
+  makeFeedRowAiErrorResult,
   readCosmeticsProductTypeForCard,
   readCosmeticsTextsFromSheet,
   readWorkbookFromFile,
   refreshWorkbookScan,
+  rowNeedsCosmeticsAiGeneration,
   scanWorkbookHeaders,
   writeWorkbookToBlob,
   type CosmeticsAutoDetectResult,
@@ -34,10 +39,19 @@ import {
   type PodruzhkaCosmeticsSheetInfo,
   type WorkbookScan
 } from "@/lib/podruzhkaCosmeticsExcel";
+import {
+  cosmeticsRowSignature,
+  expandCosmeticsAiResults
+} from "@/lib/podruzhkaCosmeticsAi";
 import { PODRUZHKA_COSMETICS_FIELD_LABELS } from "@/lib/podruzhkaCosmeticsColumnMapping";
 import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
+import type { PodruzhkaAiResult, PodruzhkaFeedRow } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
 
+const SK_OPENAI = "fp_podruzhka_cosmetics_openai_key";
+const SK_OPENAI_REM = "fp_podruzhka_cosmetics_openai_remember";
+const BENEFITS_CHUNK = 5;
+const BENEFITS_PARALLEL = 4;
 const RENDER_CHUNK = 1;
 
 type Step = 1 | 2 | 3;
@@ -74,7 +88,18 @@ export function PodruzhkaCosmeticsOzonTool() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [rememberKey, setRememberKey] = useState(true);
+  const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
   const [textsDone, setTextsDone] = useState(false);
+  const [textsStats, setTextsStats] = useState<{
+    ok: number;
+    fail: number;
+    written: number;
+    typeMismatch?: number;
+    feedSkipped?: number;
+    uniqueAi?: number;
+  } | null>(null);
   const [infographicDone, setInfographicDone] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState<string | null>(null);
   const [renderStats, setRenderStats] = useState<{
@@ -88,6 +113,14 @@ export function PodruzhkaCosmeticsOzonTool() {
     layoutWarnings: { row: number; brand: string; warning: string }[];
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof sessionStorage === "undefined") return;
+    if (sessionStorage.getItem(SK_OPENAI_REM) !== "0") {
+      const k = sessionStorage.getItem(SK_OPENAI);
+      if (k) setOpenaiKey(k);
+    }
+  }, []);
 
   const downloadBlob = useCallback((blob: Blob, name: string) => {
     const a = document.createElement("a");
@@ -193,6 +226,7 @@ export function PodruzhkaCosmeticsOzonTool() {
       setBusy(true);
       setError(null);
       setTextsDone(false);
+      setTextsStats(null);
       setInfographicDone(false);
       setRenderStats(null);
       setLayoutVersion(null);
@@ -252,6 +286,219 @@ export function PodruzhkaCosmeticsOzonTool() {
     }
     setError(null);
   }, [wb, scan, sheetInfo]);
+
+  const runBenefits = useCallback(async () => {
+    if (!wb || !scan || !sheetInfo) return;
+    const key = openaiKey.trim();
+    if (!key.startsWith("sk-")) {
+      setError("Введите ключ OpenAI API (sk-…)");
+      return;
+    }
+    if (rememberKey && typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(SK_OPENAI, key);
+      sessionStorage.setItem(SK_OPENAI_REM, "1");
+    }
+
+    setBusy(true);
+    setError(null);
+    setTextsStats(null);
+
+    const ws = wb.getWorksheet(sheetInfo.sheetName);
+    if (!ws) {
+      setError("Лист не найден");
+      setBusy(false);
+      return;
+    }
+
+    ensureCosmeticsAiColumns(ws, scan.headerRow);
+
+    const pending = sheetInfo.rows.filter((row) =>
+      rowNeedsCosmeticsAiGeneration(ws, sheetInfo, row, forceAiRegenerate)
+    );
+
+    if (pending.length === 0) {
+      const ready = countCosmeticsReadyRows(ws, sheetInfo);
+      if (ready === 0) {
+        setError(
+          "Нет готовых строк. Запустите AI — он заполнит model и benefit 1–3 для инфографики."
+        );
+        setBusy(false);
+        return;
+      }
+      setTextsStats({ ok: ready, fail: 0, written: 0, typeMismatch: 0 });
+      setTextsDone(true);
+      setStep(1);
+      setBusy(false);
+      return;
+    }
+
+    let ok = 0;
+    let fail = 0;
+    let writtenTotal = 0;
+    let typeMismatchCount = 0;
+    let feedSkipped = 0;
+
+    const feedSkipResults: PodruzhkaAiResult[] = [];
+    const toProcess = pending.filter((row) => {
+      const reason = getFeedRowAiSkipReason(row);
+      if (reason) {
+        feedSkipResults.push(makeFeedRowAiErrorResult(row, reason));
+        return false;
+      }
+      return true;
+    });
+
+    if (feedSkipResults.length > 0) {
+      const { written, typeMismatch } = applyCosmeticsAiResults(ws, sheetInfo, feedSkipResults);
+      writtenTotal += written;
+      typeMismatchCount += typeMismatch;
+      feedSkipped = feedSkipResults.length;
+      for (const r of feedSkipResults) {
+        if (r.ok) ok++;
+        else fail++;
+      }
+    }
+
+    const repRowToAllRows = new Map<number, number[]>();
+    const uniqueToProcess: PodruzhkaFeedRow[] = [];
+    for (const row of toProcess) {
+      const sig = cosmeticsRowSignature(row);
+      const existing = uniqueToProcess.find((u) => cosmeticsRowSignature(u) === sig);
+      if (existing) {
+        const list = repRowToAllRows.get(existing.row) ?? [existing.row];
+        list.push(row.row);
+        repRowToAllRows.set(existing.row, list);
+      } else {
+        uniqueToProcess.push(row);
+        repRowToAllRows.set(row.row, [row.row]);
+      }
+    }
+
+    const fetchBenefitsChunk = async (
+      chunk: PodruzhkaFeedRow[]
+    ): Promise<PodruzhkaAiResult[]> => {
+      try {
+        const res = await fetch("/api/podruzhka/cosmetics-benefits", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ openaiApiKey: key, rows: chunk })
+        });
+        const data = (await res.json()) as {
+          results?: PodruzhkaAiResult[];
+          error?: string;
+        };
+        if (!res.ok || !data.results?.length) {
+          const msg = data.error ?? `HTTP ${res.status}`;
+          return chunk.map((row) => makeFeedRowAiErrorResult(row, msg));
+        }
+        return data.results;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Сбой сети";
+        return chunk.map((row) => makeFeedRowAiErrorResult(row, msg));
+      }
+    };
+
+    const applyChunkResults = (chunkResults: PodruzhkaAiResult[]) => {
+      const expanded = expandCosmeticsAiResults(chunkResults, repRowToAllRows);
+      const { written, typeMismatch } = applyCosmeticsAiResults(ws, sheetInfo, expanded);
+      writtenTotal += written;
+      typeMismatchCount += typeMismatch;
+      for (const r of chunkResults) {
+        if (r.ok) ok++;
+        else fail++;
+      }
+    };
+
+    try {
+      if (uniqueToProcess.length > 0) {
+        const chunks: PodruzhkaFeedRow[][] = [];
+        for (let i = 0; i < uniqueToProcess.length; i += BENEFITS_CHUNK) {
+          chunks.push(uniqueToProcess.slice(i, i + BENEFITS_CHUNK));
+        }
+
+        let processed = 0;
+        const total = uniqueToProcess.length;
+        for (let w = 0; w < chunks.length; w += BENEFITS_PARALLEL) {
+          const wave = chunks.slice(w, w + BENEFITS_PARALLEL);
+          setProgress(
+            `AI: model и свойства — ${processed} / ${total} уник. SKU…` +
+              (pending.length > total
+                ? ` (строк в Excel: ${pending.length}, дублей: ${pending.length - total})`
+                : "") +
+              (feedSkipped > 0 ? ` · пропущено фид: ${feedSkipped}` : "")
+          );
+
+          const waveResults = await Promise.all(wave.map((chunk) => fetchBenefitsChunk(chunk)));
+          for (const chunkResults of waveResults) {
+            applyChunkResults(chunkResults);
+            processed += chunkResults.length;
+          }
+        }
+      }
+
+      const readyAfter = countCosmeticsReadyRows(ws, sheetInfo);
+      if (writtenTotal === 0 && readyAfter === 0) {
+        setError(
+          "AI не смог заполнить model и свойства. Проверьте ключ OpenAI и названия в Excel."
+        );
+        setBusy(false);
+        return;
+      }
+
+      setTextsStats({
+        ok: readyAfter,
+        fail,
+        written: writtenTotal,
+        typeMismatch: typeMismatchCount,
+        feedSkipped: feedSkipped > 0 ? feedSkipped : undefined,
+        uniqueAi: uniqueToProcess.length
+      });
+      setTextsDone(true);
+      setForceAiRegenerate(false);
+      setStep(1);
+
+      const fresh = refreshWorkbookScan(wb, scan) ?? scan;
+      setScan(fresh);
+      syncSheetInfo(wb, fresh, mapping);
+
+      if (fail > 0 || feedSkipped > 0) {
+        setError(
+          `Обработка завершена. Ошибок: ${fail}${feedSkipped > 0 ? `, пропущено из‑за фида: ${feedSkipped}` : ""}. Комментарии — в «статус свойств». Скачайте Excel и дозапустите без «перезаписать все».`
+        );
+      }
+    } catch (e) {
+      const readyPartial = countCosmeticsReadyRows(ws, sheetInfo);
+      if (writtenTotal > 0 || readyPartial > 0) {
+        setTextsStats({
+          ok: readyPartial,
+          fail,
+          written: writtenTotal,
+          typeMismatch: typeMismatchCount,
+          feedSkipped: feedSkipped > 0 ? feedSkipped : undefined,
+          uniqueAi: uniqueToProcess.length
+        });
+        setTextsDone(true);
+        setStep(1);
+        setError(
+          `${e instanceof Error ? e.message : "Ошибка шага 1"}. Уже записано строк: ${writtenTotal}. Комментарии — в «статус свойств».`
+        );
+      } else {
+        setError(e instanceof Error ? e.message : "Ошибка шага 1");
+      }
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }, [
+    wb,
+    scan,
+    sheetInfo,
+    mapping,
+    openaiKey,
+    rememberKey,
+    syncSheetInfo,
+    forceAiRegenerate
+  ]);
 
   const runRender = useCallback(async () => {
     if (!wb || !sheetInfo || !scan) return;
@@ -317,7 +564,7 @@ export function PodruzhkaCosmeticsOzonTool() {
                 brandName: row.brandName,
                 productType: readCosmeticsProductTypeForCard(ws, sheetInfo, row, ai.model),
                 model: ai.model,
-                ml: row.ml,
+                ml: "",
                 fotoUrl: row.foto,
                 notes: ai.benefits
               });
@@ -440,21 +687,19 @@ export function PodruzhkaCosmeticsOzonTool() {
             foto…).
           </p>
           <p>
-            <strong>2.</strong> Заполнить <strong>model</strong> и три блока свойств:{" "}
-            <strong>benefit 1–3</strong> (заголовок КАПС) + описание в{" "}
-            <strong>benefit 1 (2)</strong>, <strong>benefit 2 (1)</strong>,{" "}
-            <strong>benefit 3 (1)</strong>. AI для свойств — позже, пока вручную или из вашего
-            источника.
+            <strong>2.</strong> AI-категорийный менеджер заполняет <strong>model</strong> и три свойства{" "}
+            <strong>benefit 1–3</strong> (сам выбирает важные характеристики по product_type).
           </p>
           <p>
-            <strong>3.</strong> Инфографика 1024×1365 — те же правила вёрстки и фото, что у
-            ароматов → ссылки в <strong>foto 2</strong>.
+            <strong>3.</strong> Инфографика 1024×1365 — те же правила фото, что у ароматов. Объём на
+            карточке не показываем.
           </p>
           <p>
-            <strong>4.</strong> При необходимости — публичные https в <strong>foto 3</strong>.
+            <strong>4.</strong> Ссылки в <strong>foto 2</strong> → при необходимости{" "}
+            <strong>Foto 3</strong>.
           </p>
           <div className="flex flex-wrap gap-2 pt-2">
-            {stepBtn(1, "1. Тексты карточки", Boolean(wb))}
+            {stepBtn(1, "1. Свойства (AI)", Boolean(wb))}
             {stepBtn(2, "2. Инфографика", canRenderInfographic)}
             {stepBtn(3, "3. Foto 3", infographicDone)}
           </div>
@@ -576,42 +821,94 @@ export function PodruzhkaCosmeticsOzonTool() {
       {mappingConfirmed && step === 1 ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Шаг 1 — model и свойства (benefit 1–3)</h2>
+            <h2 className={homeCardTitle}>Шаг 1 — model и свойства (AI)</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              На карточке три блока вместо нот аромата: <strong>benefit 1–3</strong> — заголовок
-              (КАПС, коротко), <strong>benefit 1 (2)</strong>, <strong>benefit 2 (1)</strong>,{" "}
-              <strong>benefit 3 (1)</strong> — описание (1–2 строки). <strong>model</strong> — линейка
-              или название серии. <strong>product_type</strong> в фиде не меняется.
+              AI-категорийный менеджер по <strong>brand name</strong>, <strong>name</strong> и{" "}
+              <strong>product_type</strong> заполняет <strong>model</strong> и три свойства в слотах
+              нот: <strong>benefit 1–3</strong> (заголовок КАПС) + описание. Характеристики
+              подбирает сам — для помады одно, для консилера другое.
             </p>
+            <p className="text-xs text-slate-500">
+              ~349 уникальных SKU в вашем файле → AI вызывается по уникальным name (дубликаты
+              оттенков копируются). Скорость: до {BENEFITS_CHUNK * BENEFITS_PARALLEL} позиций
+              параллельно.
+            </p>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={forceAiRegenerate}
+                onChange={(e) => setForceAiRegenerate(e.target.checked)}
+              />
+              Перезаписать model и свойства у всех строк (даже если уже были)
+            </label>
             {textColumns.length > 0 ? (
               <p className="text-xs text-violet-800 bg-violet-50 rounded-lg px-3 py-2">
-                Столбцы текстов: {textColumns.map((c) => `${c.header} (${c.col})`).join(", ")}
+                Столбцы: {textColumns.map((c) => `${c.header} (${c.col})`).join(", ")}
               </p>
+            ) : (
+              <button
+                type="button"
+                className="rounded-lg border border-violet-700 bg-white px-4 py-2 text-sm font-semibold text-violet-900"
+                disabled={busy}
+                onClick={initTextColumns}
+              >
+                Создать столбцы model и benefit 1–3 в Excel
+              </button>
+            )}
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">Ключ OpenAI</span>
+              <input
+                type="password"
+                className={homeInput}
+                value={openaiKey}
+                onChange={(e) => setOpenaiKey(e.target.value)}
+                placeholder="sk-…"
+                autoComplete="off"
+              />
+            </label>
+            {!textsDone ? (
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy}
+                onClick={() => void runBenefits()}
+              >
+                {busy ? "Идёт AI…" : "Сгенерировать model и свойства (AI)"}
+              </button>
+            ) : textsStats && textsStats.fail > 0 ? (
+              <button
+                type="button"
+                className="rounded-lg border border-violet-700 bg-white px-4 py-2 text-sm font-semibold text-violet-900"
+                disabled={busy}
+                onClick={() => void runBenefits()}
+              >
+                {busy ? "Идёт AI…" : `Дозаполнить оставшиеся (${textsStats.fail})`}
+              </button>
             ) : null}
-            <button
-              type="button"
-              className="rounded-lg border border-violet-700 bg-white px-4 py-2 text-sm font-semibold text-violet-900"
-              disabled={busy}
-              onClick={initTextColumns}
-            >
-              Создать столбцы model и benefit 1–3 в Excel
-            </button>
-            <button
-              type="button"
-              className={homeBtnPrimary}
-              disabled={busy}
-              onClick={() => void downloadWorkbook("texts")}
-            >
-              Скачать Excel для заполнения текстов
-            </button>
-            {renderReady.ready > 0 ? (
-              <StepDoneBanner title="Тексты готовы — можно к инфографике">
+
+            {textsDone && textsStats ? (
+              <StepDoneBanner title="Шаг 1 завершён — скачайте Excel">
                 <p className="text-sm text-emerald-800">
-                  Готово строк: {renderReady.ready} из {renderReady.total}. Скачайте Excel, проверьте
-                  benefit 1–3 и перейдите к шагу 2.
+                  Записано строк: {textsStats.written}. Готово к инфографике: {textsStats.ok}, без
+                  данных: {textsStats.fail}.
+                  {textsStats.uniqueAi != null ? (
+                    <> Уникальных SKU обработано AI: {textsStats.uniqueAi}.</>
+                  ) : null}
+                  {textsStats.feedSkipped != null && textsStats.feedSkipped > 0 ? (
+                    <> Пропущено из‑за фида: {textsStats.feedSkipped}.</>
+                  ) : null}{" "}
+                  Ошибки — в <strong>статус свойств</strong>.
                 </p>
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy}
+                  onClick={() => void downloadWorkbook("texts")}
+                >
+                  Скачать Excel (model, свойства)
+                </button>
                 <button
                   type="button"
                   className="w-full rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-900"
@@ -620,12 +917,7 @@ export function PodruzhkaCosmeticsOzonTool() {
                   К инфографике →
                 </button>
               </StepDoneBanner>
-            ) : (
-              <p className="text-xs text-amber-900">
-                Заполните model и benefit 1–3 в Excel, загрузите файл снова — или скачайте шаблон
-                со столбцами и заполните offline.
-              </p>
-            )}
+            ) : null}
           </div>
         </section>
       ) : null}

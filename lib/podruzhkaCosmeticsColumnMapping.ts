@@ -24,10 +24,10 @@ export const PODRUZHKA_COSMETICS_FIELD_LABELS: Record<PodruzhkaCosmeticsFieldKey
 export const PODRUZHKA_COSMETICS_FIELD_HINTS: Record<PodruzhkaCosmeticsFieldKey, string> = {
   brandName: "Крупно вверху слева (brand name)",
   productType: "Серая строка на карточке (product_type из Excel)",
-  productName: "Колонка product name в вашем фиде",
+  productName: "Колонка product name (если нет — берём name)",
   name: "Колонка name — полное название SKU",
   foto: "Ссылка на JPG/PNG товара",
-  ml: "Например 50 мл или 30 г — внизу карточки",
+  ml: "Не используется на карточке косметики (необязательно)",
   id: "Только для вашего учёта",
   foto2: "Если пусто — программа создаст столбец «foto 2»"
 };
@@ -46,10 +46,8 @@ export const COSMETICS_SOURCE_EXCEL_FIELDS: PodruzhkaCosmeticsFieldKey[] = [
 export const COSMETICS_REQUIRED_FEED_FIELDS: PodruzhkaCosmeticsFieldKey[] = [
   "brandName",
   "productType",
-  "productName",
   "name",
-  "foto",
-  "ml"
+  "foto"
 ];
 
 export type PodruzhkaCosmeticsColumnMapping = Partial<

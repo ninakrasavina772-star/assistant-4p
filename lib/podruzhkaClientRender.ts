@@ -166,7 +166,10 @@ export async function drawPodruzhkaCard(
     F.notesPinkBar.h,
     S.colors.accent
   );
-  drawBar(ctx, F.mlPinkBar.x, F.mlPinkBar.y, F.mlPinkBar.w, F.mlPinkBar.h, S.colors.accent);
+  const mlFormatted = formatMlHtml(data.ml);
+  if (mlFormatted) {
+    drawBar(ctx, F.mlPinkBar.x, F.mlPinkBar.y, F.mlPinkBar.w, F.mlPinkBar.h, S.colors.accent);
+  }
 
   const notes = data.notes.slice(0, 3);
   for (let i = 0; i < notes.length; i++) {

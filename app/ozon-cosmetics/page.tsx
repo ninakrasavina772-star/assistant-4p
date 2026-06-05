@@ -13,9 +13,9 @@ export default function OzonCosmeticsPage() {
       title="Инфографика для ЛК Подружка · Ozon косметика"
       description={
         <>
-          Три шага: заполнить <strong>model</strong> и свойства <strong>benefit 1–3</strong> →
-          подстановка в шаблон <strong>foto 2</strong> → <strong>Foto 3</strong> с https для
-          загрузки в Ozon. Те же правила вёрстки и фото, что у ароматов.
+          Три шага: AI-категорийный менеджер заполняет <strong>model</strong> и{" "}
+          <strong>benefit 1–3</strong> → шаблон <strong>foto 2</strong> → <strong>Foto 3</strong> для
+          Ozon. Макет как у ароматов, без объёма на карточке.
         </>
       }
     >

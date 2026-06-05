@@ -11,6 +11,8 @@ import { resolveProductTypeForRender } from "@/lib/podruzhkaProductType";
 import {
   findLastUsedColumn,
   formatNoteCellForExcel,
+  getFeedRowAiSkipReason,
+  makeFeedRowAiErrorResult,
   parseNoteCellText,
   readWorkbookFromFile,
   refreshWorkbookScan,
@@ -18,7 +20,8 @@ import {
   writeWorkbookToBlob,
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
-import type { PodruzhkaFeedRow, PodruzhkaNoteBlock } from "@/lib/podruzhkaTypes";
+import { sanitizeBenefitTitle } from "@/lib/podruzhkaCosmeticsAi";
+import type { PodruzhkaFeedRow, PodruzhkaNoteBlock, PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import {
   autoDetectCosmeticsMapping,
   type CosmeticsAutoDetectResult
@@ -45,6 +48,10 @@ export {
   type WorkbookScan,
   type CosmeticsAutoDetectResult
 };
+export {
+  getFeedRowAiSkipReason,
+  makeFeedRowAiErrorResult
+} from "@/lib/podruzhkaExcel";
 export {
   COSMETICS_REQUIRED_FEED_FIELDS,
   COSMETICS_SOURCE_EXCEL_FIELDS,
@@ -201,6 +208,79 @@ export function countCosmeticsReadyRows(
   return info.rows.filter((r) => getCosmeticsRowRenderEligibility(ws, info, r).ok).length;
 }
 
+function normalizeBenefitDesc(s: string): string {
+  const t = s.trim().replace(/\.$/, "");
+  if (!t) return "";
+  return t.charAt(0).toLowerCase() + t.slice(1);
+}
+
+function writeBenefitBlock(
+  ws: ExcelJS.Worksheet,
+  row: number,
+  cols: CosmeticsAiColumnMap,
+  i: 1 | 2 | 3,
+  n: PodruzhkaNoteBlock | undefined
+): void {
+  const mainKey = `benefit${i}` as PodruzhkaCosmeticsAiColumnKey;
+  const descKey = `benefit${i}_desc` as PodruzhkaCosmeticsAiColumnKey;
+  const mainCol = cols[mainKey];
+  const descCol = cols[descKey];
+  if (!mainCol) return;
+
+  const title = n?.title ? sanitizeBenefitTitle(n.title) : "";
+  const desc = n?.desc ? normalizeBenefitDesc(n.desc) : "";
+  if (descCol) {
+    ws.getCell(row, mainCol).value = title;
+    ws.getCell(row, descCol).value = desc;
+  } else {
+    ws.getCell(row, mainCol).value = formatNoteCellForExcel({ title, desc });
+  }
+}
+
+export function applyCosmeticsAiResults(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaCosmeticsSheetInfo,
+  results: PodruzhkaAiResult[]
+): { written: number; typeMismatch: number } {
+  const aiCols = ensureCosmeticsAiColumns(ws, info.headerRow);
+  let written = 0;
+  let typeMismatch = 0;
+
+  for (const r of results) {
+    const row = r.row;
+    if (aiCols.model) ws.getCell(row, aiCols.model).value = r.model;
+    for (let i = 0; i < 3; i++) {
+      writeBenefitBlock(ws, row, aiCols, (i + 1) as 1 | 2 | 3, r.notes[i]);
+    }
+    if (aiCols.product_type_card) {
+      if (r.productTypeMismatch && r.productTypeCard) {
+        ws.getCell(row, aiCols.product_type_card).value = r.productTypeCard;
+        if (r.ok) typeMismatch++;
+      } else {
+        ws.getCell(row, aiCols.product_type_card).value = "";
+      }
+    }
+    if (aiCols.benefits_status) {
+      ws.getCell(row, aiCols.benefits_status).value = r.ok
+        ? "ok"
+        : r.error ?? "не найдено";
+    }
+    written++;
+  }
+
+  return { written, typeMismatch };
+}
+
+export function rowNeedsCosmeticsAiGeneration(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaCosmeticsSheetInfo,
+  feedRow: PodruzhkaFeedRow,
+  force = false
+): boolean {
+  if (force) return true;
+  return !getCosmeticsRowRenderEligibility(ws, info, feedRow).ok;
+}
+
 export function readCosmeticsProductTypeForCard(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaCosmeticsSheetInfo,
@@ -245,9 +325,13 @@ export function buildCosmeticsSheetFromMapping(
       name: m.name ? cellPlainValue(ws.getCell(row, m.name).value) : "",
       brandName,
       productType: m.productType ? cellPlainValue(ws.getCell(row, m.productType).value) : "",
-      productName: m.productName ? cellPlainValue(ws.getCell(row, m.productName).value) : "",
+      productName: m.productName
+        ? cellPlainValue(ws.getCell(row, m.productName).value)
+        : m.name
+          ? cellPlainValue(ws.getCell(row, m.name).value)
+          : "",
       foto,
-      ml: m.ml ? cellPlainValue(ws.getCell(row, m.ml).value) : ""
+      ml: ""
     });
   }
 
