@@ -544,7 +544,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     let fail = 0;
     let noFoto = 0;
     let sampleFotoError: string | null = null;
-    const visionNote = "Рендер: Canvas 2D + wide-set gap merge, html-figma-v12 (косметика).";
+    const visionNote = "Рендер: cosmetics-v1 — крупнее foto и benefit desc, html-figma-cosmetics-v1.";
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
     const noFotoRows: { row: number; brand: string; error: string }[] = [];
@@ -586,7 +586,8 @@ export function PodruzhkaCosmeticsOzonTool() {
                 model: ai.model,
                 ml: "",
                 fotoUrl: row.foto,
-                notes: ai.benefits
+                notes: ai.benefits,
+                renderProfile: "cosmetics"
               });
 
               const form = new FormData();
@@ -971,7 +972,7 @@ export function PodruzhkaCosmeticsOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v12).
+                      html-figma-cosmetics-v1).
                     </>
                   ) : null}
                 </p>

@@ -20,6 +20,8 @@ import {
   productVisualHeight
 } from "@/lib/podruzhkaProductPlacement";
 
+import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
+
 type VerticalAlign = "bottom" | "lower-third";
 
 type FitStrategy = {
@@ -43,14 +45,20 @@ const TARGET_H = R.product.heightRatioTarget;
 const TARGET_W = R.product.widthRatioTarget;
 const WIDE_ASPECT = 1.08;
 
-function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
+function buildStrategies(
+  prepared: PreparedProductImage,
+  profile: PodruzhkaRenderProfile
+): FitStrategy[] {
+  const scaleBoost = profile === "cosmetics" ? 1.12 : 1;
   const { aspect, maxDim } = prepared;
   const isWide = aspect >= WIDE_ASPECT;
+
+  const mul = (n: number) => Math.round(n * scaleBoost * 1000) / 1000;
 
   const strategies: FitStrategy[] = [
     {
       id: isWide ? "wide-balanced" : "balanced",
-      scaleMultiplier: 1,
+      scaleMultiplier: mul(1),
       referenceBoxMinHeightFill: isWide ? 0.86 : 0.94,
       referenceBoxMinWidthFill: isWide ? 0.94 : 0.88,
       referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -58,7 +66,7 @@ function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
     },
     {
       id: isWide ? "wide-width-first" : "height-priority",
-      scaleMultiplier: isWide ? 1.02 : 1.04,
+      scaleMultiplier: mul(isWide ? 1.02 : 1.04),
       referenceBoxMinHeightFill: isWide ? 0.82 : 0.97,
       referenceBoxMinWidthFill: isWide ? 0.96 : 0.82,
       referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -69,7 +77,7 @@ function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
   if (isWide) {
     strategies.push({
       id: "wide-set-compact",
-      scaleMultiplier: 1.05,
+      scaleMultiplier: mul(1.05),
       referenceBoxMinHeightFill: 0.8,
       referenceBoxMinWidthFill: 0.98,
       referenceBoxMinCardHeightFill: 0,
@@ -80,7 +88,7 @@ function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
   if (aspect <= 0.75) {
     strategies.push({
       id: "tall-bottle",
-      scaleMultiplier: 1.03,
+      scaleMultiplier: mul(1.03),
       referenceBoxMinHeightFill: 0.98,
       referenceBoxMinWidthFill: 0.78,
       referenceBoxMinCardHeightFill: 0.6,
@@ -92,7 +100,7 @@ function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
     strategies.push(
       {
         id: "small-source-upscale",
-        scaleMultiplier: 1.12,
+        scaleMultiplier: mul(1.12),
         referenceBoxMinHeightFill: isWide ? 0.86 : 0.94,
         referenceBoxMinWidthFill: 0.92,
         referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -100,7 +108,7 @@ function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
       },
       {
         id: "small-source-upscale-strong",
-        scaleMultiplier: 1.2,
+        scaleMultiplier: mul(1.2),
         referenceBoxMinHeightFill: isWide ? 0.88 : 0.96,
         referenceBoxMinWidthFill: 0.94,
         referenceBoxMinCardHeightFill: isWide ? 0 : TARGET_H,
@@ -243,7 +251,8 @@ async function tryStrategy(
 
 /** Подбирает масштаб и позицию foto под конкретный исходник. */
 export async function resolveAdaptiveProductPlacement(
-  input: Buffer
+  input: Buffer,
+  profile: PodruzhkaRenderProfile = "perfume"
 ): Promise<AdaptiveProductResult> {
   const prepared = await prepareProductImage(input);
   const zoneW = PODRUZHKA_PRODUCT_VISUAL.w;
@@ -251,7 +260,7 @@ export async function resolveAdaptiveProductPlacement(
   const cardW = R.size.w;
   const cardH = R.size.h;
 
-  const strategies = buildStrategies(prepared);
+  const strategies = buildStrategies(prepared, profile);
   let best: AdaptiveProductResult | null = null;
 
   for (const strategy of strategies) {
@@ -273,10 +282,12 @@ export async function resolveAdaptiveProductPlacement(
   }
 
   const base = strategies[0]!;
-  for (const mul of [1.03, 1.06, 1.08]) {
+  const fineMuls =
+    profile === "cosmetics" ? [1.04, 1.08, 1.1, 1.14] : [1.03, 1.06, 1.08];
+  for (const mul of fineMuls) {
     const tuned = await tryStrategy(
       prepared,
-      { ...base, id: `fine-${mul}`, scaleMultiplier: mul },
+      { ...base, id: `fine-${mul}`, scaleMultiplier: mul * (profile === "cosmetics" ? 1.12 : 1) },
       zoneW,
       zoneH,
       cardW,

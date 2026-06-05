@@ -35,6 +35,8 @@ export type PodruzhkaInfographicData = {
   ml: string;
   fotoUrl: string;
   notes: PodruzhkaNoteBlock[];
+  /** perfume — парфюм; cosmetics — крупнее foto и benefit desc */
+  renderProfile?: "perfume" | "cosmetics";
 };
 
 /** Ключи столбцов AI — как в образце Excel (note 1, note 2, model…) */

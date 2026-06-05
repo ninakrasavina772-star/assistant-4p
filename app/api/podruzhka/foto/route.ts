@@ -10,6 +10,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Параметр url обязателен" }, { status: 400 });
   }
 
+  const profile = (new URL(req.url).searchParams.get("profile")?.trim() ??
+    "perfume") as "perfume" | "cosmetics";
+  const safeProfile = profile === "cosmetics" ? "cosmetics" : "perfume";
+
   const fetched = await fetchPodruzhkaProductImageDetailed(url);
   if (!fetched.buf?.length) {
     return NextResponse.json(
@@ -18,7 +22,7 @@ export async function GET(req: Request) {
     );
   }
 
-  const placement = await resolveAdaptiveProductPlacement(fetched.buf);
+  const placement = await resolveAdaptiveProductPlacement(fetched.buf, safeProfile);
 
   return new NextResponse(new Uint8Array(placement.fit.buffer), {
     headers: {

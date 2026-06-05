@@ -9,6 +9,12 @@ import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { measureFromCanvas2D } from "@/lib/podruzhkaBrandLayout";
 import { computeHeaderStack, drawTextBlock } from "@/lib/podruzhkaHeaderLayout";
 import { PODRUZHKA_PRODUCT_VISUAL } from "@/lib/podruzhkaProductPlacement";
+import {
+  PODRUZHKA_COSMETICS_LAYOUT_VERSION,
+  PODRUZHKA_COSMETICS_NOTE_DESC_SIZE,
+  PODRUZHKA_COSMETICS_NOTE_TITLE_SIZE,
+  type PodruzhkaRenderProfile
+} from "@/lib/podruzhkaCosmeticsLayout";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 
 const FONT_DIR = "/podruzhka/fonts";
@@ -71,9 +77,13 @@ export type ProcessedFoto = {
   height: number;
 };
 
-export async function fetchProcessedFoto(fotoUrl: string): Promise<ProcessedFoto> {
+export async function fetchProcessedFoto(
+  fotoUrl: string,
+  profile: PodruzhkaRenderProfile = "perfume"
+): Promise<ProcessedFoto> {
   const q = encodeURIComponent(fotoUrl.trim());
-  const res = await fetch(`/api/podruzhka/foto?url=${q}`);
+  const p = profile === "cosmetics" ? "&profile=cosmetics" : "";
+  const res = await fetch(`/api/podruzhka/foto?url=${q}${p}`);
   if (!res.ok) {
     let msg = `foto: HTTP ${res.status}`;
     try {
@@ -172,17 +182,23 @@ export async function drawPodruzhkaCard(
   }
 
   const notes = data.notes.slice(0, 3);
+  const profile = data.renderProfile ?? "perfume";
+  const noteTitleSize =
+    profile === "cosmetics" ? PODRUZHKA_COSMETICS_NOTE_TITLE_SIZE : S.fonts.noteTitle.size;
+  const noteDescSize =
+    profile === "cosmetics" ? PODRUZHKA_COSMETICS_NOTE_DESC_SIZE : S.fonts.noteDesc.size;
+
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i]!;
     const slot = F.notes[i]!;
 
     ctx.fillStyle = S.colors.accent;
-    ctx.font = interFont(S.fonts.noteTitle.size, 700);
+    ctx.font = interFont(noteTitleSize, 700);
     ctx.textBaseline = "top";
     ctx.fillText(n.title.toUpperCase(), F.textX, slot.titleY);
 
     ctx.fillStyle = S.colors.muted;
-    ctx.font = interFont(S.fonts.noteDesc.size, 400);
+    ctx.font = interFont(noteDescSize, 400);
     ctx.fillText(n.desc, F.textX, slot.descY);
 
     if (slot.sepY != null) {
@@ -213,7 +229,8 @@ export async function renderPodruzhkaCardClient(
 
   await ensurePodruzhkaFonts();
 
-  const foto = await fetchProcessedFoto(data.fotoUrl);
+  const profile = data.renderProfile ?? "perfume";
+  const foto = await fetchProcessedFoto(data.fotoUrl, profile);
   const [templateImg, productImg] = await Promise.all([
     loadImage(S.templateUrl),
     loadImage(foto.dataUrl)
@@ -235,5 +252,9 @@ export async function renderPodruzhkaCardClient(
     );
   });
 
-  return { blob, layoutVersion: PODRUZHKA_HTML_LAYOUT_VERSION };
+  return {
+    blob,
+    layoutVersion:
+      profile === "cosmetics" ? PODRUZHKA_COSMETICS_LAYOUT_VERSION : PODRUZHKA_HTML_LAYOUT_VERSION
+  };
 }
