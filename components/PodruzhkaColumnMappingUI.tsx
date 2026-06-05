@@ -36,10 +36,11 @@ export function PodruzhkaColumnMappingUI({
             объём и т.д.
           </li>
           <li>
-            <strong>model, note 1–3</strong> — только AI по образцу (заголовок ЗАГЛАВНЫМИ + описание,
-            как «ПРЯНЫЙ пикантный характер»). Вручную не заполняйте.
+            <strong>model, note 1–3</strong> — AI по образцу. <strong>product type card</strong> — AI
+            только если тип на карточке не совпал с <strong>product_type</strong> (можно править
+            вручную после скачивания).
           </li>
-          <li>Шаг 2 соберёт картинку как в файле <strong>образец.xlsx</strong>.</li>
+          <li>Скачайте Excel после шага 1, при необходимости загрузите исправленный файл → шаг 2.</li>
         </ol>
       </div>
 

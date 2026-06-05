@@ -13,6 +13,11 @@ export const PODRUZHKA_SAMPLE_COLUMNS = [
   { col: 9, header: "note 2", role: "Нота 2 — пишет AI" },
   { col: 10, header: "note 3", role: "Нота 3 — пишет AI" },
   { col: 11, header: "model", role: "Имя аромата — пишет AI (Pardon)" },
+  {
+    col: 0,
+    header: "product type card",
+    role: "Тип на карточке — AI, только если не совпал с product_type"
+  },
   { col: 12, header: "foto 2", role: "Готовая инфографика (JPG)" },
   { col: 13, header: "foto 3", role: "Публичный https для Ozon" }
 ] as const;

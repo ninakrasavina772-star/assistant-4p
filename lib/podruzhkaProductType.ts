@@ -5,8 +5,19 @@
 const VAGUE_ONLY =
   /^(духи|парфюм|аромат|парфюмерия|fragrance|perfume|парфюмированная\s+вода)$/i;
 
-function norm(s: string): string {
+export function normalizeProductType(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function norm(s: string): string {
+  return normalizeProductType(s);
+}
+
+export function productTypesDiffer(feedType: string, cardType: string): boolean {
+  const feed = norm(feedType);
+  const card = norm(cardType);
+  if (!card) return false;
+  return feed !== card;
 }
 
 function genderSuffix(blob: string): string {
@@ -71,4 +82,22 @@ export function resolveProductTypeForCard(input: {
 
   if (col) return col;
   return "";
+}
+
+/** Тип на карточке: колонка product type card → иначе product_type / name */
+export function resolveProductTypeForRender(input: {
+  productTypeCard: string;
+  productType: string;
+  productName: string;
+  name: string;
+  model?: string;
+}): string {
+  const fromCard = norm(input.productTypeCard);
+  if (fromCard) return fromCard;
+  return resolveProductTypeForCard({
+    productType: input.productType,
+    productName: input.productName,
+    name: input.name,
+    model: input.model
+  });
 }

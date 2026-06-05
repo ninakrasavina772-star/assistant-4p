@@ -25,6 +25,7 @@ import {
   listAiColumnsOnSheet,
   mappingIsComplete,
   readAiFromSheet,
+  readProductTypeForCard,
   rowNeedsAiGeneration,
   readWorkbookFromFile,
   refreshWorkbookScan,
@@ -37,7 +38,6 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
-import { resolveProductTypeForCard } from "@/lib/podruzhkaProductType";
 import type { PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
 
@@ -84,9 +84,12 @@ export function PodruzhkaOzonTool() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
   const [notesDone, setNotesDone] = useState(false);
-  const [notesStats, setNotesStats] = useState<{ ok: number; fail: number; written: number } | null>(
-    null
-  );
+  const [notesStats, setNotesStats] = useState<{
+    ok: number;
+    fail: number;
+    written: number;
+    typeMismatch?: number;
+  } | null>(null);
   const [infographicDone, setInfographicDone] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState<string | null>(null);
   const [renderStats, setRenderStats] = useState<{
@@ -198,7 +201,20 @@ export function PodruzhkaOzonTool() {
       setDetection(detected);
       setMappingConfirmed(true);
       setManualMapping(false);
-      setStep(1);
+      const ready = countAiReadyRows(ws, info);
+      if (ready > 0) {
+        setNotesDone(true);
+        setNotesStats({
+          ok: ready,
+          fail: info.rows.length - ready,
+          written: 0
+        });
+        setStep(2);
+      } else {
+        setNotesDone(false);
+        setNotesStats(null);
+        setStep(1);
+      }
       setError(null);
       return true;
     },
@@ -294,7 +310,7 @@ export function PodruzhkaOzonTool() {
         setBusy(false);
         return;
       }
-      setNotesStats({ ok: ready, fail: 0, written: 0 });
+      setNotesStats({ ok: ready, fail: 0, written: 0, typeMismatch: 0 });
       setNotesDone(true);
       setStep(2);
       setBusy(false);
@@ -304,6 +320,7 @@ export function PodruzhkaOzonTool() {
     const results: PodruzhkaAiResult[] = [];
     let ok = 0;
     let fail = 0;
+    let typeMismatchCount = 0;
 
     try {
       if (pending.length > 0) {
@@ -330,7 +347,8 @@ export function PodruzhkaOzonTool() {
         }
       }
 
-      applyAiResults(ws, sheetInfo, results);
+      const { written, typeMismatch } = applyAiResults(ws, sheetInfo, results);
+      typeMismatchCount = typeMismatch;
       const readyAfter = countAiReadyRows(ws, sheetInfo);
       if (readyAfter === 0) {
         setError(
@@ -342,7 +360,8 @@ export function PodruzhkaOzonTool() {
       setNotesStats({
         ok: readyAfter,
         fail,
-        written: results.length
+        written,
+        typeMismatch: typeMismatchCount
       });
       setNotesDone(true);
       setForceAiRegenerate(false);
@@ -422,12 +441,7 @@ export function PodruzhkaOzonTool() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   brandName: row.brandName,
-                  productType: resolveProductTypeForCard({
-                    productType: row.productType,
-                    productName: row.productName,
-                    name: row.name,
-                    model: ai.model
-                  }),
+                  productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
                   model: ai.model,
                   ml: row.ml,
                   fotoUrl: row.foto,
@@ -569,15 +583,19 @@ export function PodruzhkaOzonTool() {
             распознаются сами (name, brand name, foto, note 1…).
           </p>
           <p>
-            <strong>2.</strong> AI заполняет <strong>model</strong> и <strong>note 1–3</strong> по
-            образцу (как Nasomatto Pardon). Тип на карточке — из колонки <strong>product_type</strong>{" "}
-            или по <strong>name</strong> / <strong>product name</strong> (Excel не меняется).
+            <strong>2.</strong> AI заполняет <strong>model</strong>, <strong>note 1–3</strong> и
+            проверяет тип. Колонку <strong>product_type</strong> не трогаем — если тип для карточки
+            другой, AI пишет в <strong>product type card</strong>.
           </p>
           <p>
-            <strong>3.</strong> Инфографика 1080×1350 → ссылки в <strong>foto 2</strong>.
+            <strong>3.</strong> Скачайте Excel, при необходимости поправьте model, ноты или{" "}
+            <strong>product type card</strong>, загрузите файл снова.
           </p>
           <p>
-            <strong>4.</strong> При необходимости — публичные https в <strong>foto 3</strong>.
+            <strong>4.</strong> Инфографика 1024×1365 → ссылки в <strong>foto 2</strong>.
+          </p>
+          <p>
+            <strong>5.</strong> При необходимости — публичные https в <strong>foto 3</strong>.
           </p>
           <div className="flex flex-wrap gap-2 pt-2">
             {stepBtn(1, "1. Ноты (AI)", Boolean(wb))}
@@ -609,8 +627,13 @@ export function PodruzhkaOzonTool() {
             disabled={busy}
             onClick={() => fileRef.current?.click()}
           >
-            {busy && !wb ? "Читаем…" : "Загрузить Excel"}
+            {busy && !wb ? "Читаем…" : notesDone ? "Загрузить исправленный Excel" : "Загрузить Excel"}
           </button>
+          {notesDone && !infographicDone ? (
+            <p className="text-xs text-amber-900 bg-amber-50 rounded-lg px-3 py-2">
+              После шага 1 скачайте файл, внесите правки и загрузите его снова — затем шаг 2.
+            </p>
+          ) : null}
           {fileName ? (
             <p className="text-sm text-slate-600">
               <strong>{fileName}</strong>
@@ -666,13 +689,13 @@ export function PodruzhkaOzonTool() {
       {mappingConfirmed && !notesDone && step === 1 ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>Шаг 1 — model и ноты (AI)</h2>
+            <h2 className={homeCardTitle}>Шаг 1 — model, ноты и тип (AI)</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              <strong>model</strong> и <strong>note 1–3</strong> пишет AI — в
-              формате образца: заголовок ноты ЗАГЛАВНЫМИ, описание с маленькой буквы (например «ПРЯНЫЙ
-              пикантный характер»). Без этого шага инфографика будет пустой или кривой.
+              AI заполняет <strong>model</strong>, <strong>note 1–3</strong> и проверяет тип для
+              карточки. <strong>product_type</strong> в фиде не меняется — при расхождении появится
+              колонка <strong>product type card</strong>. Формат нот: «ПРЯНЫЙ пикантный характер».
             </p>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -704,7 +727,7 @@ export function PodruzhkaOzonTool() {
               disabled={busy}
               onClick={() => void runNotes()}
             >
-              {busy ? "Идёт AI…" : "Сгенерировать model и ноты (AI)"}
+              {busy ? "Идёт AI…" : "Сгенерировать model, ноты и проверить тип (AI)"}
             </button>
           </div>
         </section>
@@ -712,14 +735,16 @@ export function PodruzhkaOzonTool() {
 
       {notesDone && (
         <section className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center gap-3">
-          <span className="text-sm font-semibold text-amber-950">Шаг 1 готов — проверьте Excel</span>
+          <span className="text-sm font-semibold text-amber-950">
+            Шаг 1 готов — скачайте Excel, проверьте и при необходимости загрузите снова
+          </span>
           <button
             type="button"
             className={homeBtnPrimary}
             disabled={busy}
             onClick={() => void downloadWorkbook("notes")}
           >
-            Скачать Excel (модель + ноты)
+            Скачать Excel (model, ноты, тип)
           </button>
           {!infographicDone ? (
             <button
@@ -736,8 +761,16 @@ export function PodruzhkaOzonTool() {
       {notesDone && notesStats && step === 1 ? (
         <StepDoneBanner title="Шаг 1 завершён">
           <p className="text-sm text-emerald-800">
-            Записано строк: {notesStats.written}. Успешно: {notesStats.ok}, без данных: {notesStats.fail}.
-            Откройте Excel — колонки model, note 1, note 2, note 3.
+            Записано строк: {notesStats.written}. Готово к инфографике: {notesStats.ok}, без данных:{" "}
+            {notesStats.fail}.
+            {notesStats.typeMismatch != null && notesStats.typeMismatch > 0 ? (
+              <>
+                {" "}
+                Тип на карточке отличается от product_type у {notesStats.typeMismatch} строк — см.
+                колонку <strong>product type card</strong>.
+              </>
+            ) : null}{" "}
+            Колонки: model, note 1–3, product type card (если нужно).
           </p>
         </StepDoneBanner>
       ) : null}

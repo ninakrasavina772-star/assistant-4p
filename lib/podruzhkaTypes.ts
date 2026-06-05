@@ -20,6 +20,9 @@ export type PodruzhkaAiResult = {
   ok: boolean;
   model: string;
   notes: PodruzhkaNoteBlock[];
+  /** Текст для серой строки на карточке (если отличается от product_type в фиде) */
+  productTypeCard: string;
+  productTypeMismatch: boolean;
   sources: string[];
   error?: string;
 };
@@ -37,6 +40,7 @@ export type PodruzhkaInfographicData = {
 /** Ключи столбцов AI — как в образце Excel (note 1, note 2, model…) */
 export type PodruzhkaAiColumnKey =
   | "model"
+  | "product_type_card"
   | "note1"
   | "note2"
   | "note3"
@@ -60,6 +64,16 @@ export type PodruzhkaAiColumnDef = {
  */
 export const PODRUZHKA_AI_COLUMN_DEFS: PodruzhkaAiColumnDef[] = [
   { key: "model", header: "model", aliases: ["model", "модель", "модель арома"] },
+  {
+    key: "product_type_card",
+    header: "product type card",
+    aliases: [
+      "product type card",
+      "product_type_card",
+      "тип на карточке",
+      "тип для карточки"
+    ]
+  },
   {
     key: "note1",
     header: "note 1",

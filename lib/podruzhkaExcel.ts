@@ -6,6 +6,7 @@ import {
   type PodruzhkaColumnMapping,
   type PodruzhkaSheetInfo
 } from "@/lib/podruzhkaColumnMapping";
+import { resolveProductTypeForRender } from "@/lib/podruzhkaProductType";
 import {
   PODRUZHKA_AI_COLUMN_DEFS,
   type PodruzhkaAiColumnKey,
@@ -356,9 +357,10 @@ export function applyAiResults(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaSheetInfo,
   results: PodruzhkaAiResult[]
-): number {
+): { written: number; typeMismatch: number } {
   const aiCols = ensureAiColumns(ws, info.headerRow);
   let written = 0;
+  let typeMismatch = 0;
 
   for (const r of results) {
     const row = r.row;
@@ -366,15 +368,44 @@ export function applyAiResults(
     for (let i = 0; i < 3; i++) {
       writeNoteBlock(ws, row, aiCols, (i + 1) as 1 | 2 | 3, r.notes[i]);
     }
+    if (aiCols.product_type_card) {
+      if (r.productTypeMismatch && r.productTypeCard) {
+        ws.getCell(row, aiCols.product_type_card).value = r.productTypeCard;
+        if (r.ok) typeMismatch++;
+      } else {
+        ws.getCell(row, aiCols.product_type_card).value = "";
+      }
+    }
     if (aiCols.notes_status) {
       ws.getCell(row, aiCols.notes_status).value = r.ok
-      ? "ok"
+        ? "ok"
         : r.error ?? "не найдено";
     }
     written++;
   }
 
-  return written;
+  return { written, typeMismatch };
+}
+
+/** Тип для серой строки: product type card → иначе product_type / name */
+export function readProductTypeForCard(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaSheetInfo,
+  feedRow: PodruzhkaFeedRow,
+  model?: string
+): string {
+  const aiCols = ensureAiColumns(ws, info.headerRow);
+  const cardCol = aiCols.product_type_card;
+  const fromCard = cardCol
+    ? cellPlainValue(ws.getCell(feedRow.row, cardCol).value).trim()
+    : "";
+  return resolveProductTypeForRender({
+    productTypeCard: fromCard,
+    productType: feedRow.productType,
+    productName: feedRow.productName,
+    name: feedRow.name,
+    model
+  });
 }
 
 function ensureFoto2Column(ws: ExcelJS.Worksheet, info: PodruzhkaSheetInfo): number {
