@@ -168,7 +168,7 @@ async function trimTransparentSafe(input: Buffer): Promise<Buffer> {
   }
 }
 
-/** Убрать серую «половую» тень под флаконом (часто в foto с Ozon). */
+/** Убрать серую «половую» тень под флаконом (только низ кадра, не жёлтые/цветные). */
 export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -180,7 +180,7 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
   if (!w || !h) return input;
 
   const pixels = Buffer.from(data);
-  const shadowStart = Math.floor(h * 0.52);
+  const shadowStart = Math.floor(h * 0.78);
 
   for (let y = shadowStart; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -192,7 +192,8 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (spread <= 38 && avg >= 110 && avg <= 220) {
+      if (spread >= 28) continue;
+      if (avg >= 125 && avg <= 205) {
         pixels[i + 3] = 0;
       }
     }
@@ -203,6 +204,84 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
   })
     .png()
     .toBuffer();
+}
+
+/** Убрать белый/серый ореол по краям cut-out (Acqua di Parma, стекло). */
+export async function cleanProductAlphaFringe(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = pixels[i + 3]!;
+      if (a === 0 || a === 255) continue;
+
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+
+      if (avg >= 205 && spread <= 40) {
+        pixels[i + 3] = 0;
+        continue;
+      }
+
+      if (a >= 32) {
+        pixels[i + 3] = 255;
+      }
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+async function resizeProductForCard(
+  trimmed: Buffer,
+  width: number,
+  height: number,
+  srcW: number,
+  srcH: number
+): Promise<Buffer> {
+  const scaleUp = width > srcW || height > srcH;
+  let pipeline = sharp(trimmed).resize(width, height, {
+    fit: "inside",
+    kernel: sharp.kernel.lanczos3
+  });
+  if (scaleUp) {
+    pipeline = pipeline.sharpen({ sigma: 0.55, m1: 0.45, m2: 0.22 });
+  }
+  return pipeline.png({ compressionLevel: 6 }).toBuffer();
+}
+
+/** Предобработка PNG перед fit. */
+export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
+  const edgeStripped = await stripEdgeNearWhiteBackground(input, 248);
+  const meta = await sharp(edgeStripped).metadata();
+  const w = meta.width ?? 1;
+  const h = meta.height ?? 1;
+  const aspect = w / h;
+
+  let buf = edgeStripped;
+  if (aspect < 1.35) {
+    buf = await stripGrayFloorShadow(buf);
+  }
+  buf = await cleanProductAlphaFringe(buf);
+  buf = await trimTransparentSafe(buf);
+  return cropToVisibleProduct(buf);
 }
 
 export type FitProductOptions = {
@@ -240,11 +319,7 @@ export type PreparedProductImage = {
 
 /** Единая предобработка foto с Ozon перед fit/подбором. */
 export async function prepareProductImage(input: Buffer): Promise<PreparedProductImage> {
-  const buffer = await cropToVisibleProduct(
-    await trimTransparentSafe(
-      await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
-    )
-  );
+  const buffer = await preprocessProductBuffer(input);
   const meta = await sharp(buffer).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
@@ -317,11 +392,7 @@ export async function fitProductPng(
   const trimmed = opts.preparedInput
     ? opts.preparedInput
     : referenceBoxOnly
-      ? await cropToVisibleProduct(
-          await trimTransparentSafe(
-            await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
-          )
-        )
+      ? await preprocessProductBuffer(input)
       : await trimTransparentSafe(
           await stripGrayFloorShadow(await stripNearWhiteBackground(input))
         );
@@ -342,7 +413,7 @@ export async function fitProductPng(
 
     if (width > maxW) {
       const scaled = await sharp(trimmed)
-        .resize(width, height, { fit: "fill" })
+        .resize(width, height, { fit: "fill", kernel: sharp.kernel.lanczos3 })
         .png()
         .toBuffer();
       const left = Math.max(0, Math.round((width - maxW) / 2));
@@ -352,7 +423,7 @@ export async function fitProductPng(
         .toBuffer();
       width = maxW;
     } else {
-      buffer = await sharp(trimmed).resize(width, height, { fit: "inside" }).png().toBuffer();
+      buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH);
     }
 
     const bottomAlphaInset = await measureBottomAlphaInset(buffer);
@@ -459,10 +530,7 @@ export async function fitProductPng(
     }
   }
 
-  const buffer = await sharp(trimmed)
-    .resize(width, height, { fit: "inside" })
-    .png()
-    .toBuffer();
+  const buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH);
 
   const bottomAlphaInset = await measureBottomAlphaInset(buffer);
 
