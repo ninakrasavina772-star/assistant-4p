@@ -315,7 +315,41 @@ export type PreparedProductImage = {
   srcH: number;
   aspect: number;
   maxDim: number;
+  /** Доля высоты PNG: прозрачный отступ снизу/сверху bbox */
+  bottomPadRatio: number;
+  topPadRatio: number;
 };
+
+/** Отступы внутри обрезанного PNG — товар «сидит» низко или по центру. */
+export async function measureVerticalPadding(
+  input: Buffer,
+  alphaThreshold = 14
+): Promise<{ bottomPadRatio: number; topPadRatio: number }> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return { bottomPadRatio: 0, topPadRatio: 0 };
+
+  let minY = h;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const a = data[(y * w + x) * 4 + 3]!;
+      if (a < alphaThreshold) continue;
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxY < minY) return { bottomPadRatio: 0, topPadRatio: 0 };
+
+  return {
+    topPadRatio: minY / h,
+    bottomPadRatio: (h - 1 - maxY) / h
+  };
+}
 
 /** Единая предобработка foto с Ozon перед fit/подбором. */
 export async function prepareProductImage(input: Buffer): Promise<PreparedProductImage> {
@@ -323,12 +357,15 @@ export async function prepareProductImage(input: Buffer): Promise<PreparedProduc
   const meta = await sharp(buffer).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
+  const padding = await measureVerticalPadding(buffer);
   return {
     buffer,
     srcW,
     srcH,
     aspect: srcW / srcH,
-    maxDim: Math.max(srcW, srcH)
+    maxDim: Math.max(srcW, srcH),
+    bottomPadRatio: padding.bottomPadRatio,
+    topPadRatio: padding.topPadRatio
   };
 }
 

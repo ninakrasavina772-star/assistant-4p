@@ -12,7 +12,9 @@ import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import {
   clampProductDrawPlacement,
+  computeAdaptiveBottomLift,
   computeProductDrawY,
+  liftCandidates,
   PODRUZHKA_PRODUCT_VISUAL,
   PODRUZHKA_TEXT_COLUMN_RIGHT,
   productVisualHeight
@@ -152,6 +154,14 @@ function scorePlacement(
   const slackTop = drawY - PODRUZHKA_PRODUCT_VISUAL.y;
   if (slackTop > zoneH * 0.38) score -= (slackTop - zoneH * 0.38) * 0.45;
 
+  const inset = fit.bottomAlphaInset ?? 0;
+  const visualBottom = drawY + fit.height - inset;
+  const gapFromBottom = PODRUZHKA_PRODUCT_VISUAL.bottom - visualBottom;
+  const targetGap = isWide ? 14 : aspect <= 0.78 ? 32 : 20;
+  score -= Math.abs(gapFromBottom - targetGap) * 2.8;
+  if (gapFromBottom < 10) score -= 90;
+  if (gapFromBottom > 52) score -= (gapFromBottom - 52) * 2.5;
+
   score += Math.min((fit.width * fit.height) / 400000, 40);
 
   return score;
@@ -178,23 +188,38 @@ async function tryStrategy(
   });
 
   const rawX = PODRUZHKA_PRODUCT_VISUAL.x + zoneW - fit.width;
-  const rawY = computeProductDrawY(fit, strategy.verticalAlign);
-  const { drawX, drawY } = clampProductDrawPlacement(fit, rawX, rawY);
+  const baseLift = computeAdaptiveBottomLift(fit, prepared);
+  let bestLocal: AdaptiveProductResult | null = null;
 
-  if (!isValidPlacement(drawX, drawY, fit)) return null;
+  for (const lift of liftCandidates(baseLift)) {
+    const rawY = computeProductDrawY(fit, strategy.verticalAlign, lift);
+    const { drawX, drawY } = clampProductDrawPlacement(fit, rawX, rawY, lift);
+    if (!isValidPlacement(drawX, drawY, fit)) continue;
 
-  const visualScore = scorePlacement(
-    fit,
-    drawX,
-    drawY,
-    cardW,
-    cardH,
-    zoneW,
-    zoneH,
-    prepared.aspect
-  );
+    const visualScore = scorePlacement(
+      fit,
+      drawX,
+      drawY,
+      cardW,
+      cardH,
+      zoneW,
+      zoneH,
+      prepared.aspect
+    );
 
-  return { fit, drawX, drawY, strategyId: strategy.id, visualScore };
+    const candidate: AdaptiveProductResult = {
+      fit,
+      drawX,
+      drawY,
+      strategyId: `${strategy.id}+lift${lift}`,
+      visualScore
+    };
+    if (!bestLocal || visualScore > bestLocal.visualScore) {
+      bestLocal = candidate;
+    }
+  }
+
+  return bestLocal;
 }
 
 /** Подбирает масштаб и позицию foto под конкретный исходник. */
