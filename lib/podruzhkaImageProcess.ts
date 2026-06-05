@@ -234,7 +234,38 @@ export type FitProductOptions = {
   referenceBoxMinWidthFill?: number;
   /** Доля высоты всей карточки (широкие наборы коробка+флакон) */
   referenceBoxMinCardHeightFill?: number;
+  /** Уже обработанный PNG (без повторного strip/crop) */
+  preparedInput?: Buffer;
+  /** contain — вписать; cover-height — заполнить высоту зоны, обрезать по бокам */
+  fitMode?: "contain" | "cover-height";
 };
+
+export type PreparedProductImage = {
+  buffer: Buffer;
+  srcW: number;
+  srcH: number;
+  aspect: number;
+  maxDim: number;
+};
+
+/** Единая предобработка foto с Ozon перед fit/подбором. */
+export async function prepareProductImage(input: Buffer): Promise<PreparedProductImage> {
+  const buffer = await cropToVisibleProduct(
+    await trimTransparentSafe(
+      await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
+    )
+  );
+  const meta = await sharp(buffer).metadata();
+  const srcW = meta.width ?? 1;
+  const srcH = meta.height ?? 1;
+  return {
+    buffer,
+    srcW,
+    srcH,
+    aspect: srcW / srcH,
+    maxDim: Math.max(srcW, srcH)
+  };
+}
 
 export type FitResult = {
   buffer: Buffer;
@@ -288,21 +319,55 @@ export async function fitProductPng(
   const narrowBoost = referenceBoxOnly
     ? 1
     : (opts.narrowAspectBoost ?? R.product.narrowAspectBoost);
-  const scaleMul = referenceBoxOnly ? 1 : (opts.scaleMultiplier ?? 1);
+  const scaleMul = referenceBoxOnly
+    ? (opts.scaleMultiplier ?? 1)
+    : (opts.scaleMultiplier ?? 1);
+  const fitMode = opts.fitMode ?? "contain";
 
-  const trimmed = referenceBoxOnly
-    ? await cropToVisibleProduct(
-        await trimTransparentSafe(
-          await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
+  const trimmed = opts.preparedInput
+    ? opts.preparedInput
+    : referenceBoxOnly
+      ? await cropToVisibleProduct(
+          await trimTransparentSafe(
+            await stripGrayFloorShadow(await stripEdgeNearWhiteBackground(input))
+          )
         )
-      )
-    : await trimTransparentSafe(
-        await stripGrayFloorShadow(await stripNearWhiteBackground(input))
-      );
+      : await trimTransparentSafe(
+          await stripGrayFloorShadow(await stripNearWhiteBackground(input))
+        );
   const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
   const aspect = srcW / srcH;
+
+  if (referenceBoxOnly && fitMode === "cover-height") {
+    const minHFill = opts.referenceBoxMinHeightFill ?? 0.92;
+    const cardFill = opts.referenceBoxMinCardHeightFill ?? R.product.heightRatioTarget;
+    let targetPx = Math.round(Math.max(maxH * minHFill, cardH * cardFill));
+    targetPx = Math.min(maxH, Math.max(1, Math.round(targetPx * (opts.referenceBoxScale ?? 1) * scaleMul)));
+
+    let width = Math.max(1, Math.round((srcW * targetPx) / srcH));
+    let height = targetPx;
+    let buffer: Buffer;
+
+    if (width > maxW) {
+      const scaled = await sharp(trimmed)
+        .resize(width, height, { fit: "fill" })
+        .png()
+        .toBuffer();
+      const left = Math.max(0, Math.round((width - maxW) / 2));
+      buffer = await sharp(scaled)
+        .extract({ left, top: 0, width: maxW, height })
+        .png()
+        .toBuffer();
+      width = maxW;
+    } else {
+      buffer = await sharp(trimmed).resize(width, height, { fit: "inside" }).png().toBuffer();
+    }
+
+    const bottomAlphaInset = await measureBottomAlphaInset(buffer);
+    return { buffer, width, height, bottomAlphaInset };
+  }
 
   const maxAllowedH = Math.min(maxH, maxHCap);
   let scale = Math.min(maxW / srcW, maxAllowedH / srcH);
