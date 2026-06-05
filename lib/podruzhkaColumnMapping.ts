@@ -25,7 +25,7 @@ export const PODRUZHKA_FIELD_LABELS: Record<PodruzhkaFieldKey, string> = {
 /** Подсказка: какая колонка Excel → что на картинке */
 export const PODRUZHKA_FIELD_HINTS: Record<PodruzhkaFieldKey, string> = {
   brandName: "Крупно вверху слева (brand name)",
-  productType: "Серый текст под брендом (product_type)",
+  productType: "Серая строка на карточке (product_type из Excel)",
   productName: "Колонка product name в вашем фиде",
   name: "Колонка name — по ней AI ищет аромат в интернете",
   foto: "Ссылка на JPG/PNG товара (текст или гиперссылка в ячейке)",

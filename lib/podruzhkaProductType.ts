@@ -1,10 +1,7 @@
 /**
- * Тип для серой строки на карточке: из колонки product_type или из name / product name.
- * Excel не перезаписываем — только подстановка при рендере.
+ * Серая строка на карточке: product type card → иначе product_type из Excel как есть.
+ * Угадывание из name — только если product_type пустой.
  */
-const VAGUE_ONLY =
-  /^(духи|парфюм|аромат|парфюмерия|fragrance|perfume|парфюмированная\s+вода)$/i;
-
 export function normalizeProductType(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -26,6 +23,7 @@ function genderSuffix(blob: string): string {
   return "";
 }
 
+/** Запасной вариант, если product_type в Excel пустой */
 function inferFromNames(productName: string, name: string, model?: string): string {
   const blob = `${productName} ${name} ${model ?? ""}`.toLowerCase();
   const g = genderSuffix(blob);
@@ -34,6 +32,12 @@ function inferFromNames(productName: string, name: string, model?: string): stri
     /eau\s*de\s*parfum|\bedp\b|парфюмерн(?:ая|ой)\s+вод|extrait\s+de\s+parfum|духи\s*\(парфюмерн/i.test(
       blob
     )
+  ) {
+    return `парфюмерная вода${g}`.trim();
+  }
+  if (
+    /\belixir\s+de\s+parfum\b|\bde\s+parfum\b|\bparfum\b/i.test(blob) &&
+    !/eau\s*de\s*toilette|\bedt\b/i.test(blob)
   ) {
     return `парфюмерная вода${g}`.trim();
   }
@@ -66,25 +70,12 @@ export function resolveProductTypeForCard(input: {
   model?: string;
 }): string {
   const col = norm(input.productType);
-  const blob = `${input.productName} ${input.name} ${input.model ?? ""}`.trim();
-
-  if (col && !VAGUE_ONLY.test(col)) {
-    return col;
-  }
-
-  const inferred = inferFromNames(input.productName, input.name, input.model);
-  if (inferred) return inferred;
-
-  if (col && VAGUE_ONLY.test(col)) {
-    const g = genderSuffix(blob);
-    return `парфюмерная вода${g}`.trim();
-  }
-
   if (col) return col;
-  return "";
+
+  return inferFromNames(input.productName, input.name, input.model);
 }
 
-/** Тип на карточке: колонка product type card → иначе product_type / name */
+/** product type card (если заполнен) → иначе product_type → иначе name */
 export function resolveProductTypeForRender(input: {
   productTypeCard: string;
   productType: string;
