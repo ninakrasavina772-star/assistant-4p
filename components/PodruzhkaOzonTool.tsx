@@ -212,7 +212,6 @@ export function PodruzhkaOzonTool() {
           fail: info.rows.length - ready,
           written: 0
         });
-        setStep(1);
       } else {
         setNotesDone(false);
         setNotesStats(null);
@@ -417,7 +416,9 @@ export function PodruzhkaOzonTool() {
   }, [wb, scan, sheetInfo, mapping, openaiKey, rememberKey, syncSheetInfo, forceAiRegenerate]);
 
   const runRender = useCallback(async () => {
-    if (!wb || !sheetInfo || !notesDone) return;
+    if (!wb || !sheetInfo || !scan) return;
+    const wsCheck = wb.getWorksheet(sheetInfo.sheetName);
+    if (!wsCheck || countAiReadyRows(wsCheck, sheetInfo) === 0) return;
 
     setBusy(true);
     setError(null);
@@ -575,7 +576,17 @@ export function PodruzhkaOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, notesDone, previewUrl, openaiKey]);
+  }, [wb, sheetInfo, scan, previewUrl, openaiKey]);
+
+  const renderReady = useMemo(() => {
+    if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
+    const ws = wb.getWorksheet(sheetInfo.sheetName);
+    if (!ws) return { ready: 0, total: sheetInfo.rows.length };
+    return {
+      ready: countAiReadyRows(ws, sheetInfo),
+      total: sheetInfo.rows.length
+    };
+  }, [wb, sheetInfo, scan, notesStats, infographicDone]);
 
   const pipeline = useMemo(() => {
     if (!wb || !sheetInfo || !infographicDone) return null;
@@ -592,7 +603,7 @@ export function PodruzhkaOzonTool() {
 
   const headerOptions = scan?.headers ?? [];
   const step1Ready = Boolean(wb && mappingConfirmed && sheetInfo);
-  const step2Ready = step1Ready && notesDone;
+  const canRenderInfographic = step1Ready && renderReady.ready > 0;
 
   const stepBtn = (n: Step, label: string, enabled: boolean) => (
     <button
@@ -621,13 +632,11 @@ export function PodruzhkaOzonTool() {
             распознаются сами (name, brand name, foto, note 1…).
           </p>
           <p>
-            <strong>2.</strong> AI заполняет <strong>model</strong>, <strong>note 1–3</strong> и
-            проверяет тип. Колонку <strong>product_type</strong> не трогаем — если тип для карточки
-            другой, AI пишет в <strong>product type card</strong>.
+            <strong>2.</strong> Два пути: <strong>AI</strong> заполняет model и ноты — или сразу{" "}
+            <strong>инфографика</strong>, если в Excel уже есть model и note 1–3.
           </p>
           <p>
-            <strong>3.</strong> Скачайте Excel, при необходимости поправьте model, ноты или{" "}
-            <strong>product type card</strong>, загрузите файл снова.
+            <strong>3.</strong> После AI скачайте Excel, поправьте при необходимости, загрузите снова.
           </p>
           <p>
             <strong>4.</strong> Инфографика 1024×1365 → ссылки в <strong>foto 2</strong>.
@@ -637,7 +646,7 @@ export function PodruzhkaOzonTool() {
           </p>
           <div className="flex flex-wrap gap-2 pt-2">
             {stepBtn(1, "1. Ноты (AI)", Boolean(wb))}
-            {stepBtn(2, "2. Инфографика", step2Ready)}
+            {stepBtn(2, "2. Инфографика", canRenderInfographic)}
             {stepBtn(3, "3. Foto 3", infographicDone)}
           </div>
         </div>
@@ -667,10 +676,41 @@ export function PodruzhkaOzonTool() {
           >
             {busy && !wb ? "Читаем…" : notesDone ? "Загрузить исправленный Excel" : "Загрузить Excel"}
           </button>
-          {notesDone && !infographicDone ? (
-            <p className="text-xs text-amber-900 bg-amber-50 rounded-lg px-3 py-2">
-              После шага 1 скачайте файл, внесите правки и загрузите его снова — затем шаг 2.
-            </p>
+          {mappingConfirmed && sheetInfo ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 space-y-3">
+              <p className="text-sm text-slate-700">
+                <strong>{renderReady.ready}</strong> из <strong>{renderReady.total}</strong> строк
+                готовы к инфографике (есть model, note 1–3 и foto).
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  className="rounded-lg border border-violet-700 bg-white px-4 py-2.5 text-sm font-semibold text-violet-900 hover:bg-violet-50"
+                  disabled={busy}
+                  onClick={() => setStep(1)}
+                >
+                  1. Запустить AI — найти model и ноты
+                </button>
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy || renderReady.ready === 0}
+                  title={
+                    renderReady.ready === 0
+                      ? "Сначала заполните model и note 1–3 (AI или вручную в Excel)"
+                      : undefined
+                  }
+                  onClick={() => setStep(2)}
+                >
+                  2. Сразу генерировать инфографику
+                </button>
+              </div>
+              {renderReady.ready === 0 ? (
+                <p className="text-xs text-amber-900">
+                  Нет готовых строк — запустите AI или заполните model, note 1–3 и note 1 (2)… в Excel.
+                </p>
+              ) : null}
+            </div>
           ) : null}
           {fileName ? (
             <p className="text-sm text-slate-600">
@@ -856,7 +896,7 @@ export function PodruzhkaOzonTool() {
         </section>
       )}
 
-      {step2Ready && step === 2 ? (
+      {canRenderInfographic && step === 2 ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>Шаг 2 — инфографика</h2>
@@ -975,7 +1015,7 @@ export function PodruzhkaOzonTool() {
         </section>
       ) : null}
 
-      {step2Ready && step === 3 && infographicDone && (
+      {canRenderInfographic && step === 3 && infographicDone && (
         <OzonImageConverter embedded pipeline={pipeline} />
       )}
     </div>
