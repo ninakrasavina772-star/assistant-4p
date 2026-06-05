@@ -1,5 +1,5 @@
-/** Вёрстка косметики — фиксированная «площадь» товара (v3). */
-export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v3";
+/** Вёрстка косметики — v4: крупное foto + перенос benefit в колонке */
+export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v4";
 
 /** Серые описания benefit: +2px к парфюму (20 → 22) */
 export const PODRUZHKA_COSMETICS_NOTE_DESC_SIZE = 22;

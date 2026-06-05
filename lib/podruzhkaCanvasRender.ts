@@ -30,6 +30,7 @@ import {
   resolveBrandLines
 } from "@/lib/podruzhkaBrandLayout";
 import { computeTextFlowLayout, type TextFlowLayout } from "@/lib/podruzhkaTextFlow";
+import { drawNoteBlocks, layoutNoteBlocks } from "@/lib/podruzhkaNotesLayout";
 
 const { w: W, h: H } = PODRUZHKA_SIZE;
 const C = S.colors;
@@ -361,37 +362,22 @@ function overlayDynamicText(
     const bar = FIGMA.notesPinkBar;
     drawFilledBar(ctx, bar.x, bar.y, bar.w, bar.h, C.accent);
 
-    for (let i = 0; i < notes.length; i++) {
-      const n = notes[i]!;
-      const slot = FIGMA.notes[i]!;
-
-      ctx.fillStyle = C.accent;
-      ctx.font = fNoteTitle;
-      ctx.fillText(
-        n.title.toUpperCase(),
-        FIGMA.textX,
-        figmaTextBaseline(slot.titleY, FIGMA.fonts.noteTitle)
-      );
-
-      ctx.fillStyle = C.muted;
-      ctx.font = fNoteDesc;
-      ctx.fillText(
-        n.desc,
-        FIGMA.textX,
-        figmaTextBaseline(slot.descY, FIGMA.fonts.noteDesc)
-      );
-
-      if (slot.sepY != null) {
-        drawFilledBar(
-          ctx,
-          FIGMA.textX,
-          slot.sepY,
-          FIGMA.separator.w,
-          FIGMA.separator.h,
-          C.separator
-        );
-      }
-    }
+    const notesLayout = layoutNoteBlocks(
+      measureFromCanvasCtx(ctx),
+      notes,
+      S.fonts.noteTitle.max,
+      S.fonts.noteDesc.max,
+      interFont
+    );
+    drawNoteBlocks(
+      ctx,
+      notesLayout,
+      FIGMA.textX,
+      interFont,
+      { accent: C.accent, muted: C.muted, separator: C.separator },
+      FIGMA.separator.w,
+      FIGMA.separator.h
+    );
   } else {
     drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
     drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);

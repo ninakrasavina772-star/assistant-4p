@@ -15,6 +15,7 @@ import {
   PODRUZHKA_COSMETICS_NOTE_TITLE_SIZE,
   type PodruzhkaRenderProfile
 } from "@/lib/podruzhkaCosmeticsLayout";
+import { drawNoteBlocks, layoutNoteBlocks } from "@/lib/podruzhkaNotesLayout";
 import type { PodruzhkaInfographicData } from "@/lib/podruzhkaTypes";
 
 const FONT_DIR = "/podruzhka/fonts";
@@ -131,7 +132,7 @@ export async function drawPodruzhkaCard(
   foto: ProcessedFoto,
   templateImg: HTMLImageElement,
   productImg: HTMLImageElement
-): Promise<void> {
+): Promise<{ notesTruncated: boolean }> {
   const { w, h } = S.frame;
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(templateImg, 0, 0, w, h);
@@ -188,23 +189,14 @@ export async function drawPodruzhkaCard(
   const noteDescSize =
     profile === "cosmetics" ? PODRUZHKA_COSMETICS_NOTE_DESC_SIZE : S.fonts.noteDesc.size;
 
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i]!;
-    const slot = F.notes[i]!;
-
-    ctx.fillStyle = S.colors.accent;
-    ctx.font = interFont(noteTitleSize, 700);
-    ctx.textBaseline = "top";
-    ctx.fillText(n.title.toUpperCase(), F.textX, slot.titleY);
-
-    ctx.fillStyle = S.colors.muted;
-    ctx.font = interFont(noteDescSize, 400);
-    ctx.fillText(n.desc, F.textX, slot.descY);
-
-    if (slot.sepY != null) {
-      drawBar(ctx, F.textX, slot.sepY, F.separator.w, F.separator.h, S.colors.separator);
-    }
-  }
+  const notesLayout = layoutNoteBlocks(
+    measureFromCanvas2D(ctx),
+    notes,
+    noteTitleSize,
+    noteDescSize,
+    interFont
+  );
+  drawNoteBlocks(ctx, notesLayout, F.textX, interFont, S.colors, F.separator.w, F.separator.h);
 
   const ml = formatMlHtml(data.ml);
   if (ml) {
@@ -215,11 +207,14 @@ export async function drawPodruzhkaCard(
   }
 
   ctx.drawImage(productImg, foto.drawX, foto.drawY, foto.width, foto.height);
+
+  return { notesTruncated: notesLayout.truncated };
 }
 
 export type ClientRenderResult = {
   blob: Blob;
   layoutVersion: string;
+  notesTruncated: boolean;
 };
 
 export async function renderPodruzhkaCardClient(
@@ -242,7 +237,7 @@ export async function renderPodruzhkaCardClient(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D недоступен");
 
-  await drawPodruzhkaCard(ctx, data, foto, templateImg, productImg);
+  const { notesTruncated } = await drawPodruzhkaCard(ctx, data, foto, templateImg, productImg);
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
@@ -255,6 +250,7 @@ export async function renderPodruzhkaCardClient(
   return {
     blob,
     layoutVersion:
-      profile === "cosmetics" ? PODRUZHKA_COSMETICS_LAYOUT_VERSION : PODRUZHKA_HTML_LAYOUT_VERSION
+      profile === "cosmetics" ? PODRUZHKA_COSMETICS_LAYOUT_VERSION : PODRUZHKA_HTML_LAYOUT_VERSION,
+    notesTruncated
   };
 }

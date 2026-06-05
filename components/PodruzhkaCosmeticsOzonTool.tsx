@@ -45,6 +45,7 @@ import {
   expandCosmeticsAiResults
 } from "@/lib/podruzhkaCosmeticsAi";
 import { PODRUZHKA_COSMETICS_FIELD_LABELS } from "@/lib/podruzhkaCosmeticsColumnMapping";
+import { PodruzhkaInfographicPreview, type InfographicPreviewItem } from "@/components/PodruzhkaInfographicPreview";
 import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
 import type { PodruzhkaAiResult, PodruzhkaFeedRow } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
@@ -113,7 +114,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     noFotoRows: { row: number; brand: string; error: string }[];
     layoutWarnings: { row: number; brand: string; warning: string }[];
   } | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [renderPreviews, setRenderPreviews] = useState<InfographicPreviewItem[]>([]);
 
   useEffect(() => {
     if (typeof sessionStorage === "undefined") return;
@@ -231,7 +232,7 @@ export function PodruzhkaCosmeticsOzonTool() {
       setInfographicDone(false);
       setRenderStats(null);
       setLayoutVersion(null);
-      setPreviewUrl(null);
+      setRenderPreviews([]);
       setMappingConfirmed(false);
       setSheetInfo(null);
       setTextColumns([]);
@@ -530,7 +531,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     setInfographicDone(false);
     setRenderStats(null);
     setLayoutVersion(null);
-    setPreviewUrl(null);
+    setRenderPreviews([]);
 
     const ws = wb.getWorksheet(sheetInfo.sheetName);
     if (!ws) {
@@ -544,7 +545,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     let fail = 0;
     let noFoto = 0;
     let sampleFotoError: string | null = null;
-    const visionNote = "Рендер: cosmetics-v3 — крупнее foto в зоне справа, фикс. масштаб.";
+    const visionNote = "Рендер: cosmetics-v4 — крупное foto, benefit с переносом в левой колонке.";
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
     const noFotoRows: { row: number; brand: string; error: string }[] = [];
@@ -616,7 +617,13 @@ export function PodruzhkaCosmeticsOzonTool() {
               urls.set(row.row, data.url);
               ok++;
               if (data.layoutVersion) setLayoutVersion(data.layoutVersion);
-              if (!previewUrl) setPreviewUrl(data.url);
+              if (rendered.notesTruncated) {
+                layoutWarnings.push({
+                  row: row.row,
+                  brand: row.brandName || row.name.slice(0, 30),
+                  warning: "Длинное описание benefit — сократите текст в Excel"
+                });
+              }
             } catch (e) {
               fail++;
               const err = e instanceof Error ? e.message : "ошибка рендера";
@@ -631,6 +638,21 @@ export function PodruzhkaCosmeticsOzonTool() {
           })
         );
       }
+
+      const previews: InfographicPreviewItem[] = todo
+        .map((row) => {
+          const url = urls.get(row.row);
+          if (!url) return null;
+          const ai = readCosmeticsTextsFromSheet(ws, sheetInfo, row);
+          return {
+            row: row.row,
+            brand: row.brandName || "—",
+            label: ai.model || row.name.slice(0, 40),
+            url
+          };
+        })
+        .filter((x): x is InfographicPreviewItem => x != null);
+      setRenderPreviews(previews);
 
       const { foto2Col } = applyCosmeticsFoto2Urls(ws, sheetInfo, urls);
       setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
@@ -652,7 +674,7 @@ export function PodruzhkaCosmeticsOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan, previewUrl]);
+  }, [wb, sheetInfo, scan]);
 
   const renderReady = useMemo(() => {
     if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
@@ -972,7 +994,7 @@ export function PodruzhkaCosmeticsOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-cosmetics-v3).
+                      html-figma-cosmetics-v4).
                     </>
                   ) : null}
                 </p>
@@ -1009,9 +1031,20 @@ export function PodruzhkaCosmeticsOzonTool() {
                     </ul>
                   </div>
                 ) : null}
-                {previewUrl ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img src={previewUrl} alt="Превью" className="max-w-xs rounded-lg border" />
+                {renderStats.layoutWarnings.length > 0 ? (
+                  <div className="text-sm text-amber-900">
+                    <p>Предупреждения вёрстки ({renderStats.layoutWarnings.length}):</p>
+                    <ul className="mt-1 list-inside list-disc">
+                      {renderStats.layoutWarnings.map((s) => (
+                        <li key={s.row}>
+                          строка {s.row} — {s.brand}: {s.warning}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {renderPreviews.length > 0 ? (
+                  <PodruzhkaInfographicPreview items={renderPreviews} />
                 ) : null}
                 <button
                   type="button"
