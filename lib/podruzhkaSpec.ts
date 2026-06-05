@@ -1,3 +1,4 @@
+import { figmaTextBaseline, PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 
 const B = R.blocks;
@@ -15,6 +16,11 @@ export const PODRUZHKA_SPEC = {
   noteTitleDy: R.noteTitleDy,
   noteDescDy: R.noteDescDy,
   separatorWidth: R.separatorWidth,
-  ml: { x: B.volume.x + 5, y: B.volume.y + 28 },
-  mlAccent: { x: B.volume.x, y: B.volume.y - 8, w: 50, h: 6 }
+  ml: { x: F.ml.x, y: figmaTextBaseline(F.ml.y, F.ml.fontSize) },
+  mlAccent: {
+    x: R.mlAccentBar.x,
+    y: R.mlAccentBar.y,
+    w: R.mlAccentBar.w,
+    h: R.mlAccentBar.h
+  }
 } as const;

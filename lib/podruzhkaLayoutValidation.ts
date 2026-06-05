@@ -314,12 +314,8 @@ export async function autoCorrectProductLayout(
       zone.x,
       zone.x + zone.w - fit.width + (adj.productLeftOffset ?? 0)
     );
-    const groundY = LAYOUT_RULES.productBottomY;
     const inset = fit.bottomAlphaInset ?? 0;
-    const drawY = Math.max(
-      zone.y,
-      Math.min(groundY - fit.height + inset, zone.bottom - fit.height + inset)
-    );
+    const drawY = Math.max(zone.y, zone.bottom - fit.height + inset);
 
     lastMetrics = buildFullLayoutMetrics({
       productWidth: fit.width,

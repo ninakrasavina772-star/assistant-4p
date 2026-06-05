@@ -17,6 +17,10 @@ import { PODRUZHKA_SIZE } from "@/lib/podruzhkaLayout";
 import { PODRUZHKA_SPEC as S } from "@/lib/podruzhkaSpec";
 import { LAYOUT_RULES } from "@/lib/podruzhkaLayoutRules";
 import {
+  figmaTextBaseline,
+  PODRUZHKA_FIGMA as FIGMA
+} from "@/lib/podruzhkaFigmaLayout";
+import {
   getReferenceFixedTextLayout,
   REFERENCE_TEXT_ANCHORS
 } from "@/lib/podruzhkaReferenceAnchors";
@@ -329,13 +333,6 @@ function overlayDynamicText(
   ctx.font = typeFont;
   if (typeLines.length) {
     let typeBaseline = flow.productTypeBaseline;
-    if (
-      LAYOUT_RULES.replaceOnly &&
-      typeLines.length === 1 &&
-      typeLines[0]!.length <= REFERENCE_TEXT_ANCHORS.productTypeShortMaxLen
-    ) {
-      typeBaseline += REFERENCE_TEXT_ANCHORS.productTypeShortExtraDy;
-    }
     for (const line of typeLines) {
       ctx.fillText(line, L.productType.x, typeBaseline);
       typeBaseline += Math.round(typeSize * 1.12);
@@ -350,30 +347,65 @@ function overlayDynamicText(
     modelBaseline += flow.modelLineStep;
   }
 
-  if (!LAYOUT_RULES.replaceOnly) {
-    drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
-    drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);
-  }
-
   const fNoteTitle = `700 ${S.fonts.noteTitle.max}px MontserratBold, Montserrat, sans-serif`;
   const fNoteDesc = `400 ${S.fonts.noteDesc.max}px Montserrat, NotoSans, sans-serif`;
   const notes = data.notes.slice(0, 3);
 
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i]!;
-    const blockY = flow.notesStartY + i * L.notes.blockH;
+  if (LAYOUT_RULES.replaceOnly) {
+    const bar = FIGMA.notesPinkBar;
+    drawFilledBar(ctx, bar.x, bar.y, bar.w, bar.h, C.accent);
 
-    ctx.fillStyle = C.accent;
-    ctx.font = fNoteTitle;
-    ctx.fillText(n.title.toUpperCase(), L.notes.x, blockY + S.noteTitleDy);
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i]!;
+      const slot = FIGMA.notes[i]!;
 
-    ctx.fillStyle = C.muted;
-    ctx.font = fNoteDesc;
-    ctx.fillText(n.desc, L.notes.x, blockY + S.noteDescDy);
+      ctx.fillStyle = C.accent;
+      ctx.font = fNoteTitle;
+      ctx.fillText(
+        n.title.toUpperCase(),
+        FIGMA.textX,
+        figmaTextBaseline(slot.titleY, FIGMA.fonts.noteTitle)
+      );
 
-    if (i < 2) {
-      const sepY = blockY + L.notes.blockH - 10;
-      drawFilledBar(ctx, L.notes.x, sepY, L.separator.width, 1, C.separator);
+      ctx.fillStyle = C.muted;
+      ctx.font = fNoteDesc;
+      ctx.fillText(
+        n.desc,
+        FIGMA.textX,
+        figmaTextBaseline(slot.descY, FIGMA.fonts.noteDesc)
+      );
+
+      if (slot.sepY != null) {
+        drawFilledBar(
+          ctx,
+          FIGMA.textX,
+          slot.sepY,
+          FIGMA.separator.w,
+          FIGMA.separator.h,
+          C.separator
+        );
+      }
+    }
+  } else {
+    drawFilledBar(ctx, L.accent.x, flow.accentY, L.accent.w, L.accent.h, C.accent);
+    drawFilledBar(ctx, L.notes.x, flow.notesStartY - 14, L.accent.w, L.accent.h, C.accent);
+
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i]!;
+      const blockY = flow.notesStartY + i * L.notes.blockH;
+
+      ctx.fillStyle = C.accent;
+      ctx.font = fNoteTitle;
+      ctx.fillText(n.title.toUpperCase(), L.notes.x, blockY + S.noteTitleDy);
+
+      ctx.fillStyle = C.muted;
+      ctx.font = fNoteDesc;
+      ctx.fillText(n.desc, L.notes.x, blockY + S.noteDescDy);
+
+      if (i < 2) {
+        const sepY = blockY + L.notes.blockH - 10;
+        drawFilledBar(ctx, L.notes.x, sepY, L.separator.width, 1, C.separator);
+      }
     }
   }
 

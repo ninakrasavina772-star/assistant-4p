@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Подружка Ozon — HTML-превью карточки</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,700;1,500&family=Libre+Franklin:wght@800&display=swap"
+      rel="stylesheet"
+    />
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, sans-serif;
+        background: #f3f4f6;
+        color: #111;
+      }
+      #app {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 1.5rem 1rem 3rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.5rem;
+      }
+      .hint {
+        font-size: 0.9rem;
+        color: #444;
+        line-height: 1.45;
+        margin-bottom: 1.25rem;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      label {
+        display: block;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+      }
+      input,
+      textarea {
+        width: 100%;
+        font: inherit;
+        padding: 0.5rem 0.65rem;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+      }
+      textarea {
+        min-height: 2.5rem;
+        resize: vertical;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        border: none;
+        border-radius: 8px;
+        padding: 0.55rem 1rem;
+        cursor: pointer;
+        background: #e6007e;
+        color: #fff;
+      }
+      button.secondary {
+        background: #111;
+      }
+      #status {
+        font-size: 0.85rem;
+        margin-top: 0.75rem;
+        color: #374151;
+      }
+      #preview-wrap {
+        overflow: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        background: #fafafa;
+        padding: 1rem;
+      }
+      #card-mount {
+        width: 1024px;
+        height: 1365px;
+        transform-origin: top left;
+        transform: scale(0.45);
+        margin-bottom: -750px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <h1>Подружка · Ozon — HTML-карточка (1024×1365)</h1>
+      <p class="hint">
+        Координаты из <strong>Ozon Card для cursor.fig</strong>. Шрифты Inter + Libre Franklin.
+        Скачивание foto через <code>/api/podruzhka/foto</code> (нужен запущенный сайт).
+      </p>
+
+      <div class="panel">
+        <label>brand name</label>
+        <input id="brand" value="CAROLINA HERRERA" />
+        <label>product type</label>
+        <input id="ptype" value="туалетная вода мужская" />
+        <label>model</label>
+        <input id="model" value="212 Sexy" />
+        <label>ml</label>
+        <input id="ml" value="100" />
+        <label>foto (URL из Excel)</label>
+        <input id="foto" placeholder="https://..." />
+        <label>note 1 / note 1 (2)</label>
+        <input id="n1t" value="древесный" />
+        <textarea id="n1d">тёплый и глубокий</textarea>
+        <label>note 2 / note 2 (1)</label>
+        <input id="n2t" value="Пряный" />
+        <textarea id="n2d">пикантный характер</textarea>
+        <label>note 3 / note 3 (1)</label>
+        <input id="n3t" value="Восточный" />
+        <textarea id="n3d">чувственный шлейф</textarea>
+        <div class="actions">
+          <button type="button" id="btn-preview">Обновить превью</button>
+          <button type="button" id="btn-jpg" class="secondary">Скачать JPG</button>
+        </div>
+        <p id="status"></p>
+      </div>
+
+      <div id="preview-wrap">
+        <div id="card-mount"></div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var S = {
+          frame: { w: 1024, h: 1365 },
+          colors: {
+            bg: "#F5F5F5",
+            text: "#111111",
+            muted: "#666666",
+            accent: "#E6007E",
+            separator: "#D9D9D9"
+          },
+          textX: 64,
+          brand: { x: 64, y: 328, w: 895, h: 184 },
+          productType: { x: 64, y: 524, w: 895, h: 25 },
+          model: { x: 64, y: 605, w: 369, h: 61 },
+          notesPinkBar: { x: 64, y: 719, w: 47, h: 8 },
+          notes: [
+            { titleY: 780, descY: 814, sepY: 863 },
+            { titleY: 895, descY: 929, sepY: 978 },
+            { titleY: 1010, descY: 1044, sepY: null }
+          ],
+          mlPinkBar: { x: 64, y: 1116, w: 47, h: 8 },
+          ml: { x: 64, y: 1177, w: 369, h: 33 },
+          product: { x: 433, y: 616, w: 526, h: 654 },
+          separator: { w: 369, h: 2 },
+          fonts: {
+            brandFamily: '"Libre Franklin", sans-serif',
+            bodyFamily: '"Inter", sans-serif',
+            brand: { max: 95, min: 52, weight: 800, lineHeight: 1.05 },
+            productType: { size: 26, weight: 400, lineHeight: 1.12 },
+            model: { max: 66, min: 44, weight: 800, lineHeight: 1.05 },
+            noteTitle: { size: 28, weight: 700, lineHeight: 1 },
+            noteDesc: { size: 20, weight: 400, lineHeight: 1.2 },
+            ml: { size: 37, weight: 500, lineHeight: 1 }
+          },
+          templateUrl: "/podruzhka/template-base.png"
+        };
+
+        function setStatus(msg, err) {
+          var el = document.getElementById("status");
+          el.textContent = msg;
+          el.style.color = err ? "#b91c1c" : "#374151";
+        }
+
+        function escapeHtml(s) {
+          return String(s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+
+        function formatMl(ml) {
+          var t = String(ml || "").trim();
+          if (!t) return "";
+          if (/мл|ml/i.test(t)) return t.replace(/\s*ml\b/i, " мл");
+          var n = t.replace(/[^\d.,]/g, "");
+          return n ? n + " мл" : t;
+        }
+
+        function fitFontSize(text, maxSize, minSize, weight, family, maxWidth, maxLines) {
+          var canvas = document.createElement("canvas");
+          var ctx = canvas.getContext("2d");
+          var words = String(text).split(/\s+/).filter(Boolean);
+          if (!ctx || !words.length) return { size: maxSize, lines: [text] };
+
+          function wrap(size) {
+            ctx.font = weight + " " + size + "px " + family;
+            var lines = [];
+            var line = words[0];
+            for (var i = 1; i < words.length; i++) {
+              var w = words[i];
+              var test = line + " " + w;
+              if (ctx.measureText(test).width > maxWidth) {
+                lines.push(line);
+                line = w;
+                if (lines.length >= maxLines) return lines;
+              } else line = test;
+            }
+            lines.push(line);
+            return lines.slice(0, maxLines);
+          }
+
+          for (var size = maxSize; size >= minSize; size -= 2) {
+            var lines = wrap(size);
+            ctx.font = weight + " " + size + "px " + family;
+            var widest = 0;
+            for (var j = 0; j < lines.length; j++) {
+              widest = Math.max(widest, ctx.measureText(lines[j]).width);
+            }
+            if (widest <= maxWidth) return { size: size, lines: lines };
+          }
+          return { size: minSize, lines: wrap(minSize) };
+        }
+
+        function barStyle(x, y, w, h, color) {
+          return (
+            "position:absolute;left:" +
+            x +
+            "px;top:" +
+            y +
+            "px;width:" +
+            w +
+            "px;height:" +
+            h +
+            "px;background:" +
+            color +
+            ";"
+          );
+        }
+
+        function textStyle(x, y, w, size, weight, family, color, lh, extra) {
+          return [
+            "position:absolute",
+            "left:" + x + "px",
+            "top:" + y + "px",
+            "width:" + w + "px",
+            "margin:0",
+            "padding:0",
+            "font:" + weight + " " + size + "px " + family,
+            "line-height:" + lh,
+            "color:" + color,
+            "white-space:pre-wrap",
+            extra || ""
+          ].join(";");
+        }
+
+        function readForm() {
+          return {
+            brandName: document.getElementById("brand").value,
+            productType: document.getElementById("ptype").value,
+            model: document.getElementById("model").value,
+            ml: document.getElementById("ml").value,
+            fotoUrl: document.getElementById("foto").value.trim(),
+            notes: [
+              {
+                title: document.getElementById("n1t").value,
+                desc: document.getElementById("n1d").value
+              },
+              {
+                title: document.getElementById("n2t").value,
+                desc: document.getElementById("n2d").value
+              },
+              {
+                title: document.getElementById("n3t").value,
+                desc: document.getElementById("n3d").value
+              }
+            ]
+          };
+        }
+
+        function buildCard(data, fotoDataUrl) {
+          var brand = fitFontSize(
+            data.brandName.toUpperCase(),
+            S.fonts.brand.max,
+            S.fonts.brand.min,
+            S.fonts.brand.weight,
+            S.fonts.brandFamily,
+            S.brand.w,
+            2
+          );
+          var model = fitFontSize(
+            data.model,
+            S.fonts.model.max,
+            S.fonts.model.min,
+            S.fonts.model.weight,
+            S.fonts.bodyFamily,
+            S.model.w,
+            2
+          );
+          var typeText = String(data.productType || "").trim().toLowerCase();
+          var typeFit = typeText
+            ? fitFontSize(
+                typeText,
+                S.fonts.productType.size,
+                20,
+                S.fonts.productType.weight,
+                S.fonts.bodyFamily,
+                S.productType.w,
+                2
+              )
+            : { size: S.fonts.productType.size, lines: [] };
+
+          var root = document.createElement("div");
+          root.style.cssText =
+            "position:relative;width:" +
+            S.frame.w +
+            "px;height:" +
+            S.frame.h +
+            "px;overflow:hidden;background:" +
+            S.colors.bg;
+
+          var html = [];
+          html.push(
+            '<img src="' +
+              S.templateUrl +
+              '" alt="" crossorigin="anonymous" style="position:absolute;inset:0;width:100%;height:100%;" />'
+          );
+          html.push(
+            '<div style="' +
+              barStyle(
+                S.notesPinkBar.x,
+                S.notesPinkBar.y,
+                S.notesPinkBar.w,
+                S.notesPinkBar.h,
+                S.colors.accent
+              ) +
+              '"></div>'
+          );
+          html.push(
+            '<div style="' +
+              barStyle(
+                S.mlPinkBar.x,
+                S.mlPinkBar.y,
+                S.mlPinkBar.w,
+                S.mlPinkBar.h,
+                S.colors.accent
+              ) +
+              '"></div>'
+          );
+          html.push(
+            '<div style="' +
+              textStyle(
+                S.brand.x,
+                S.brand.y,
+                S.brand.w,
+                brand.size,
+                S.fonts.brand.weight,
+                S.fonts.brandFamily,
+                S.colors.text,
+                S.fonts.brand.lineHeight,
+                "text-transform:uppercase;"
+              ) +
+              '">' +
+              brand.lines.map(escapeHtml).join("<br/>") +
+              "</div>"
+          );
+          if (typeFit.lines.length) {
+            html.push(
+              '<div style="' +
+                textStyle(
+                  S.productType.x,
+                  S.productType.y,
+                  S.productType.w,
+                  typeFit.size,
+                  S.fonts.productType.weight,
+                  S.fonts.bodyFamily,
+                  S.colors.muted,
+                  S.fonts.productType.lineHeight
+                ) +
+                '">' +
+                typeFit.lines.map(escapeHtml).join("<br/>") +
+                "</div>"
+            );
+          }
+          html.push(
+            '<div style="' +
+              textStyle(
+                S.model.x,
+                S.model.y,
+                S.model.w,
+                model.size,
+                S.fonts.model.weight,
+                S.fonts.bodyFamily,
+                S.colors.text,
+                S.fonts.model.lineHeight
+              ) +
+              '">' +
+              model.lines.map(escapeHtml).join("<br/>") +
+              "</div>"
+          );
+
+          for (var i = 0; i < data.notes.length; i++) {
+            var n = data.notes[i];
+            var slot = S.notes[i];
+            html.push(
+              '<div style="' +
+                textStyle(
+                  S.textX,
+                  slot.titleY,
+                  S.model.w,
+                  S.fonts.noteTitle.size,
+                  S.fonts.noteTitle.weight,
+                  S.fonts.bodyFamily,
+                  S.colors.accent,
+                  S.fonts.noteTitle.lineHeight,
+                  "text-transform:uppercase;"
+                ) +
+                '">' +
+                escapeHtml(n.title) +
+                "</div>"
+            );
+            html.push(
+              '<div style="' +
+                textStyle(
+                  S.textX,
+                  slot.descY,
+                  S.model.w,
+                  S.fonts.noteDesc.size,
+                  S.fonts.noteDesc.weight,
+                  S.fonts.bodyFamily,
+                  S.colors.muted,
+                  S.fonts.noteDesc.lineHeight
+                ) +
+                '">' +
+                escapeHtml(n.desc) +
+                "</div>"
+            );
+            if (slot.sepY != null) {
+              html.push(
+                '<div style="' +
+                  barStyle(
+                    S.textX,
+                    slot.sepY,
+                    S.separator.w,
+                    S.separator.h,
+                    S.colors.separator
+                  ) +
+                  '"></div>'
+              );
+            }
+          }
+
+          var ml = formatMl(data.ml);
+          if (ml) {
+            html.push(
+              '<div style="' +
+                textStyle(
+                  S.ml.x,
+                  S.ml.y,
+                  S.ml.w,
+                  S.fonts.ml.size,
+                  S.fonts.ml.weight,
+                  S.fonts.bodyFamily,
+                  S.colors.text,
+                  S.fonts.ml.lineHeight,
+                  "font-style:italic;"
+                ) +
+                '">' +
+                escapeHtml(ml) +
+                "</div>"
+            );
+          }
+
+          html.push(
+            '<div style="position:absolute;left:' +
+              S.product.x +
+              "px;top:" +
+              S.product.y +
+              "px;width:" +
+              S.product.w +
+              "px;height:" +
+              S.product.h +
+              'px;overflow:hidden;"><img src="' +
+              fotoDataUrl +
+              '" alt="" crossorigin="anonymous" style="width:100%;height:100%;object-fit:contain;object-position:right bottom;display:block;" /></div>'
+          );
+
+          root.innerHTML = html.join("");
+          return root;
+        }
+
+        function waitImages(el) {
+          var imgs = Array.from(el.querySelectorAll("img"));
+          return Promise.all(
+            imgs.map(function (img) {
+              return new Promise(function (resolve) {
+                if (img.complete && img.naturalWidth > 0) return resolve();
+                img.onload = function () {
+                  resolve();
+                };
+                img.onerror = function () {
+                  resolve();
+                };
+              });
+            })
+          ).then(function () {
+            return document.fonts.ready;
+          });
+        }
+
+        function fetchFoto(url) {
+          return fetch("/api/podruzhka/foto?url=" + encodeURIComponent(url)).then(function (res) {
+            if (!res.ok) {
+              return res.json().then(function (j) {
+                throw new Error((j && j.error) || "foto HTTP " + res.status);
+              });
+            }
+            return res.blob();
+          });
+        }
+
+        function blobToDataUrl(blob) {
+          return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function () {
+              resolve(String(reader.result));
+            };
+            reader.onerror = function () {
+              reject(new Error("foto blob"));
+            };
+            reader.readAsDataURL(blob);
+          });
+        }
+
+        function renderPreview() {
+          var data = readForm();
+          if (!data.fotoUrl) {
+            setStatus("Укажите URL в поле foto", true);
+            return Promise.reject(new Error("no foto"));
+          }
+          setStatus("Загрузка foto…");
+          return fetchFoto(data.fotoUrl)
+            .then(blobToDataUrl)
+            .then(function (fotoDataUrl) {
+              var mount = document.getElementById("card-mount");
+              mount.innerHTML = "";
+              var card = buildCard(data, fotoDataUrl);
+              mount.appendChild(card);
+              return waitImages(card).then(function () {
+                setStatus("Превью обновлено (html-figma-v1)");
+                return card;
+              });
+            });
+        }
+
+        document.getElementById("btn-preview").addEventListener("click", function () {
+          renderPreview().catch(function (e) {
+            setStatus(e.message || "Ошибка", true);
+          });
+        });
+
+        document.getElementById("btn-jpg").addEventListener("click", function () {
+          if (typeof html2canvas === "undefined") {
+            setStatus("html2canvas не загружен", true);
+            return;
+          }
+          renderPreview()
+            .then(function (card) {
+              return html2canvas(card, {
+                scale: 1,
+                backgroundColor: S.colors.bg,
+                useCORS: true,
+                logging: false,
+                width: S.frame.w,
+                height: S.frame.h
+              });
+            })
+            .then(function (canvas) {
+              var link = document.createElement("a");
+              link.download = "podruzhka-card.jpg";
+              link.href = canvas.toDataURL("image/jpeg", 0.92);
+              link.click();
+              setStatus("JPG скачан (1024×1365)");
+            })
+            .catch(function (e) {
+              setStatus(e.message || "Ошибка JPG", true);
+            });
+        });
+      })();
+    </script>
+  </body>
+</html>

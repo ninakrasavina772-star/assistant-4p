@@ -38,6 +38,7 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
+import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
 import type { PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
 
@@ -47,7 +48,7 @@ const SK_OPENAI_REM = "fp_podruzhka_openai_remember";
 const NOTES_CHUNK = 5;
 /** Сколько запросов к API одновременно с браузера */
 const NOTES_PARALLEL = 4;
-/** С Vision — по 1 карточке (дольше, но не упираемся в таймаут API) */
+/** HTML-рендер в браузере — по 1 карточке (html2canvas тяжёлый) */
 const RENDER_CHUNK = 1;
 
 type Step = 1 | 2 | 3;
@@ -475,83 +476,61 @@ export function PodruzhkaOzonTool() {
           chunk.map(async (row) => {
             const ai = readAiFromSheet(ws, sheetInfo, row);
             try {
-              const res = await fetch("/api/podruzhka/render", {
+              const rendered = await renderPodruzhkaCardClient({
+                brandName: row.brandName,
+                productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
+                model: ai.model,
+                ml: row.ml,
+                fotoUrl: row.foto,
+                notes: ai.notes
+              });
+
+              const form = new FormData();
+              form.append(
+                "file",
+                rendered.blob,
+                `podruzhka-row-${row.row}.jpg`
+              );
+              const res = await fetch("/api/podruzhka/upload", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  brandName: row.brandName,
-                  productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
-                  model: ai.model,
-                  ml: row.ml,
-                  fotoUrl: row.foto,
-                  notes: ai.notes,
-                  openaiKey: openaiKey.trim() || undefined
-                })
+                body: form
               });
               const data = (await res.json()) as {
                 url?: string;
                 error?: string;
                 fotoLoaded?: boolean;
-                fotoError?: string;
-                layoutWarning?: string;
-                layoutValidationOk?: boolean;
-                visionUsed?: boolean;
-                visionScore?: number;
-                visionReasoning?: string;
-                visionError?: string;
                 layoutVersion?: string;
               };
               if (!res.ok || !data.url) {
                 fail++;
-                const err =
-                  data.fotoError ??
-                  data.error ??
-                  (res.status === 422 ? "ошибка рендера" : `HTTP ${res.status}`);
-                if (res.status === 422 || data.fotoError) {
-                  noFoto++;
-                  noFotoRows.push({
-                    row: row.row,
-                    brand: row.brandName || row.name.slice(0, 30),
-                    error: err
-                  });
-                  if (!sampleFotoError) sampleFotoError = err;
-                }
-                return;
-              }
-              if (!data.fotoLoaded) {
+                const err = data.error ?? `HTTP ${res.status}`;
                 noFoto++;
                 noFotoRows.push({
                   row: row.row,
                   brand: row.brandName || row.name.slice(0, 30),
-                  error: data.fotoError ?? "фото не вставлено"
+                  error: err
                 });
-                if (!sampleFotoError && data.fotoError) sampleFotoError = data.fotoError;
-                fail++;
+                if (!sampleFotoError) sampleFotoError = err;
                 return;
               }
               urls.set(row.row, data.url);
               ok++;
               if (data.layoutVersion) setLayoutVersion(data.layoutVersion);
-              if (data.layoutWarning) {
-                layoutWarnings.push({
-                  row: row.row,
-                  brand: row.brandName || row.name.slice(0, 30),
-                  warning: data.layoutWarning
-                });
-              }
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
-                if (data.visionError) {
-                  visionNote = `AI-подгонка: ${data.visionError}`;
-                } else if (data.visionUsed) {
-                  visionNote = `AI-подгонка к референсу: оценка ${data.visionScore ?? "?"}/10 — ${data.visionReasoning ?? ""}`;
-                } else if (!openaiKey.trim()) {
-                  visionNote =
-                    "AI-подгонка не запускалась: укажите OpenAI API key (шаг 1) для сравнения с референсом.";
-                }
+                visionNote =
+                  "Рендер: HTML в браузере (Inter + Libre Franklin, координаты Figma).";
               }
-            } catch {
+            } catch (e) {
               fail++;
+              const err = e instanceof Error ? e.message : "ошибка рендера";
+              noFoto++;
+              noFotoRows.push({
+                row: row.row,
+                brand: row.brandName || row.name.slice(0, 30),
+                error: err
+              });
+              if (!sampleFotoError) sampleFotoError = err;
             }
           })
         );
@@ -576,7 +555,7 @@ export function PodruzhkaOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan, previewUrl, openaiKey]);
+  }, [wb, sheetInfo, scan, previewUrl]);
 
   const renderReady = useMemo(() => {
     if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
@@ -926,7 +905,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (ожидается
-                      ref-v8-figma-fit — иначе Ctrl+F5).
+                      figma-cursor-v1 — иначе Ctrl+F5).
                     </>
                   ) : null}
                 </p>

@@ -1,17 +1,12 @@
 /**
- * ТЗ 3:4 — 1024×1365 px (Ozon). Эталон: reference-target.png (Carolina Herrera).
- *
- * replaceOnly: меняются только переменные (бренд, тип, аромат, ноты, ml, foto).
- * Шаблон template-base.png = референс без этих слоёв; цвета/декор/координаты — с эталона.
+ * ТЗ 3:4 — 1024×1365 px (Ozon). Координаты из Ozon Card для cursor.fig.
  */
+import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
+
 export const PODRUZHKA_REPLACE_ONLY = true;
-const SX = 1024 / 1000;
-const SY = 1365 / 1400;
-const s = (x: number) => Math.round(x * SX);
-const sy = (y: number) => Math.round(y * SY);
 
 export const PODRUZHKA_REFERENCE = {
-  size: { w: 1024, h: 1365 },
+  size: { w: F.frame.w, h: F.frame.h },
   colors: {
     bg: "#F5F5F5",
     loop: "#EFEFEF",
@@ -21,61 +16,66 @@ export const PODRUZHKA_REFERENCE = {
     separator: "#D9D9D9"
   },
   gaps: {
-    headerToBrandTop: sy(118),
-    afterBrand: sy(22),
-    afterProductType: sy(10),
-    afterModel: sy(10),
-    afterAccentToNotes: sy(14),
-    afterNotesToMl: sy(28)
+    headerToBrandTop: F.brand.y - 206,
+    afterBrand: F.productType.y - (F.brand.y + F.brand.h),
+    afterProductType: F.model.y - (F.productType.y + F.productType.h),
+    afterModel: F.notesPinkBar.y - (F.model.y + F.model.h),
+    afterAccentToNotes: F.notes[0]!.titleY - (F.notesPinkBar.y + F.notesPinkBar.h),
+    afterNotesToMl: F.mlPinkBar.y - (F.notes[2]!.descY + F.notes[2]!.descH)
   },
   blocks: {
-    header: { x: s(250), y: sy(35), w: s(500), h: sy(85) },
-    brand: { x: s(55), y: sy(272), w: s(480), h: sy(150) },
-    productType: { x: s(55), y: 0, w: s(350), h: sy(40) },
-    model: { x: s(55), y: 0, w: s(350), h: sy(80) },
-    notes: { x: s(55), y: sy(668), w: s(250), h: sy(320) },
-    volume: { x: s(55), y: sy(1195), w: s(180), h: sy(60) },
-    product: { x: s(340), y: sy(285), w: s(600), h: sy(800) }
+    header: { x: 268, y: 101, w: 467, h: 105 },
+    brand: { x: F.brand.x, y: F.brand.y, w: F.brand.w, h: F.brand.h },
+    productType: { x: F.productType.x, y: F.productType.y, w: F.productType.w, h: F.productType.h },
+    model: { x: F.model.x, y: F.model.y, w: F.model.w, h: F.model.h },
+    notes: {
+      x: F.textX,
+      y: F.notes[0]!.titleY,
+      w: F.model.w,
+      h: F.mlPinkBar.y - F.notes[0]!.titleY
+    },
+    volume: { x: F.ml.x, y: F.ml.y, w: F.ml.w, h: F.ml.h },
+    product: { x: F.product.x, y: F.product.y, w: F.product.w, h: F.product.h }
   },
   fonts: {
-    brand: { max: sy(76), min: sy(52), weight: 800, maxLines: 2 },
-    productType: { size: sy(22), weight: 400 },
-    model: { max: sy(58), min: sy(44), weight: 800, maxLines: 2, ratioOfBrand: 0.68 },
-    noteTitle: { max: sy(22), min: sy(18), weight: 700 },
-    noteDesc: { max: sy(16), min: sy(14), weight: 400 },
-    ml: { max: sy(32), min: sy(26), weight: 500, italic: true }
+    brand: { max: F.brand.fontSize, min: 52, weight: 800, maxLines: 2 },
+    productType: { size: F.productType.fontSize, weight: 400 },
+    model: { max: F.model.fontSize, min: 44, weight: 800, maxLines: 2, ratioOfBrand: 0.68 },
+    noteTitle: { max: F.fonts.noteTitle, min: 18, weight: 700 },
+    noteDesc: { max: F.fonts.noteDesc, min: 14, weight: 400 },
+    ml: { max: F.ml.fontSize, min: 26, weight: 500, italic: true }
   },
-  accentBar: { x: s(55), y: 0, w: s(50), h: sy(6) },
-  noteTitleDy: sy(22),
-  noteDescDy: sy(46),
-  noteBlockHeight: sy(92),
-  notesMinHeight: sy(280),
-  noteSpacingMin: sy(48),
-  noteSpacingMax: sy(60),
-  separatorWidth: s(200),
+  accentBar: { x: F.notesPinkBar.x, y: F.notesPinkBar.y, w: F.notesPinkBar.w, h: F.notesPinkBar.h },
+  mlAccentBar: { x: F.mlPinkBar.x, y: F.mlPinkBar.y, w: F.mlPinkBar.w, h: F.mlPinkBar.h },
+  noteTitleDy: 0,
+  noteDescDy: 0,
+  noteBlockHeight: F.notes[1]!.titleY - F.notes[0]!.titleY,
+  notesMinHeight: 280,
+  noteSpacingMin: 48,
+  noteSpacingMax: 60,
+  separatorWidth: F.separator.w,
   product: {
-    bottomAlignY: sy(1163),
-    heightRatioMin: 0.52,
-    heightRatioMax: 0.6,
+    bottomAlignY: F.product.y + F.product.h,
+    heightRatioMin: 0.45,
+    heightRatioMax: 0.65,
     heightRatioTarget: 0.58,
-    widthRatioMin: 0.52,
-    widthRatioTarget: 0.56,
-    narrowAspectBoost: 1.3,
+    widthRatioMin: 0.45,
+    widthRatioTarget: 0.52,
+    narrowAspectBoost: 1,
     alignRight: true
   },
   validation: {
-    productHeightRatioMin: 0.5,
-    productHeightRatioMax: 0.6,
-    productWidthRatioMin: 0.52,
-    productVsBrandAreaMultiplier: 2,
-    productVsTextAreaMultiplier: 1.3,
-    gapAboveVolumeMinPx: 18,
-    gapAboveVolumeMaxPx: 48,
-    referenceEmptyRightPx: sy(28),
-    referenceEmptyCenterPx: sy(42),
-    emptySpaceTolerance: 1.15,
-    contentRect: { x: s(55), y: sy(272), w: s(875), h: sy(900) },
-    /** В replaceOnly — одна посадка в рамку эталона, без автоподгонки композиции */
+    productHeightRatioMin: 0.4,
+    productHeightRatioMax: 0.65,
+    productWidthRatioMin: 0.4,
+    productVsBrandAreaMultiplier: 1.5,
+    productVsTextAreaMultiplier: 1.1,
+    gapAboveVolumeMinPx: 8,
+    gapAboveVolumeMaxPx: 80,
+    referenceEmptyRightPx: 20,
+    referenceEmptyCenterPx: 30,
+    emptySpaceTolerance: 1.25,
+    contentRect: { x: F.textX, y: F.brand.y, w: 960, h: F.ml.y + F.ml.h - F.brand.y },
     maxCorrectionPasses: 1
   }
 } as const;

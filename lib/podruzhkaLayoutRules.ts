@@ -25,6 +25,7 @@ export const LAYOUT_RULES = {
 } as const;
 
 export function assertLayoutRules(): void {
+  if (LAYOUT_RULES.replaceOnly) return;
   const gap = LAYOUT_RULES.blocks.volume.y - LAYOUT_RULES.productBottomY;
   if (gap < 18 || gap > 48) {
     throw new Error(`productBottomY: зазор до объёма ${gap}px вне 18–48`);
