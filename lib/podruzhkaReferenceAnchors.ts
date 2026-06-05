@@ -10,7 +10,7 @@ const SY = 1365 / 1400;
 const s = (x: number) => Math.round(x * SX);
 const sy = (y: number) => Math.round(y * SY);
 
-export const PODRUZHKA_LAYOUT_VERSION = "ref-v7-no-ellipsis";
+export const PODRUZHKA_LAYOUT_VERSION = "ref-v8-figma-fit";
 
 /** Позиции как на эталоне 1000×1400 (масштаб 1024×1365) */
 export const REFERENCE_TEXT_ANCHORS = {
@@ -27,9 +27,10 @@ export const REFERENCE_TEXT_ANCHORS = {
   /** Одна розовая черта только под нотами, перед ml */
   mlBarGapAfterNotes: sy(16),
   mlAccentY: B.volume.y - sy(8),
-  productBoxScale: 1.42,
-  productBoxMinHeightFill: 0.94,
-  productBoxMinWidthFill: 0.92,
+  /** Вписать foto в рамку Figma без перекрупнения */
+  productBoxScale: 1,
+  productBoxMinHeightFill: 0.72,
+  productBoxMinWidthFill: 0.68,
   textColumnErase: { x: 52, y: sy(115), w: 300, h: sy(1120) },
   /** Стереть «хвост» розовой черты под model с template-base */
   modelAccentErase: { x: 52, y: sy(498), w: 56, h: sy(14) },
@@ -52,25 +53,14 @@ export function eraseReferenceGhostMarks(
 
 export function getReferenceFixedTextLayout(
   brandSize: number,
-  modelSize: number,
-  modelLineCount: number,
+  _modelSize: number,
+  _modelLineCount: number,
   brandLineCount: number,
-  productTypeLineCount: number
+  _productTypeLineCount: number
 ): TextFlowLayout {
   const a = REFERENCE_TEXT_ANCHORS;
   const brandLastBaseline =
     a.brandFirstBaseline + Math.max(0, brandLineCount - 1) * a.brandLineStep;
-  const typeLineStep = sy(24);
-  const productTypeBaseline =
-    brandLineCount > 0
-      ? brandLastBaseline + sy(22) + Math.round(R.fonts.productType.size * 0.9)
-      : a.productTypeBaseline;
-  const typeBlockEnd =
-    productTypeBaseline + Math.max(0, productTypeLineCount - 1) * typeLineStep;
-  const modelFirstBaseline =
-    productTypeLineCount > 0
-      ? typeBlockEnd + sy(14) + Math.round(modelSize * 0.85)
-      : Math.max(a.modelFirstBaseline, brandLastBaseline + sy(56) + Math.round(modelSize * 0.85));
 
   const notesStartY = a.notesStartY;
   const notesBlockH = 3 * a.noteBlockHeight;
@@ -83,10 +73,9 @@ export function getReferenceFixedTextLayout(
     brandLineStep: a.brandLineStep,
     brandFirstBaseline: a.brandFirstBaseline,
     brandLastBaseline,
-    productTypeBaseline:
-      productTypeLineCount > 0 ? productTypeBaseline : a.productTypeBaseline,
+    productTypeBaseline: a.productTypeBaseline,
     modelLineStep: a.modelLineStep,
-    modelFirstBaseline,
+    modelFirstBaseline: a.modelFirstBaseline,
     accentY: 0,
     notesStartY,
     notesEndY,

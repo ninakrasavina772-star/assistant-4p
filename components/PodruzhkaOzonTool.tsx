@@ -926,7 +926,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (ожидается
-                      ref-v7-no-ellipsis — иначе Ctrl+F5).
+                      ref-v8-figma-fit — иначе Ctrl+F5).
                     </>
                   ) : null}
                 </p>

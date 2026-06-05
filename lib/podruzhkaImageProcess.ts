@@ -164,9 +164,12 @@ export async function fitProductPng(
     : (opts.narrowAspectBoost ?? R.product.narrowAspectBoost);
   const scaleMul = referenceBoxOnly ? 1 : (opts.scaleMultiplier ?? 1);
 
-  const stripped = await stripNearWhiteBackground(input);
-  const noShadow = await stripGrayFloorShadow(stripped);
-  const trimmed = await trimTransparentSafe(noShadow);
+  // replaceOnly: foto с Ozon как есть — вырезка белого/серого ломает коробки и наборы
+  const trimmed = referenceBoxOnly
+    ? input
+    : await trimTransparentSafe(
+        await stripGrayFloorShadow(await stripNearWhiteBackground(input))
+      );
   const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
