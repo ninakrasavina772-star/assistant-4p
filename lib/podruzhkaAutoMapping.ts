@@ -20,8 +20,11 @@ const TEMPLATE_HEADERS: Record<PodruzhkaFieldKey, string[]> = {
 
 const AI_TEMPLATE_HEADERS = [
   "note 1",
+  "note 1 (2)",
   "note 2",
+  "note 2 (1)",
   "note 3",
+  "note 3 (1)",
   "model",
   "foto 3"
 ] as const;

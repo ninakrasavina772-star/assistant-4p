@@ -4,6 +4,7 @@ import type { PodruzhkaFeedRow } from "@/lib/podruzhkaTypes";
 
 export const maxDuration = 60;
 
+/** Параллельно внутри запроса; укладываемся в maxDuration 60 с */
 const MAX_ROWS = 5;
 
 export async function POST(req: Request) {

@@ -43,7 +43,10 @@ import type ExcelJS from "exceljs";
 
 const SK_OPENAI = "fp_podruzhka_openai_key";
 const SK_OPENAI_REM = "fp_podruzhka_openai_remember";
-const NOTES_CHUNK = 3;
+/** Строк в одном запросе к API (параллельно на сервере) */
+const NOTES_CHUNK = 5;
+/** Сколько запросов к API одновременно с браузера */
+const NOTES_PARALLEL = 4;
 /** С Vision — по 1 карточке (дольше, но не упираемся в таймаут API) */
 const RENDER_CHUNK = 1;
 
@@ -209,7 +212,7 @@ export function PodruzhkaOzonTool() {
           fail: info.rows.length - ready,
           written: 0
         });
-        setStep(2);
+        setStep(1);
       } else {
         setNotesDone(false);
         setNotesStats(null);
@@ -312,45 +315,65 @@ export function PodruzhkaOzonTool() {
       }
       setNotesStats({ ok: ready, fail: 0, written: 0, typeMismatch: 0 });
       setNotesDone(true);
-      setStep(2);
+      setStep(1);
       setBusy(false);
       return;
     }
 
-    const results: PodruzhkaAiResult[] = [];
     let ok = 0;
     let fail = 0;
+    let writtenTotal = 0;
     let typeMismatchCount = 0;
+
+    const fetchNotesChunk = async (
+      chunk: (typeof pending)[number][]
+    ): Promise<PodruzhkaAiResult[]> => {
+      const res = await fetch("/api/podruzhka/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openaiApiKey: key, rows: chunk })
+      });
+      const data = (await res.json()) as {
+        results?: PodruzhkaAiResult[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      return data.results ?? [];
+    };
+
+    const applyChunkResults = (chunkResults: PodruzhkaAiResult[]) => {
+      const { written, typeMismatch } = applyAiResults(ws, sheetInfo, chunkResults);
+      writtenTotal += written;
+      typeMismatchCount += typeMismatch;
+      for (const r of chunkResults) {
+        if (r.ok) ok++;
+        else fail++;
+      }
+    };
 
     try {
       if (pending.length > 0) {
+        const chunks: (typeof pending)[] = [];
         for (let i = 0; i < pending.length; i += NOTES_CHUNK) {
-          const chunk = pending.slice(i, i + NOTES_CHUNK);
-          setProgress(`AI: model и ноты — ${i} / ${pending.length}…`);
+          chunks.push(pending.slice(i, i + NOTES_CHUNK));
+        }
 
-          const res = await fetch("/api/podruzhka/notes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ openaiApiKey: key, rows: chunk })
-          });
-          const data = (await res.json()) as {
-            results?: PodruzhkaAiResult[];
-            error?: string;
-          };
-          if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        let processed = 0;
+        for (let w = 0; w < chunks.length; w += NOTES_PARALLEL) {
+          const wave = chunks.slice(w, w + NOTES_PARALLEL);
+          setProgress(`AI: model и ноты — ${processed} / ${pending.length}…`);
 
-          for (const r of data.results ?? []) {
-            results.push(r);
-            if (r.ok) ok++;
-            else fail++;
+          const waveResults = await Promise.all(wave.map((chunk) => fetchNotesChunk(chunk)));
+          for (const chunkResults of waveResults) {
+            applyChunkResults(chunkResults);
+            processed += chunkResults.length;
           }
+          setProgress(`AI: model и ноты — ${processed} / ${pending.length}…`);
         }
       }
 
-      const { written, typeMismatch } = applyAiResults(ws, sheetInfo, results);
-      typeMismatchCount = typeMismatch;
       const readyAfter = countAiReadyRows(ws, sheetInfo);
-      if (readyAfter === 0) {
+      if (writtenTotal === 0 && readyAfter === 0) {
         setError(
           "AI не смог заполнить model и ноты. Проверьте ключ OpenAI и названия товаров в Excel."
         );
@@ -360,18 +383,33 @@ export function PodruzhkaOzonTool() {
       setNotesStats({
         ok: readyAfter,
         fail,
-        written,
+        written: writtenTotal,
         typeMismatch: typeMismatchCount
       });
       setNotesDone(true);
       setForceAiRegenerate(false);
+      setStep(1);
 
       const fresh = refreshWorkbookScan(wb, scan) ?? scan;
       setScan(fresh);
       syncSheetInfo(wb, fresh, mapping);
-      setStep(2);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка шага 1");
+      if (writtenTotal > 0) {
+        const readyPartial = countAiReadyRows(ws, sheetInfo);
+        setNotesStats({
+          ok: readyPartial,
+          fail,
+          written: writtenTotal,
+          typeMismatch: typeMismatchCount
+        });
+        setNotesDone(true);
+        setStep(1);
+        setError(
+          `${e instanceof Error ? e.message : "Ошибка шага 1"}. Уже записано строк: ${writtenTotal} — скачайте Excel и при необходимости запустите снова (без «перезаписать все»).`
+        );
+      } else {
+        setError(e instanceof Error ? e.message : "Ошибка шага 1");
+      }
     } finally {
       setBusy(false);
       setProgress(null);
@@ -644,6 +682,16 @@ export function PodruzhkaOzonTool() {
             <PodruzhkaDetectedLayout detection={detection} rowCount={sheetInfo.rows.length} />
           ) : null}
           {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
+          {wb && notesDone ? (
+            <button
+              type="button"
+              className={homeBtnPrimary}
+              disabled={busy}
+              onClick={() => void downloadWorkbook("notes")}
+            >
+              Скачать Excel (model, ноты, тип)
+            </button>
+          ) : null}
           {error ? (
             <p className="text-sm text-red-700" role="alert">
               {error}
@@ -686,16 +734,21 @@ export function PodruzhkaOzonTool() {
         </p>
       ) : null}
 
-      {mappingConfirmed && !notesDone && step === 1 ? (
+      {mappingConfirmed && step === 1 ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>Шаг 1 — model, ноты и тип (AI)</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-600">
-              AI заполняет <strong>model</strong>, <strong>note 1–3</strong> и проверяет тип для
-              карточки. <strong>product_type</strong> в фиде не меняется — при расхождении появится
-              колонка <strong>product type card</strong>. Формат нот: «ПРЯНЫЙ пикантный характер».
+              AI заполняет <strong>model</strong>, <strong>note 1–3</strong> (заголовок и описание в
+              отдельных столбцах) и проверяет тип для карточки. <strong>product_type</strong> в фиде
+              не меняется — при расхождении появится колонка <strong>product type card</strong>.
+              Ноты: <strong>note 1</strong> + <strong>note 1 (2)</strong>, и так для note 2–3.
+            </p>
+            <p className="text-xs text-slate-500">
+              Скорость: до {NOTES_CHUNK * NOTES_PARALLEL} ароматов параллельно — ~1900 позиций
+              обычно за 30–60 мин (вкладку не закрывать).
             </p>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input
@@ -721,14 +774,59 @@ export function PodruzhkaOzonTool() {
                 autoComplete="off"
               />
             </label>
-            <button
-              type="button"
-              className={homeBtnPrimary}
-              disabled={busy}
-              onClick={() => void runNotes()}
-            >
-              {busy ? "Идёт AI…" : "Сгенерировать model, ноты и проверить тип (AI)"}
-            </button>
+            {!notesDone ? (
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy}
+                onClick={() => void runNotes()}
+              >
+                {busy ? "Идёт AI…" : "Сгенерировать model, ноты и проверить тип (AI)"}
+              </button>
+            ) : notesStats && notesStats.fail > 0 ? (
+              <button
+                type="button"
+                className="rounded-lg border border-violet-700 bg-white px-4 py-2 text-sm font-semibold text-violet-900"
+                disabled={busy}
+                onClick={() => void runNotes()}
+              >
+                {busy ? "Идёт AI…" : `Дозаполнить оставшиеся (${notesStats.fail})`}
+              </button>
+            ) : null}
+
+            {notesDone && notesStats ? (
+              <StepDoneBanner title="Шаг 1 завершён — скачайте Excel">
+                <p className="text-sm text-emerald-800">
+                  Записано строк: {notesStats.written}. Готово к инфографике: {notesStats.ok}, без
+                  данных: {notesStats.fail}.
+                  {notesStats.typeMismatch != null && notesStats.typeMismatch > 0 ? (
+                    <>
+                      {" "}
+                      Тип на карточке отличается от product_type у {notesStats.typeMismatch} строк —
+                      см. колонку <strong>product type card</strong>.
+                    </>
+                  ) : null}{" "}
+                  Колонки: <strong>model</strong>, <strong>note 1–3</strong> и{" "}
+                  <strong>note 1 (2)</strong> / <strong>note 2 (1)</strong> /{" "}
+                  <strong>note 3 (1)</strong>, при необходимости <strong>product type card</strong>.
+                </p>
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={busy}
+                  onClick={() => void downloadWorkbook("notes")}
+                >
+                  Скачать Excel (model, ноты, тип)
+                </button>
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-900"
+                  onClick={() => setStep(2)}
+                >
+                  Проверила файл — к инфографике →
+                </button>
+              </StepDoneBanner>
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -757,23 +855,6 @@ export function PodruzhkaOzonTool() {
           ) : null}
         </section>
       )}
-
-      {notesDone && notesStats && step === 1 ? (
-        <StepDoneBanner title="Шаг 1 завершён">
-          <p className="text-sm text-emerald-800">
-            Записано строк: {notesStats.written}. Готово к инфографике: {notesStats.ok}, без данных:{" "}
-            {notesStats.fail}.
-            {notesStats.typeMismatch != null && notesStats.typeMismatch > 0 ? (
-              <>
-                {" "}
-                Тип на карточке отличается от product_type у {notesStats.typeMismatch} строк — см.
-                колонку <strong>product type card</strong>.
-              </>
-            ) : null}{" "}
-            Колонки: model, note 1–3, product type card (если нужно).
-          </p>
-        </StepDoneBanner>
-      ) : null}
 
       {step2Ready && step === 2 ? (
         <section className={homeCard}>

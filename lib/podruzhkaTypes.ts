@@ -81,8 +81,14 @@ export const PODRUZHKA_AI_COLUMN_DEFS: PodruzhkaAiColumnDef[] = [
   },
   {
     key: "note1_desc",
-    header: "note 1 desc",
-    aliases: ["note 1 desc", "note1_desc", "note 1 описание", "нота 1 описание"],
+    header: "note 1 (2)",
+    aliases: [
+      "note 1 (2)",
+      "note 1 desc",
+      "note1_desc",
+      "note 1 описание",
+      "нота 1 описание"
+    ],
     optional: true
   },
   {
@@ -92,8 +98,14 @@ export const PODRUZHKA_AI_COLUMN_DEFS: PodruzhkaAiColumnDef[] = [
   },
   {
     key: "note2_desc",
-    header: "note 2 desc",
-    aliases: ["note 2 desc", "note2_desc", "note 2 описание", "нота 2 описание"],
+    header: "note 2 (1)",
+    aliases: [
+      "note 2 (1)",
+      "note 2 desc",
+      "note2_desc",
+      "note 2 описание",
+      "нота 2 описание"
+    ],
     optional: true
   },
   {
@@ -103,8 +115,14 @@ export const PODRUZHKA_AI_COLUMN_DEFS: PodruzhkaAiColumnDef[] = [
   },
   {
     key: "note3_desc",
-    header: "note 3 desc",
-    aliases: ["note 3 desc", "note3_desc", "note 3 описание", "нота 3 описание"],
+    header: "note 3 (1)",
+    aliases: [
+      "note 3 (1)",
+      "note 3 desc",
+      "note3_desc",
+      "note 3 описание",
+      "нота 3 описание"
+    ],
     optional: true
   },
   {
