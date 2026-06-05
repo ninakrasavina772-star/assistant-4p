@@ -12,6 +12,7 @@ import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import {
   clampProductDrawPlacement,
+  computeProductDrawY,
   PODRUZHKA_PRODUCT_VISUAL,
   PODRUZHKA_TEXT_COLUMN_RIGHT,
   productVisualHeight
@@ -156,20 +157,6 @@ function scorePlacement(
   return score;
 }
 
-function computeDrawY(fit: FitResult, verticalAlign: VerticalAlign): number {
-  const z = PODRUZHKA_PRODUCT_VISUAL;
-  const zoneH = productVisualHeight();
-  const inset = fit.bottomAlphaInset ?? 0;
-
-  if (verticalAlign === "lower-third") {
-    const slack = zoneH - fit.height + inset;
-    if (slack <= 0) return Math.max(z.y, z.bottom - fit.height + inset);
-    return z.y + slack * 0.22;
-  }
-
-  return Math.max(z.y, z.bottom - fit.height + inset);
-}
-
 async function tryStrategy(
   prepared: PreparedProductImage,
   strategy: FitStrategy,
@@ -191,7 +178,7 @@ async function tryStrategy(
   });
 
   const rawX = PODRUZHKA_PRODUCT_VISUAL.x + zoneW - fit.width;
-  const rawY = computeDrawY(fit, strategy.verticalAlign);
+  const rawY = computeProductDrawY(fit, strategy.verticalAlign);
   const { drawX, drawY } = clampProductDrawPlacement(fit, rawX, rawY);
 
   if (!isValidPlacement(drawX, drawY, fit)) return null;

@@ -519,7 +519,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: Canvas 2D + foto enhance (fringe/sharpen), html-figma-v9.";
+                  "Рендер: Canvas 2D + foto lift from bottom, html-figma-v10.";
               }
             } catch (e) {
               fail++;
@@ -906,7 +906,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v9).
+                      html-figma-v10).
                     </>
                   ) : null}
                 </p>

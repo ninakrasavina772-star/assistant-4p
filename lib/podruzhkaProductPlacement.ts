@@ -15,6 +15,9 @@ export const PODRUZHKA_PRODUCT_VISUAL = {
 /** Левая граница — не заезжать на текст/разделители (x=433). */
 export const PODRUZHKA_TEXT_COLUMN_RIGHT = F.product.x;
 
+/** Зазор от низа зоны — товар не «висит» на краю карточки (≈ Figma). */
+export const PRODUCT_BOTTOM_LIFT = 32;
+
 export function productVisualHeight(): number {
   return PODRUZHKA_PRODUCT_VISUAL.bottom - PODRUZHKA_PRODUCT_VISUAL.y;
 }
@@ -47,10 +50,28 @@ export function clampProductDrawPlacement(
   let x = Math.max(PODRUZHKA_TEXT_COLUMN_RIGHT, drawX);
   x = Math.min(x, z.x + z.w - width);
   let y = Math.max(z.y, drawY);
-  y = Math.min(y, z.bottom - height + inset);
+  y = Math.min(y, z.bottom - height + inset - PRODUCT_BOTTOM_LIFT);
   y = Math.max(z.y, Math.min(y, F.frame.h - height));
 
   return { drawX: x, drawY: y, zoneW: z.w, zoneH };
+}
+
+export function computeProductDrawY(
+  fit: { width: number; height: number; bottomAlphaInset?: number },
+  verticalAlign: "bottom" | "lower-third" = "bottom"
+): number {
+  const z = PODRUZHKA_PRODUCT_VISUAL;
+  const zoneH = productVisualHeight();
+  const inset = fit.bottomAlphaInset ?? 0;
+  const floorY = z.bottom - fit.height + inset - PRODUCT_BOTTOM_LIFT;
+
+  if (verticalAlign === "lower-third") {
+    const slack = zoneH - fit.height + inset - PRODUCT_BOTTOM_LIFT;
+    if (slack <= 0) return Math.max(z.y, floorY);
+    return z.y + slack * 0.22;
+  }
+
+  return Math.max(z.y, floorY);
 }
 
 export function computeProductDrawPlacement(fit: {
@@ -61,7 +82,7 @@ export function computeProductDrawPlacement(fit: {
   const z = PODRUZHKA_PRODUCT_VISUAL;
   const inset = fit.bottomAlphaInset ?? 0;
   const drawX = z.x + z.w - fit.width;
-  const drawY = Math.max(z.y, z.bottom - fit.height + inset);
+  const drawY = computeProductDrawY(fit, "bottom");
   return clampProductDrawPlacement(fit, drawX, drawY);
 }
 
