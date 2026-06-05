@@ -267,6 +267,89 @@ async function resizeProductForCard(
   return pipeline.png({ compressionLevel: 6 }).toBuffer();
 }
 
+/**
+ * Склеивает коробку и флакон, если между ними «провал» прозрачности (Dior Homme и т.п.).
+ */
+export async function collapseInternalHorizontalGaps(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const colHasPixel = (x: number): boolean => {
+    for (let y = 0; y < h; y++) {
+      if (data[(y * w + x) * 4 + 3]! >= 14) return true;
+    }
+    return false;
+  };
+
+  let first = 0;
+  let last = w - 1;
+  while (first < w && !colHasPixel(first)) first++;
+  while (last > first && !colHasPixel(last)) last--;
+  if (last - first < 40) return input;
+
+  let bestGapStart = -1;
+  let bestGapLen = 0;
+  let gapStart = -1;
+  for (let x = first + 8; x < last; x++) {
+    if (!colHasPixel(x)) {
+      if (gapStart < 0) gapStart = x;
+    } else if (gapStart >= 0) {
+      const len = x - gapStart;
+      if (len > bestGapLen) {
+        bestGapLen = len;
+        bestGapStart = gapStart;
+      }
+      gapStart = -1;
+    }
+  }
+  if (gapStart >= 0) {
+    const len = last + 1 - gapStart;
+    if (len > bestGapLen) {
+      bestGapLen = len;
+      bestGapStart = gapStart;
+    }
+  }
+
+  if (bestGapLen < 14 || bestGapLen > 200 || bestGapStart < 0) return input;
+
+  const gapEnd = bestGapStart + bestGapLen;
+  const leftW = bestGapStart - first;
+  const rightW = last + 1 - gapEnd;
+  if (leftW < 24 || rightW < 24) return input;
+
+  const pad = 8;
+  const newW = leftW + pad + rightW;
+  const leftBuf = await sharp(input)
+    .extract({ left: first, top: 0, width: leftW, height: h })
+    .png()
+    .toBuffer();
+  const rightBuf = await sharp(input)
+    .extract({ left: gapEnd, top: 0, width: rightW, height: h })
+    .png()
+    .toBuffer();
+
+  return sharp({
+    create: {
+      width: newW,
+      height: h,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    }
+  })
+    .composite([
+      { input: leftBuf, left: 0, top: 0 },
+      { input: rightBuf, left: leftW + pad, top: 0 }
+    ])
+    .png()
+    .toBuffer();
+}
+
 /** Предобработка PNG перед fit. */
 export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
   const edgeStripped = await stripEdgeNearWhiteBackground(input, 248);
@@ -280,6 +363,7 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
     buf = await stripGrayFloorShadow(buf);
   }
   buf = await cleanProductAlphaFringe(buf);
+  buf = await collapseInternalHorizontalGaps(buf);
   buf = await trimTransparentSafe(buf);
   return cropToVisibleProduct(buf);
 }

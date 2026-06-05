@@ -66,6 +66,17 @@ function buildStrategies(prepared: PreparedProductImage): FitStrategy[] {
     }
   ];
 
+  if (isWide) {
+    strategies.push({
+      id: "wide-set-compact",
+      scaleMultiplier: 1.05,
+      referenceBoxMinHeightFill: 0.8,
+      referenceBoxMinWidthFill: 0.98,
+      referenceBoxMinCardHeightFill: 0,
+      verticalAlign: "lower-third"
+    });
+  }
+
   if (aspect <= 0.75) {
     strategies.push({
       id: "tall-bottle",
@@ -142,6 +153,7 @@ function scorePlacement(
 
   if (isWide) {
     if (zoneFillW < 0.88) score -= (0.88 - zoneFillW) * 250;
+    if (zoneFillH < 0.38) score -= (0.38 - zoneFillH) * 320;
     score += Math.min(zoneFillW, 0.98) * 55;
   } else {
     if (zoneFillH < 0.7) score -= (0.7 - zoneFillH) * 200;
@@ -189,33 +201,40 @@ async function tryStrategy(
 
   const rawX = PODRUZHKA_PRODUCT_VISUAL.x + zoneW - fit.width;
   const baseLift = computeAdaptiveBottomLift(fit, prepared);
+  const zoneFillH = fit.height / zoneH;
+  const alignments: VerticalAlign[] =
+    prepared.aspect >= WIDE_ASPECT && zoneFillH < 0.48
+      ? ["bottom", "lower-third"]
+      : [strategy.verticalAlign];
   let bestLocal: AdaptiveProductResult | null = null;
 
-  for (const lift of liftCandidates(baseLift)) {
-    const rawY = computeProductDrawY(fit, strategy.verticalAlign, lift);
-    const { drawX, drawY } = clampProductDrawPlacement(fit, rawX, rawY, lift);
-    if (!isValidPlacement(drawX, drawY, fit)) continue;
+  for (const align of alignments) {
+    for (const lift of liftCandidates(baseLift)) {
+      const rawY = computeProductDrawY(fit, align, lift);
+      const { drawX, drawY } = clampProductDrawPlacement(fit, rawX, rawY, lift);
+      if (!isValidPlacement(drawX, drawY, fit)) continue;
 
-    const visualScore = scorePlacement(
-      fit,
-      drawX,
-      drawY,
-      cardW,
-      cardH,
-      zoneW,
-      zoneH,
-      prepared.aspect
-    );
+      const visualScore = scorePlacement(
+        fit,
+        drawX,
+        drawY,
+        cardW,
+        cardH,
+        zoneW,
+        zoneH,
+        prepared.aspect
+      );
 
-    const candidate: AdaptiveProductResult = {
-      fit,
-      drawX,
-      drawY,
-      strategyId: `${strategy.id}+lift${lift}`,
-      visualScore
-    };
-    if (!bestLocal || visualScore > bestLocal.visualScore) {
-      bestLocal = candidate;
+      const candidate: AdaptiveProductResult = {
+        fit,
+        drawX,
+        drawY,
+        strategyId: `${strategy.id}+${align}+lift${lift}`,
+        visualScore
+      };
+      if (!bestLocal || visualScore > bestLocal.visualScore) {
+        bestLocal = candidate;
+      }
     }
   }
 

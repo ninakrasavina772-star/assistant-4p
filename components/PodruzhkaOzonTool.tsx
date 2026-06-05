@@ -519,7 +519,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: Canvas 2D + adaptive bottom lift, html-figma-v11.";
+                  "Рендер: Canvas 2D + wide-set gap merge, html-figma-v12.";
               }
             } catch (e) {
               fail++;
@@ -906,7 +906,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v11).
+                      html-figma-v12).
                     </>
                   ) : null}
                 </p>
