@@ -342,6 +342,29 @@ export function getRowRenderEligibility(
   return { ok, model: ai.model, notes: ai.notes, status: ai.status, reasons };
 }
 
+/** Почему строку нельзя отправить в AI (пустой brand и т.п.) */
+export function getFeedRowAiSkipReason(row: PodruzhkaFeedRow): string | null {
+  if (typeof row.row !== "number" || row.row < 1) return "Некорректный номер строки Excel";
+  if (!row.brandName.trim()) return "Нет brand name — заполните в Excel";
+  return null;
+}
+
+export function makeFeedRowAiErrorResult(
+  row: PodruzhkaFeedRow,
+  error: string
+): PodruzhkaAiResult {
+  return {
+    row: row.row,
+    ok: false,
+    model: "",
+    notes: [],
+    productTypeCard: "",
+    productTypeMismatch: false,
+    sources: [],
+    error
+  };
+}
+
 /** Нужен ли запуск AI: нет model или неполные ноты, либо force */
 export function rowNeedsAiGeneration(
   ws: ExcelJS.Worksheet,

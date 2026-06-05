@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { fetchNotesForRows, type NotesBatchIn } from "@/lib/podruzhkaAi";
+import {
+  getFeedRowAiSkipReason,
+  makeFeedRowAiErrorResult
+} from "@/lib/podruzhkaExcel";
 import type { PodruzhkaFeedRow } from "@/lib/podruzhkaTypes";
 
 export const maxDuration = 60;
@@ -23,21 +27,34 @@ export async function POST(req: Request) {
     );
   }
 
+  const skipped: PodruzhkaFeedRow[] = [];
+  const valid: PodruzhkaFeedRow[] = [];
+
   for (const r of rows) {
-    if (typeof r.row !== "number" || !r.brandName) {
-      return NextResponse.json({ error: "Некорректная строка фида" }, { status: 400 });
-    }
+    const feedRow = r as PodruzhkaFeedRow;
+    const skipReason = getFeedRowAiSkipReason(feedRow);
+    if (skipReason) skipped.push(feedRow);
+    else valid.push(feedRow);
   }
 
+  const skippedResults = skipped.map((row) =>
+    makeFeedRowAiErrorResult(row, getFeedRowAiSkipReason(row) ?? "Некорректная строка фида")
+  );
+
   try {
-    const results = await fetchNotesForRows({
-      openaiApiKey: body.openaiApiKey ?? "",
-      rows: rows as PodruzhkaFeedRow[],
-      model: body.model
-    });
-    return NextResponse.json({ results });
+    const aiResults =
+      valid.length > 0
+        ? await fetchNotesForRows({
+            openaiApiKey: body.openaiApiKey ?? "",
+            rows: valid,
+            model: body.model
+          })
+        : [];
+
+    return NextResponse.json({ results: [...skippedResults, ...aiResults] });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    const fallback = valid.map((row) => makeFeedRowAiErrorResult(row, msg));
+    return NextResponse.json({ results: [...skippedResults, ...fallback] });
   }
 }

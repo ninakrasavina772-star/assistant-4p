@@ -22,6 +22,8 @@ import {
   defaultPodruzhkaDownloadName,
   ensureAiColumns,
   getRowRenderEligibility,
+  getFeedRowAiSkipReason,
+  makeFeedRowAiErrorResult,
   listAiColumnsOnSheet,
   mappingIsComplete,
   readAiFromSheet,
@@ -93,6 +95,7 @@ export function PodruzhkaOzonTool() {
     fail: number;
     written: number;
     typeMismatch?: number;
+    feedSkipped?: number;
   } | null>(null);
   const [infographicDone, setInfographicDone] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState<string | null>(null);
@@ -324,21 +327,30 @@ export function PodruzhkaOzonTool() {
     let fail = 0;
     let writtenTotal = 0;
     let typeMismatchCount = 0;
+    let feedSkipped = 0;
 
     const fetchNotesChunk = async (
       chunk: (typeof pending)[number][]
     ): Promise<PodruzhkaAiResult[]> => {
-      const res = await fetch("/api/podruzhka/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ openaiApiKey: key, rows: chunk })
-      });
-      const data = (await res.json()) as {
-        results?: PodruzhkaAiResult[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      return data.results ?? [];
+      try {
+        const res = await fetch("/api/podruzhka/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ openaiApiKey: key, rows: chunk })
+        });
+        const data = (await res.json()) as {
+          results?: PodruzhkaAiResult[];
+          error?: string;
+        };
+        if (!res.ok || !data.results?.length) {
+          const msg = data.error ?? `HTTP ${res.status}`;
+          return chunk.map((row) => makeFeedRowAiErrorResult(row, msg));
+        }
+        return data.results;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Сбой сети";
+        return chunk.map((row) => makeFeedRowAiErrorResult(row, msg));
+      }
     };
 
     const applyChunkResults = (chunkResults: PodruzhkaAiResult[]) => {
@@ -351,24 +363,46 @@ export function PodruzhkaOzonTool() {
       }
     };
 
+    const feedSkipResults: PodruzhkaAiResult[] = [];
+    const toProcess = pending.filter((row) => {
+      const reason = getFeedRowAiSkipReason(row);
+      if (reason) {
+        feedSkipResults.push(makeFeedRowAiErrorResult(row, reason));
+        return false;
+      }
+      return true;
+    });
+
+    if (feedSkipResults.length > 0) {
+      applyChunkResults(feedSkipResults);
+      feedSkipped = feedSkipResults.length;
+    }
+
     try {
-      if (pending.length > 0) {
-        const chunks: (typeof pending)[] = [];
-        for (let i = 0; i < pending.length; i += NOTES_CHUNK) {
-          chunks.push(pending.slice(i, i + NOTES_CHUNK));
+      if (toProcess.length > 0) {
+        const chunks: (typeof toProcess)[] = [];
+        for (let i = 0; i < toProcess.length; i += NOTES_CHUNK) {
+          chunks.push(toProcess.slice(i, i + NOTES_CHUNK));
         }
 
         let processed = 0;
+        const total = toProcess.length;
         for (let w = 0; w < chunks.length; w += NOTES_PARALLEL) {
           const wave = chunks.slice(w, w + NOTES_PARALLEL);
-          setProgress(`AI: model и ноты — ${processed} / ${pending.length}…`);
+          setProgress(
+            `AI: model и ноты — ${processed} / ${total}…` +
+              (feedSkipped > 0 ? ` (пропущено фид: ${feedSkipped})` : "")
+          );
 
           const waveResults = await Promise.all(wave.map((chunk) => fetchNotesChunk(chunk)));
           for (const chunkResults of waveResults) {
             applyChunkResults(chunkResults);
             processed += chunkResults.length;
           }
-          setProgress(`AI: model и ноты — ${processed} / ${pending.length}…`);
+          setProgress(
+            `AI: model и ноты — ${processed} / ${total}…` +
+              (feedSkipped > 0 ? ` (пропущено фид: ${feedSkipped})` : "")
+          );
         }
       }
 
@@ -384,7 +418,8 @@ export function PodruzhkaOzonTool() {
         ok: readyAfter,
         fail,
         written: writtenTotal,
-        typeMismatch: typeMismatchCount
+        typeMismatch: typeMismatchCount,
+        feedSkipped: feedSkipped > 0 ? feedSkipped : undefined
       });
       setNotesDone(true);
       setForceAiRegenerate(false);
@@ -393,19 +428,26 @@ export function PodruzhkaOzonTool() {
       const fresh = refreshWorkbookScan(wb, scan) ?? scan;
       setScan(fresh);
       syncSheetInfo(wb, fresh, mapping);
+
+      if (fail > 0 || feedSkipped > 0) {
+        setError(
+          `Обработка завершена. Ошибок: ${fail}${feedSkipped > 0 ? `, пропущено из‑за фида: ${feedSkipped}` : ""}. Комментарии — в колонке «статус нот». Скачайте Excel и при необходимости дозапустите без «перезаписать все».`
+        );
+      }
     } catch (e) {
-      if (writtenTotal > 0) {
-        const readyPartial = countAiReadyRows(ws, sheetInfo);
+      const readyPartial = countAiReadyRows(ws, sheetInfo);
+      if (writtenTotal > 0 || readyPartial > 0) {
         setNotesStats({
           ok: readyPartial,
           fail,
           written: writtenTotal,
-          typeMismatch: typeMismatchCount
+          typeMismatch: typeMismatchCount,
+          feedSkipped: feedSkipped > 0 ? feedSkipped : undefined
         });
         setNotesDone(true);
         setStep(1);
         setError(
-          `${e instanceof Error ? e.message : "Ошибка шага 1"}. Уже записано строк: ${writtenTotal} — скачайте Excel и при необходимости запустите снова (без «перезаписать все»).`
+          `${e instanceof Error ? e.message : "Ошибка шага 1"}. Уже записано строк: ${writtenTotal}. Комментарии — в «статус нот». Запустите снова без «перезаписать все».`
         );
       } else {
         setError(e instanceof Error ? e.message : "Ошибка шага 1");
@@ -819,6 +861,12 @@ export function PodruzhkaOzonTool() {
                 <p className="text-sm text-emerald-800">
                   Записано строк: {notesStats.written}. Готово к инфографике: {notesStats.ok}, без
                   данных: {notesStats.fail}.
+                  {notesStats.feedSkipped != null && notesStats.feedSkipped > 0 ? (
+                    <>
+                      {" "}
+                      Пропущено из‑за фида (нет brand name и т.п.): {notesStats.feedSkipped}.
+                    </>
+                  ) : null}
                   {notesStats.typeMismatch != null && notesStats.typeMismatch > 0 ? (
                     <>
                       {" "}
@@ -826,7 +874,8 @@ export function PodruzhkaOzonTool() {
                       см. колонку <strong>product type card</strong>.
                     </>
                   ) : null}{" "}
-                  Колонки: <strong>model</strong>, <strong>note 1–3</strong> и{" "}
+                  Ошибки AI — в колонке <strong>статус нот</strong>. Колонки:{" "}
+                  <strong>model</strong>, <strong>note 1–3</strong> и{" "}
                   <strong>note 1 (2)</strong> / <strong>note 2 (1)</strong> /{" "}
                   <strong>note 3 (1)</strong>, при необходимости <strong>product type card</strong>.
                 </p>
