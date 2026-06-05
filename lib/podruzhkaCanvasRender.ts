@@ -57,22 +57,6 @@ function brandFont(size: number): string {
   return `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
 }
 
-function truncateLine(
-  ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
-  text: string,
-  maxWidth: number,
-  font: string
-): string {
-  ctx.font = font;
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  const ell = "…";
-  let t = text;
-  while (t.length > 1 && ctx.measureText(t + ell).width > maxWidth) {
-    t = t.slice(0, -1);
-  }
-  return t + ell;
-}
-
 function wrapLines(
   ctx: ReturnType<ReturnType<typeof createCanvas>["getContext"]>,
   text: string,
@@ -108,12 +92,20 @@ function resolveBrandFontSize(
   const maxLines = S.fonts.brand.maxLines;
 
   if (LAYOUT_RULES.replaceOnly) {
-    const size = S.fonts.brand.max + fontDelta;
-    const font = brandFont(size);
-    const lines = wrapLines(ctx, brandName.toUpperCase(), maxW, font, maxLines).map(
-      (ln) => truncateLine(ctx, ln, maxW, font)
-    );
-    return { size, lines };
+    const text = brandName.toUpperCase();
+    const cap = Math.max(S.fonts.brand.min, S.fonts.brand.max + fontDelta);
+    for (let size = cap; size >= S.fonts.brand.min; size -= 2) {
+      const font = brandFont(size);
+      const lines = wrapLines(ctx, text, maxW, font, maxLines);
+      if (maxLineWidth(ctx, lines, font) <= maxW) {
+        return { size, lines };
+      }
+    }
+    const size = S.fonts.brand.min;
+    return {
+      size,
+      lines: wrapLines(ctx, text, maxW, brandFont(size), maxLines)
+    };
   }
 
   const maxH = L.brand.h;
@@ -148,12 +140,24 @@ function resolveModelFontSize(
   const maxLines = S.fonts.model.maxLines;
 
   if (LAYOUT_RULES.replaceOnly) {
-    const size = S.fonts.model.max;
-    const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
-    const lines = wrapLines(ctx, model, maxW, font, maxLines).map((ln) =>
-      truncateLine(ctx, ln, maxW, font)
-    );
-    return { size, lines };
+    for (let size = S.fonts.model.max; size >= S.fonts.model.min; size -= 2) {
+      const font = `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`;
+      const lines = wrapLines(ctx, model, maxW, font, maxLines);
+      if (maxLineWidth(ctx, lines, font) <= maxW) {
+        return { size, lines };
+      }
+    }
+    const size = S.fonts.model.min;
+    return {
+      size,
+      lines: wrapLines(
+        ctx,
+        model,
+        maxW,
+        `800 ${size}px MontserratExtraBold, MontserratBold, sans-serif`,
+        maxLines
+      )
+    };
   }
 
   const maxH = L.model.h;

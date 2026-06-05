@@ -10,7 +10,7 @@ const SY = 1365 / 1400;
 const s = (x: number) => Math.round(x * SX);
 const sy = (y: number) => Math.round(y * SY);
 
-export const PODRUZHKA_LAYOUT_VERSION = "ref-v6-clean-bg";
+export const PODRUZHKA_LAYOUT_VERSION = "ref-v7-no-ellipsis";
 
 /** Позиции как на эталоне 1000×1400 (масштаб 1024×1365) */
 export const REFERENCE_TEXT_ANCHORS = {
