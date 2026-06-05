@@ -27,7 +27,12 @@ const tools: {
   },
   { href: "/size-table", title: "Создать размерную таблицу", emoji: "📏" },
   { href: "/prices-stock", title: "Выгрузка цен и остатков", emoji: "💹" },
-  { href: "/ozon-images", title: "Инфографика для ЛК Подружка · Ozon", emoji: "🖼️" }
+  { href: "/ozon-images", title: "Инфографика для ЛК Подружка · Ozon", emoji: "🖼️" },
+  {
+    href: "/ozon-cosmetics",
+    title: "Инфографика для ЛК Подружка · Ozon косметика",
+    emoji: "💄"
+  }
 ];
 
 export default function AssistantHome() {
