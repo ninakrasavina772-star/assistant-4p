@@ -1,5 +1,10 @@
 import sharp from "sharp";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
+import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
+
+/** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
+const COSMETICS_SOURCE_MIN_LONG_EDGE = 1400;
+const COSMETICS_UPSCALE_SHARPEN = { sigma: 0.55, m1: 0.55, m2: 0.22 } as const;
 
 /**
  * Убирает только белый фон, связанный с краями кадра (типичный JPEG с Ozon).
@@ -263,14 +268,23 @@ async function resizeProductForCard(
   width: number,
   height: number,
   srcW: number,
-  srcH: number
+  srcH: number,
+  profile: PodruzhkaRenderProfile = "perfume"
 ): Promise<Buffer> {
   const scaleUp = width > srcW || height > srcH;
   let pipeline = sharp(trimmed).resize(width, height, {
     fit: "inside",
     kernel: sharp.kernel.lanczos3
   });
-  pipeline = pipeline.sharpen({ sigma: scaleUp ? 0.55 : 0.35, m1: 0.45, m2: 0.2 });
+  const sharpen =
+    profile === "cosmetics"
+      ? scaleUp
+        ? { sigma: 0.65, m1: 0.5, m2: 0.2 }
+        : { sigma: 0.4, m1: 0.45, m2: 0.18 }
+      : scaleUp
+        ? { sigma: 0.55, m1: 0.45, m2: 0.2 }
+        : { sigma: 0.35, m1: 0.45, m2: 0.2 };
+  pipeline = pipeline.sharpen(sharpen);
   return pipeline.png({ compressionLevel: 6 }).toBuffer();
 }
 
@@ -357,7 +371,92 @@ export async function collapseInternalHorizontalGaps(input: Buffer): Promise<Buf
     .toBuffer();
 }
 
-/** Предобработка PNG перед fit. */
+/** Апскейл маленьких JPEG с Ozon до cut-out — меньше «лесенки» на светлых флаконах. */
+export async function enhanceSourceForProcessing(
+  input: Buffer,
+  minLongEdge = COSMETICS_SOURCE_MIN_LONG_EDGE
+): Promise<Buffer> {
+  const meta = await sharp(input).metadata();
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (!w || !h) return input;
+
+  const long = Math.max(w, h);
+  let pipeline = sharp(input);
+
+  if (long < minLongEdge) {
+    const scale = minLongEdge / long;
+    pipeline = pipeline.resize(Math.round(w * scale), Math.round(h * scale), {
+      fit: "fill",
+      kernel: sharp.kernel.lanczos3
+    });
+  }
+
+  return pipeline.sharpen(COSMETICS_UPSCALE_SHARPEN).png({ compressionLevel: 6 }).toBuffer();
+}
+
+/** Снять 1–2 px белого/бежевого ореола по контуру (Sisley, светлая упаковка на белом). */
+export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const src = Buffer.from(data);
+  const out = Buffer.from(data);
+
+  const alphaAt = (x: number, y: number) => src[(y * w + x) * 4 + 3]!;
+  const isOpaque = (x: number, y: number) => alphaAt(x, y) >= 20;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = src[i + 3]!;
+      if (a < 20) continue;
+
+      let touchesTransparent = false;
+      for (let dy = -1; dy <= 1 && !touchesTransparent; dy++) {
+        for (let dx = -1; dx <= 1 && !touchesTransparent; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
+            touchesTransparent = true;
+            continue;
+          }
+          if (!isOpaque(nx, ny)) touchesTransparent = true;
+        }
+      }
+      if (!touchesTransparent) continue;
+
+      const r = src[i]!;
+      const g = src[i + 1]!;
+      const b = src[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+
+      if (a < 255 && avg >= 150 && spread <= 42) {
+        out[i + 3] = 0;
+        continue;
+      }
+      if (a >= 200 && avg >= 178 && spread <= 38) {
+        out[i + 3] = 0;
+      }
+    }
+  }
+
+  return sharp(out, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Предобработка PNG перед fit (парфюм). */
 export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
   const edgeStripped = await stripEdgeNearWhiteBackground(input, 248);
 
@@ -365,6 +464,20 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
   buf = await stripGrayFloorShadow(buf);
   buf = await cleanProductAlphaFringe(buf);
   buf = await collapseInternalHorizontalGaps(buf);
+  buf = await trimTransparentSafe(buf);
+  return cropToVisibleProduct(buf);
+}
+
+/**
+ * Косметика на белом (Ozon): апскейл → мягче cut-out → defringe.
+ * Светлые флаконы/тубы не «съедаются» порогом 248.
+ */
+export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
+  let buf = await enhanceSourceForProcessing(input);
+  buf = await stripEdgeNearWhiteBackground(buf, 252);
+  buf = await stripGrayFloorShadow(buf);
+  buf = await cleanProductAlphaFringe(buf);
+  buf = await defringeLightProductHalo(buf);
   buf = await trimTransparentSafe(buf);
   return cropToVisibleProduct(buf);
 }
@@ -392,6 +505,7 @@ export type FitProductOptions = {
   preparedInput?: Buffer;
   /** contain — вписать; cover-height — заполнить высоту зоны, обрезать по бокам */
   fitMode?: "contain" | "cover-height";
+  renderProfile?: PodruzhkaRenderProfile;
 };
 
 export type PreparedProductImage = {
@@ -437,8 +551,14 @@ export async function measureVerticalPadding(
 }
 
 /** Единая предобработка foto с Ozon перед fit/подбором. */
-export async function prepareProductImage(input: Buffer): Promise<PreparedProductImage> {
-  const buffer = await preprocessProductBuffer(input);
+export async function prepareProductImage(
+  input: Buffer,
+  profile: PodruzhkaRenderProfile = "perfume"
+): Promise<PreparedProductImage> {
+  const buffer =
+    profile === "cosmetics"
+      ? await preprocessCosmeticsProductBuffer(input)
+      : await preprocessProductBuffer(input);
   const meta = await sharp(buffer).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
@@ -510,6 +630,7 @@ export async function fitProductPng(
     ? (opts.scaleMultiplier ?? 1)
     : (opts.scaleMultiplier ?? 1);
   const fitMode = opts.fitMode ?? "contain";
+  const profile = opts.renderProfile ?? "perfume";
 
   const trimmed = opts.preparedInput
     ? opts.preparedInput
@@ -534,18 +655,22 @@ export async function fitProductPng(
     let buffer: Buffer;
 
     if (width > maxW) {
-      const scaled = await sharp(trimmed)
-        .resize(width, height, { fit: "fill", kernel: sharp.kernel.lanczos3 })
-        .png()
-        .toBuffer();
+      let scaled = sharp(trimmed).resize(width, height, {
+        fit: "fill",
+        kernel: sharp.kernel.lanczos3
+      });
+      if (profile === "cosmetics") {
+        scaled = scaled.sharpen({ sigma: 0.5, m1: 0.48, m2: 0.2 });
+      }
+      const scaledBuf = await scaled.png().toBuffer();
       const left = Math.max(0, Math.round((width - maxW) / 2));
-      buffer = await sharp(scaled)
+      buffer = await sharp(scaledBuf)
         .extract({ left, top: 0, width: maxW, height })
         .png()
         .toBuffer();
       width = maxW;
     } else {
-      buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH);
+      buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH, profile);
     }
 
     const bottomAlphaInset = await measureBottomAlphaInset(buffer);
@@ -652,7 +777,7 @@ export async function fitProductPng(
     }
   }
 
-  const buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH);
+  const buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH, profile);
 
   const bottomAlphaInset = await measureBottomAlphaInset(buffer);
 

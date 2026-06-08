@@ -268,7 +268,8 @@ async function resolveCosmeticsUniformPlacement(
     scaleMultiplier: PODRUZHKA_COSMETICS_PRODUCT_SCALE,
     referenceBoxMinHeightFill: PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL,
     referenceBoxMinWidthFill: isNarrow ? 0 : PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL,
-    referenceBoxMinCardHeightFill: 0.52
+    referenceBoxMinCardHeightFill: 0.52,
+    renderProfile: "cosmetics"
   });
 
   let width = fit.width;
@@ -314,7 +315,7 @@ export async function resolveAdaptiveProductPlacement(
   input: Buffer,
   profile: PodruzhkaRenderProfile = "perfume"
 ): Promise<AdaptiveProductResult> {
-  const prepared = await prepareProductImage(input);
+  const prepared = await prepareProductImage(input, profile);
   const zoneW = PODRUZHKA_PRODUCT_VISUAL.w;
   const zoneH = productVisualHeight();
   const cardW = R.size.w;

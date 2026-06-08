@@ -655,7 +655,7 @@ export function PodruzhkaCosmeticsOzonTool() {
 
     const urls = new Map<number, string>();
     const visionNote =
-      "Рендер: cosmetics-v5. Параллельно ×" +
+      "Рендер: cosmetics-v6. Параллельно ×" +
       `${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
@@ -1216,7 +1216,7 @@ export function PodruzhkaCosmeticsOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-cosmetics-v5).
+                      html-figma-cosmetics-v6).
                     </>
                   ) : null}
                 </p>

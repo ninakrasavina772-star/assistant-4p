@@ -137,6 +137,9 @@ export async function drawPodruzhkaCard(
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(templateImg, 0, 0, w, h);
 
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
   const header = computeHeaderStack(measureFromCanvas2D(ctx), {
     brandName: data.brandName,
     productType: data.productType,
@@ -243,7 +246,7 @@ export async function renderPodruzhkaCardClient(
     canvas.toBlob(
       (b) => (b ? resolve(b) : reject(new Error("Не удалось собрать JPEG"))),
       "image/jpeg",
-      0.92
+      profile === "cosmetics" ? 0.96 : 0.92
     );
   });
 
