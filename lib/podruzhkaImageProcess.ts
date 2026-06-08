@@ -3,8 +3,8 @@ import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
-const COSMETICS_SOURCE_MIN_LONG_EDGE = 1400;
-const COSMETICS_UPSCALE_SHARPEN = { sigma: 0.38, m1: 0.42, m2: 0.16 } as const;
+const PRODUCT_SOURCE_MIN_LONG_EDGE = 1400;
+const PRODUCT_UPSCALE_SHARPEN = { sigma: 0.38, m1: 0.42, m2: 0.16 } as const;
 
 /**
  * Убирает только белый фон, связанный с краями кадра (типичный JPEG с Ozon).
@@ -73,8 +73,8 @@ export async function stripEdgeNearWhiteBackground(
     .toBuffer();
 }
 
-/** Белый фон с краёв — для косметики: не заходим в беж/персик (r−b). */
-export async function stripCosmeticsEdgeBackground(input: Buffer): Promise<Buffer> {
+/** Белый фон с краёв: не заходим в тёплые/бежевые края товара (r−b). */
+export async function stripProductEdgeBackground(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
     .raw()
@@ -137,6 +137,9 @@ export async function stripCosmeticsEdgeBackground(input: Buffer): Promise<Buffe
     .png()
     .toBuffer();
 }
+
+/** @deprecated alias */
+export const stripCosmeticsEdgeBackground = stripProductEdgeBackground;
 
 export async function stripNearWhiteBackground(
   input: Buffer,
@@ -440,7 +443,7 @@ export async function collapseInternalHorizontalGaps(input: Buffer): Promise<Buf
 /** Апскейл маленьких JPEG с Ozon до cut-out — меньше «лесенки» на светлых флаконах. */
 export async function enhanceSourceForProcessing(
   input: Buffer,
-  minLongEdge = COSMETICS_SOURCE_MIN_LONG_EDGE
+  minLongEdge = PRODUCT_SOURCE_MIN_LONG_EDGE
 ): Promise<Buffer> {
   const meta = await sharp(input).metadata();
   const w = meta.width ?? 0;
@@ -458,11 +461,11 @@ export async function enhanceSourceForProcessing(
     });
   }
 
-  return pipeline.sharpen(COSMETICS_UPSCALE_SHARPEN).png({ compressionLevel: 6 }).toBuffer();
+  return pipeline.sharpen(PRODUCT_UPSCALE_SHARPEN).png({ compressionLevel: 6 }).toBuffer();
 }
 
-/** Снять только полупрозрачный белый ореол — непрозрачный беж/персик товара не трогаем. */
-export async function removeCosmeticsWhiteFringe(input: Buffer): Promise<Buffer> {
+/** Снять только полупрозрачный белый ореол — непрозрачное тело товара не трогаем. */
+export async function removeSemiTransparentWhiteFringe(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
     .raw()
@@ -499,8 +502,23 @@ export async function removeCosmeticsWhiteFringe(input: Buffer): Promise<Buffer>
     .toBuffer();
 }
 
-/** Тень под товаром — только нейтрально-серая, не беж флакона. */
-export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> {
+type ProductFloorShadowOpts = {
+  shadowStartRatio?: number;
+  avgMin?: number;
+  avgMax?: number;
+  maxSpread?: number;
+};
+
+/** Contact-тень под товаром — только нейтрально-серая, не цвет упаковки. */
+export async function stripProductFloorShadow(
+  input: Buffer,
+  opts: ProductFloorShadowOpts = {}
+): Promise<Buffer> {
+  const shadowStartRatio = opts.shadowStartRatio ?? 0.68;
+  const avgMin = opts.avgMin ?? 95;
+  const avgMax = opts.avgMax ?? 175;
+  const maxSpread = opts.maxSpread ?? 28;
+
   const { data, info } = await sharp(input)
     .ensureAlpha()
     .raw()
@@ -511,7 +529,7 @@ export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> 
   if (!w || !h) return input;
 
   const pixels = Buffer.from(data);
-  const shadowStart = Math.floor(h * 0.68);
+  const shadowStart = Math.floor(h * shadowStartRatio);
 
   for (let y = shadowStart; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -523,8 +541,9 @@ export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> 
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (spread >= 28) continue;
-      if (avg >= 95 && avg <= 175) {
+      if (spread >= maxSpread) continue;
+      if (r - b > 14) continue;
+      if (avg >= avgMin && avg <= avgMax) {
         pixels[i + 3] = 0;
       }
     }
@@ -535,6 +554,10 @@ export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> 
   })
     .png()
     .toBuffer();
+}
+
+export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> {
+  return stripProductFloorShadow(input);
 }
 
 /** Вернуть 1 px контура, если flood-fill съел anti-alias. */
@@ -619,33 +642,89 @@ export async function featherProductAlpha(input: Buffer, sigma = 0.85): Promise<
     .toBuffer();
 }
 
-/** @deprecated Используйте removeCosmeticsWhiteFringe — старый defringe резал бежевые края. */
-export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
-  return removeCosmeticsWhiteFringe(input);
+/** @deprecated alias */
+export const removeCosmeticsWhiteFringe = removeSemiTransparentWhiteFringe;
+
+/** Мягкий defringe для парфюма — только полупрозрачный ореол и серая contact-тень. */
+export async function cleanPerfumeAlphaFringe(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = pixels[i + 3]!;
+      if (a === 0 || a === 255) continue;
+
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+
+      if (a < 250 && avg >= 244 && spread <= 22) {
+        pixels[i + 3] = 0;
+        continue;
+      }
+
+      if (a < 240 && spread <= 24 && avg >= 90 && avg <= 178 && r - b <= 12) {
+        pixels[i + 3] = 0;
+        continue;
+      }
+
+      if (a >= 48 && a < 255 && avg < 115 && spread > 28) {
+        pixels[i + 3] = 255;
+      }
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
 }
 
-/** Предобработка PNG перед fit (парфюм). */
-export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
-  const edgeStripped = await stripEdgeNearWhiteBackground(input, 248);
+/** @deprecated Используйте removeSemiTransparentWhiteFringe */
+export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
+  return removeSemiTransparentWhiteFringe(input);
+}
 
-  let buf = edgeStripped;
-  buf = await stripGrayFloorShadow(buf);
-  buf = await cleanProductAlphaFringe(buf);
+/** Предобработка PNG перед fit (парфюм): апскейл → мягкий cut-out → duo-gap. */
+export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
+  let buf = await enhanceSourceForProcessing(input);
+  buf = await stripProductEdgeBackground(buf);
+  buf = await stripProductFloorShadow(buf, {
+    shadowStartRatio: 0.58,
+    avgMin: 88,
+    avgMax: 182
+  });
+  buf = await dilateProductAlpha(buf, 1);
+  buf = await removeSemiTransparentWhiteFringe(buf);
+  buf = await cleanPerfumeAlphaFringe(buf);
   buf = await collapseInternalHorizontalGaps(buf);
   buf = await trimTransparentSafe(buf);
-  return cropToVisibleProduct(buf);
+  return cropToVisibleProduct(buf, 8, 0.028);
 }
 
 /**
- * Косметика на белом (Ozon): апскейл → мягкий cut-out → feather контура.
- * Не вызываем cleanProductAlphaFringe / defringe — они «съедали» бежевые края Sisley.
+ * Косметика на белом (Ozon): апскейл → мягкий cut-out → dilate.
+ * Не вызываем cleanProductAlphaFringe — он «съедал» бежевые края.
  */
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
-  buf = await stripCosmeticsEdgeBackground(buf);
+  buf = await stripProductEdgeBackground(buf);
   buf = await stripCosmeticsFloorShadow(buf);
   buf = await dilateProductAlpha(buf, 1);
-  buf = await removeCosmeticsWhiteFringe(buf);
+  buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await trimTransparentSafe(buf);
   return cropToVisibleProduct(buf, 8, 0.032);
 }

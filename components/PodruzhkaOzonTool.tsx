@@ -691,7 +691,7 @@ export function PodruzhkaOzonTool() {
             }
             if (!visionNote) {
               visionNote =
-                "Рендер: html-figma-v13. Фото: duo на белом → один флакон. Параллельно ×" +
+                "Рендер: html-figma-v14. Фото: duo на белом → один флакон. Параллельно ×" +
                 `${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
             }
             return {
@@ -1191,7 +1191,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v13).
+                      html-figma-v14).
                     </>
                   ) : null}
                 </p>
