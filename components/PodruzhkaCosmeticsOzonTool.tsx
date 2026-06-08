@@ -12,6 +12,7 @@ import {
 import { OzonImageConverter } from "@/components/OzonImageConverter";
 import { PodruzhkaCosmeticsColumnMappingUI } from "@/components/PodruzhkaCosmeticsColumnMappingUI";
 import { PodruzhkaCosmeticsDetectedLayout } from "@/components/PodruzhkaCosmeticsDetectedLayout";
+import { PodruzhkaExcelExample } from "@/components/PodruzhkaExcelExample";
 import {
   applyCosmeticsAiResults,
   applyCosmeticsFoto2Urls,
@@ -754,6 +755,7 @@ export function PodruzhkaCosmeticsOzonTool() {
           <h2 className={homeCardTitle}>Excel-фид</h2>
         </div>
         <div className={`${homeCardBody} space-y-4`}>
+          <PodruzhkaExcelExample variant="cosmetics" />
           <input
             ref={fileRef}
             type="file"

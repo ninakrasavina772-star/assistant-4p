@@ -62,7 +62,7 @@ const GUESS: Record<PodruzhkaCosmeticsFieldKey, string[]> = {
   name: ["name", "название", "title"],
   foto: ["foto", "фото", "image", "картинка"],
   ml: ["ml", "мл", "г", "gr", "объем", "объём", "volume"],
-  id: ["id", "id товара", "sku", "артикул"],
+  id: ["id", "id товара", "sku", "tpv", "tpv_", "артикул", "артикул вариации"],
   foto2: ["foto 2", "foto2", "фото 2"]
 };
 
