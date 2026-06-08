@@ -561,7 +561,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: Canvas 2D + wide-set gap merge, html-figma-v12.";
+                  "Рендер: html-figma-v13, новый template-base (петля).";
               }
             } catch (e) {
               fail++;
@@ -955,7 +955,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v12).
+                      html-figma-v13).
                     </>
                   ) : null}
                 </p>
