@@ -409,8 +409,10 @@ export function buildCosmeticsFoto2ColumnInfo(
 
 export function defaultCosmeticsDownloadName(
   baseFileName: string | null,
-  suffix: "texts" | "infographic" | "foto3"
+  suffix: "texts" | "infographic" | "foto3",
+  part?: number
 ): string {
   const base = (baseFileName ?? "feed").replace(/\.xlsx?$/i, "");
-  return `${base}-cosmetics-${suffix}.xlsx`;
+  const partTag = part && part > 0 ? `-part${part}` : "";
+  return `${base}-cosmetics-${suffix}${partTag}.xlsx`;
 }

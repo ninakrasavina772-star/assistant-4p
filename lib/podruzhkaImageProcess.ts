@@ -168,7 +168,7 @@ async function trimTransparentSafe(input: Buffer): Promise<Buffer> {
   }
 }
 
-/** Убрать серую «половую» тень под флаконом (только низ кадра, не жёлтые/цветные). */
+/** Убрать серую contact-тень под товаром (низ кадра, нейтральный серый). */
 export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -180,20 +180,22 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
   if (!w || !h) return input;
 
   const pixels = Buffer.from(data);
-  const shadowStart = Math.floor(h * 0.78);
+  const shadowStart = Math.floor(h * 0.72);
 
   for (let y = shadowStart; y < h; y++) {
+    const rowWeight = (y - shadowStart) / Math.max(1, h - shadowStart);
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
       const a = pixels[i + 3]!;
-      if (a < 12) continue;
+      if (a < 8) continue;
       const r = pixels[i]!;
       const g = pixels[i + 1]!;
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (spread >= 28) continue;
-      if (avg >= 125 && avg <= 205) {
+      if (spread >= 32) continue;
+      // Нейтральная серая тень (сильнее к низу кадра)
+      if (avg >= 82 && avg <= 218 && (rowWeight > 0.15 || avg >= 110)) {
         pixels[i + 3] = 0;
       }
     }
@@ -236,7 +238,13 @@ export async function cleanProductAlphaFringe(input: Buffer): Promise<Buffer> {
         continue;
       }
 
-      if (a >= 32) {
+      // Полупрозрачная серая contact-тень — убираем, не делаем непрозрачной
+      if (a < 248 && spread <= 34 && avg >= 88 && avg <= 225) {
+        pixels[i + 3] = 0;
+        continue;
+      }
+
+      if (a >= 32 && a < 255) {
         pixels[i + 3] = 255;
       }
     }
@@ -353,15 +361,9 @@ export async function collapseInternalHorizontalGaps(input: Buffer): Promise<Buf
 /** Предобработка PNG перед fit. */
 export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
   const edgeStripped = await stripEdgeNearWhiteBackground(input, 248);
-  const meta = await sharp(edgeStripped).metadata();
-  const w = meta.width ?? 1;
-  const h = meta.height ?? 1;
-  const aspect = w / h;
 
   let buf = edgeStripped;
-  if (aspect < 1.35) {
-    buf = await stripGrayFloorShadow(buf);
-  }
+  buf = await stripGrayFloorShadow(buf);
   buf = await cleanProductAlphaFringe(buf);
   buf = await collapseInternalHorizontalGaps(buf);
   buf = await trimTransparentSafe(buf);

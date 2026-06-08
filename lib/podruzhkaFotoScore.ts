@@ -23,7 +23,9 @@ export async function analyzePerfumeFotoImage(url: string): Promise<PerfumeImage
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return { kind: "other", score: 0, whiteRatio: 0, leftShare: 0, rightShare: 0 };
+  if (!ctx) {
+    return { kind: "other", score: 0, whiteRatio: 0, leftShare: 0, rightShare: 0, peakCount: 0 };
+  }
 
   ctx.drawImage(img, 0, 0, w, h);
   const { data } = ctx.getImageData(0, 0, w, h);

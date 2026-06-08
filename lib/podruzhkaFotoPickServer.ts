@@ -17,18 +17,21 @@ function scorePerfumeFotoUrl(url: string): number {
   return score;
 }
 
-const KIND_RANK: Record<PerfumeImageKind, number> = {
-  duo_white: 3,
-  single_white: 2,
-  other: 1
-};
-
 export type PerfumeFotoPickResult = {
   url: string;
   kind: PerfumeImageKind;
   score: number;
   whiteRatio: number;
 };
+
+const KIND_RANK: Record<PerfumeImageKind, number> = {
+  duo_white: 3,
+  single_white: 2,
+  other: 1
+};
+
+/** Сколько URL анализировать визуально (все типичные галереи 4Partners ≤ 20). */
+const VISUAL_ANALYZE_MAX = 17;
 
 /** Серверный выбор: duo на белом → один флакон → прочее. */
 export async function pickBestPerfumeFotoServer(urls: string[]): Promise<{
@@ -39,9 +42,12 @@ export async function pickBestPerfumeFotoServer(urls: string[]): Promise<{
   if (!list.length) return { url: "", ranked: [] };
   if (list.length === 1) return { url: list[0]!, ranked: [] };
 
-  const prelim = [...list]
-    .sort((a, b) => scorePerfumeFotoUrl(b) - scorePerfumeFotoUrl(a))
-    .slice(0, 5);
+  const prelim =
+    list.length <= VISUAL_ANALYZE_MAX
+      ? list
+      : [...list]
+          .sort((a, b) => scorePerfumeFotoUrl(b) - scorePerfumeFotoUrl(a))
+          .slice(0, VISUAL_ANALYZE_MAX);
 
   const results: PerfumeFotoPickResult[] = await Promise.all(
     prelim.map(async (url) => {

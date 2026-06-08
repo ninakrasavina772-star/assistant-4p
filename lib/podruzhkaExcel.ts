@@ -495,8 +495,10 @@ export function buildFoto2ColumnInfo(
 
 export function defaultPodruzhkaDownloadName(
   baseFileName: string | null,
-  suffix: "notes" | "infographic" | "foto3"
+  suffix: "notes" | "infographic" | "foto3",
+  part?: number
 ): string {
   const base = (baseFileName ?? "feed").replace(/\.xlsx?$/i, "");
-  return `${base}-${suffix}.xlsx`;
+  const partTag = part && part > 0 ? `-part${part}` : "";
+  return `${base}-${suffix}${partTag}.xlsx`;
 }

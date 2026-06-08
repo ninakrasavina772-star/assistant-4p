@@ -62,7 +62,11 @@ const SK_OPENAI = "fp_podruzhka_cosmetics_openai_key";
 const SK_OPENAI_REM = "fp_podruzhka_cosmetics_openai_remember";
 const BENEFITS_CHUNK = 5;
 const BENEFITS_PARALLEL = 4;
-const RENDER_CHUNK = 1;
+import {
+  PODRUZHKA_RENDER_FLUSH_EVERY,
+  PODRUZHKA_RENDER_PARALLEL,
+  runPodruzhkaRenderPool
+} from "@/lib/podruzhkaRenderPool";
 
 type Step = 1 | 2 | 3;
 
@@ -126,6 +130,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     skipped: { row: number; brand: string; reasons: string }[];
     noFotoRows: { row: number; brand: string; error: string }[];
     layoutWarnings: { row: number; brand: string; warning: string }[];
+    batchesSaved?: number;
   } | null>(null);
   const [renderPreviews, setRenderPreviews] = useState<InfographicPreviewItem[]>([]);
 
@@ -146,13 +151,13 @@ export function PodruzhkaCosmeticsOzonTool() {
   }, []);
 
   const downloadWorkbook = useCallback(
-    async (suffix: "texts" | "infographic" | "foto3") => {
+    async (suffix: "texts" | "infographic" | "foto3", part?: number) => {
       if (!wb || !scan) return;
       try {
         const ws = wb.getWorksheet(scan.sheetName);
         if (ws) ensureCosmeticsAiColumns(ws, scan.headerRow);
         const blob = await writeWorkbookToBlob(wb);
-        downloadBlob(blob, defaultCosmeticsDownloadName(fileName, suffix));
+        downloadBlob(blob, defaultCosmeticsDownloadName(fileName, suffix, part));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Не удалось сохранить Excel");
       }
@@ -608,11 +613,9 @@ export function PodruzhkaCosmeticsOzonTool() {
     }
 
     const urls = new Map<number, string>();
-    let ok = 0;
-    let fail = 0;
-    let noFoto = 0;
-    let sampleFotoError: string | null = null;
-    const visionNote = "Рендер: cosmetics-v5 — новый шаблон (петля), benefit с переносом.";
+    const visionNote =
+      "Рендер: cosmetics-v5. Параллельно ×" +
+      `${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
     const todo: typeof sheetInfo.rows = [];
     const skipped: { row: number; brand: string; reasons: string }[] = [];
     const noFotoRows: { row: number; brand: string; error: string }[] = [];
@@ -640,71 +643,82 @@ export function PodruzhkaCosmeticsOzonTool() {
     }
 
     try {
-      for (let i = 0; i < todo.length; i += RENDER_CHUNK) {
-        const chunk = todo.slice(i, i + RENDER_CHUNK);
-        setProgress(`Инфографика: ${i} / ${todo.length}…`);
+      let foto2Col = sheetInfo.foto2Col;
 
-        await Promise.all(
-          chunk.map(async (row) => {
-            const ai = readCosmeticsTextsFromSheet(ws, sheetInfo, row);
-            try {
-              const rendered = await renderPodruzhkaCardClient({
-                brandName: row.brandName,
-                productType: readCosmeticsProductTypeForCard(ws, sheetInfo, row, ai.model),
-                model: ai.model,
-                ml: "",
-                fotoUrl: row.foto,
-                notes: ai.benefits,
-                renderProfile: "cosmetics"
-              });
+      const poolResult = await runPodruzhkaRenderPool({
+        items: todo,
+        parallel: PODRUZHKA_RENDER_PARALLEL,
+        flushEvery: PODRUZHKA_RENDER_FLUSH_EVERY,
+        onProgress: (p) => {
+          setProgress(
+            `Инфографика: ${p.done} / ${p.total} (готово ${p.ok}` +
+              (p.fail ? `, ошибок ${p.fail}` : "") +
+              (p.batchesSaved
+                ? ` · партий в Excel: ${p.batchesSaved} по ~${PODRUZHKA_RENDER_FLUSH_EVERY}`
+                : "") +
+              ")…"
+          );
+        },
+        onFlush: async (batchUrls, batchIndex) => {
+          for (const [row, url] of batchUrls) urls.set(row, url);
+          const applied = applyCosmeticsFoto2Urls(ws, { ...sheetInfo, foto2Col }, batchUrls);
+          foto2Col = applied.foto2Col;
+          setSheetInfo((prev) => (prev ? { ...prev, foto2Col: applied.foto2Col } : prev));
+          await downloadWorkbook("infographic", batchIndex);
+        },
+        renderOne: async (row) => {
+          const ai = readCosmeticsTextsFromSheet(ws, sheetInfo, row);
+          try {
+            const rendered = await renderPodruzhkaCardClient({
+              brandName: row.brandName,
+              productType: readCosmeticsProductTypeForCard(ws, sheetInfo, row, ai.model),
+              model: ai.model,
+              ml: "",
+              fotoUrl: row.foto,
+              notes: ai.benefits,
+              renderProfile: "cosmetics"
+            });
 
-              const form = new FormData();
-              form.append("file", rendered.blob, `podruzhka-cosmetics-row-${row.row}.jpg`);
-              const res = await fetch("/api/podruzhka/upload", {
-                method: "POST",
-                body: form
-              });
-              const data = (await res.json()) as {
-                url?: string;
-                error?: string;
-                layoutVersion?: string;
+            const form = new FormData();
+            form.append("file", rendered.blob, `podruzhka-cosmetics-row-${row.row}.jpg`);
+            const res = await fetch("/api/podruzhka/upload", { method: "POST", body: form });
+            const data = (await res.json()) as {
+              url?: string;
+              error?: string;
+              layoutVersion?: string;
+            };
+            if (!res.ok || !data.url) {
+              return {
+                row: row.row,
+                ok: false,
+                error: data.error ?? `HTTP ${res.status}`
               };
-              if (!res.ok || !data.url) {
-                fail++;
-                const err = data.error ?? `HTTP ${res.status}`;
-                noFoto++;
-                noFotoRows.push({
-                  row: row.row,
-                  brand: row.brandName || row.name.slice(0, 30),
-                  error: err
-                });
-                if (!sampleFotoError) sampleFotoError = err;
-                return;
-              }
-              urls.set(row.row, data.url);
-              ok++;
-              if (data.layoutVersion) setLayoutVersion(data.layoutVersion);
-              if (rendered.notesTruncated) {
-                layoutWarnings.push({
-                  row: row.row,
-                  brand: row.brandName || row.name.slice(0, 30),
-                  warning: "Длинное описание benefit — сократите текст в Excel"
-                });
-              }
-            } catch (e) {
-              fail++;
-              const err = e instanceof Error ? e.message : "ошибка рендера";
-              noFoto++;
-              noFotoRows.push({
+            }
+            if (rendered.notesTruncated) {
+              layoutWarnings.push({
                 row: row.row,
                 brand: row.brandName || row.name.slice(0, 30),
-                error: err
+                warning: "Длинное описание benefit — сократите текст в Excel"
               });
-              if (!sampleFotoError) sampleFotoError = err;
             }
-          })
-        );
-      }
+            return {
+              row: row.row,
+              ok: true,
+              url: data.url,
+              layoutVersion: data.layoutVersion ?? rendered.layoutVersion
+            };
+          } catch (e) {
+            return {
+              row: row.row,
+              ok: false,
+              error: e instanceof Error ? e.message : "ошибка рендера"
+            };
+          }
+        }
+      });
+
+      for (const [row, url] of poolResult.allUrls) urls.set(row, url);
+      if (poolResult.layoutVersion) setLayoutVersion(poolResult.layoutVersion);
 
       const previews: InfographicPreviewItem[] = todo
         .map((row) => {
@@ -721,17 +735,25 @@ export function PodruzhkaCosmeticsOzonTool() {
         .filter((x): x is InfographicPreviewItem => x != null);
       setRenderPreviews(previews);
 
-      const { foto2Col } = applyCosmeticsFoto2Urls(ws, sheetInfo, urls);
-      setSheetInfo((prev) => (prev ? { ...prev, foto2Col } : prev));
+      const noFotoRows = poolResult.errors.map((e) => ({
+        row: e.row,
+        brand:
+          todo.find((r) => r.row === e.row)?.brandName ||
+          todo.find((r) => r.row === e.row)?.name.slice(0, 30) ||
+          "?",
+        error: e.error
+      }));
+
       setRenderStats({
-        ok,
-        fail,
-        noFoto,
-        sampleFotoError,
+        ok: poolResult.ok,
+        fail: poolResult.fail,
+        noFoto: poolResult.fail,
+        sampleFotoError: noFotoRows[0]?.error ?? null,
         visionNote,
         skipped,
         noFotoRows,
-        layoutWarnings
+        layoutWarnings,
+        batchesSaved: poolResult.batchesSaved
       });
       setInfographicDone(true);
       setTextsDone(true);
@@ -741,7 +763,7 @@ export function PodruzhkaCosmeticsOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan]);
+  }, [wb, sheetInfo, scan, downloadWorkbook]);
 
   const renderReady = useMemo(() => {
     if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
@@ -1050,7 +1072,12 @@ export function PodruzhkaCosmeticsOzonTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-xs text-slate-500">
-              Тот же шаблон 1024×1365 и правила размещения фото, что у ароматов. Три блока benefit
+              Параллельно до <strong>{PODRUZHKA_RENDER_PARALLEL}</strong> карточек. Каждые{" "}
+              <strong>{PODRUZHKA_RENDER_FLUSH_EVERY}</strong> ссылок — скачивается Excel с{" "}
+              <strong>foto 2</strong> (part1, part2…). Последний part — полный накопленный результат.
+            </p>
+            <p className="text-xs text-slate-500">
+              Тот же шаблон 1024×1365 и правила размещения фото, что у арomatов. Три блока benefit
               рисуются в слотах нот.
             </p>
             <button
@@ -1068,6 +1095,12 @@ export function PodruzhkaCosmeticsOzonTool() {
                   Готово: {renderStats.ok}
                   {renderStats.fail > 0 ? `, ошибок: ${renderStats.fail}` : ""}
                   {renderStats.noFoto > 0 ? `, без фото: ${renderStats.noFoto}` : ""}.
+                  {renderStats.batchesSaved ? (
+                    <>
+                      {" "}
+                      Партий Excel: <strong>{renderStats.batchesSaved}</strong>.
+                    </>
+                  ) : null}
                   {layoutVersion ? (
                     <>
                       {" "}

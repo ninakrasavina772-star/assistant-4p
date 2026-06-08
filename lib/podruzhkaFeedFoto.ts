@@ -24,20 +24,20 @@ function readFotoCellUrls(ws: ExcelJS.Worksheet, row: number, col: number): stri
   return parseFotoUrlsFromText(text);
 }
 
-/** Все кандидаты из колонок foto / «Изображения варианта». */
+/** Все кандидаты: приоритет «Изображения варианта», иначе одиночная foto. */
 export function getFeedFotoCandidates(
   ws: ExcelJS.Worksheet,
   row: number,
   mapping: FeedFotoMapping
 ): string[] {
-  const urls: string[] = [];
   if (mapping.fotoImages && mapping.fotoImages > 0) {
-    urls.push(...readFotoCellUrls(ws, row, mapping.fotoImages));
+    const fromGallery = readFotoCellUrls(ws, row, mapping.fotoImages);
+    if (fromGallery.length) return dedupeAndNormalizeFotoUrls(fromGallery);
   }
   if (mapping.foto && mapping.foto > 0) {
-    urls.push(...readFotoCellUrls(ws, row, mapping.foto));
+    return dedupeAndNormalizeFotoUrls(readFotoCellUrls(ws, row, mapping.foto));
   }
-  return dedupeAndNormalizeFotoUrls(urls);
+  return [];
 }
 
 export function resolveFeedFotoUrl(

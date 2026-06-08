@@ -24,8 +24,29 @@ export function fotoUrlHashKey(url: string): string {
   return m ? `${m[1]}/${m[2]}/${m[3]}` : url;
 }
 
+/** Ссылки на уже сгенерированную инфографику — не источник foto. */
+export function isGeneratedInfographicFotoUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  return (
+    /storage\.yandexcloud\.net\/assistant/i.test(u) ||
+    /\/ozon-images\//i.test(u) ||
+    /podruzhka-[a-f0-9]+\.(?:jpg|png|webp)/i.test(u)
+  );
+}
+
 export function dedupeAndNormalizeFotoUrls(urls: string[]): string[] {
   const byKey = new Map<string, string>();
+  for (const raw of urls) {
+    const t = raw.trim();
+    if (!/^https?:\/\//i.test(t)) continue;
+    if (isGeneratedInfographicFotoUrl(t)) continue;
+    const norm = normalize4standHugeWebp(t);
+    const key = fotoUrlHashKey(norm);
+    if (!byKey.has(key)) byKey.set(key, norm);
+  }
+  const list = [...byKey.values()];
+  if (list.length) return list;
+  // fallback: если только «выходные» URL — оставляем как есть
   for (const raw of urls) {
     const t = raw.trim();
     if (!/^https?:\/\//i.test(t)) continue;
