@@ -21,7 +21,7 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { sanitizeBenefitTitle } from "@/lib/podruzhkaCosmeticsAi";
-import { resolveFeedFotoUrl } from "@/lib/podruzhkaFeedFoto";
+import { resolveFeedFotoUrl, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
 import type { PodruzhkaFeedRow, PodruzhkaNoteBlock, PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import {
   autoDetectCosmeticsMapping,
@@ -179,13 +179,14 @@ export type CosmeticsRowRenderEligibility = {
 export function getCosmeticsRowRenderEligibility(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaCosmeticsSheetInfo,
-  feedRow: PodruzhkaFeedRow
+  feedRow: PodruzhkaFeedRow,
+  fotoMode: FeedFotoResolveMode = "auto"
 ): CosmeticsRowRenderEligibility {
   const ai = readCosmeticsTextsFromSheet(ws, info, feedRow);
   const reasons: string[] = [];
 
   if (!feedRow.brandName.trim()) reasons.push("нет brand name");
-  const foto = resolveFeedFotoUrl(ws, feedRow.row, info.mapping, "cosmetics").trim();
+  const foto = resolveFeedFotoUrl(ws, feedRow.row, info.mapping, "cosmetics", fotoMode).trim();
   if (!foto) reasons.push("нет foto");
   if (!ai.model.trim()) reasons.push("нет model");
   for (let i = 0; i < 3; i++) {
@@ -204,9 +205,10 @@ export function getCosmeticsRowRenderEligibility(
 
 export function countCosmeticsReadyRows(
   ws: ExcelJS.Worksheet,
-  info: PodruzhkaCosmeticsSheetInfo
+  info: PodruzhkaCosmeticsSheetInfo,
+  fotoMode: FeedFotoResolveMode = "auto"
 ): number {
-  return info.rows.filter((r) => getCosmeticsRowRenderEligibility(ws, info, r).ok).length;
+  return info.rows.filter((r) => getCosmeticsRowRenderEligibility(ws, info, r, fotoMode).ok).length;
 }
 
 function normalizeBenefitDesc(s: string): string {

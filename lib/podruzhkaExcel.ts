@@ -23,7 +23,7 @@ import {
   isFoto3Header,
   type Foto2ColumnInfo
 } from "@/lib/ozonImageExcel";
-import { resolveFeedFotoUrl } from "@/lib/podruzhkaFeedFoto";
+import { resolveFeedFotoUrl, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
 
 export { readWorkbookFromFile, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 export type { PodruzhkaSheetInfo, PodruzhkaColumnMapping, ExcelHeaderOption } from "@/lib/podruzhkaColumnMapping";
@@ -336,14 +336,15 @@ function noteIsComplete(n: PodruzhkaNoteBlock): boolean {
 export function getRowRenderEligibility(
   ws: ExcelJS.Worksheet,
   info: PodruzhkaSheetInfo,
-  feedRow: PodruzhkaFeedRow
+  feedRow: PodruzhkaFeedRow,
+  fotoMode: FeedFotoResolveMode = "auto"
 ): RowRenderEligibility {
   const ai = readAiFromSheet(ws, info, feedRow);
   const model = resolveModelForRender(ai.model, feedRow);
   const reasons: string[] = [];
 
   if (!feedRow.brandName.trim()) reasons.push("нет brand name");
-  const foto = resolveFeedFotoUrl(ws, feedRow.row, info.mapping, "perfume").trim();
+  const foto = resolveFeedFotoUrl(ws, feedRow.row, info.mapping, "perfume", fotoMode).trim();
   if (!foto) reasons.push("нет foto");
   if (!model) reasons.push("нет model");
   for (let i = 0; i < 3; i++) {
@@ -396,19 +397,21 @@ export function rowNeedsAiGeneration(
 
 export function countAiReadyRows(
   ws: ExcelJS.Worksheet,
-  info: PodruzhkaSheetInfo
+  info: PodruzhkaSheetInfo,
+  fotoMode: FeedFotoResolveMode = "auto"
 ): number {
-  return info.rows.filter((r) => getRowRenderEligibility(ws, info, r).ok).length;
+  return info.rows.filter((r) => getRowRenderEligibility(ws, info, r, fotoMode).ok).length;
 }
 
 /** Сводка причин, почему строки не готовы к инфографике */
 export function summarizeRenderBlockers(
   ws: ExcelJS.Worksheet,
-  info: PodruzhkaSheetInfo
+  info: PodruzhkaSheetInfo,
+  fotoMode: FeedFotoResolveMode = "auto"
 ): { reason: string; count: number }[] {
   const counts = new Map<string, number>();
   for (const row of info.rows) {
-    const el = getRowRenderEligibility(ws, info, row);
+    const el = getRowRenderEligibility(ws, info, row, fotoMode);
     if (el.ok) continue;
     for (const reason of el.reasons) {
       counts.set(reason, (counts.get(reason) ?? 0) + 1);

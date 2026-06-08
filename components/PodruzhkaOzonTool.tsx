@@ -48,7 +48,7 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
-import { resolveFeedFotoUrlAsync } from "@/lib/podruzhkaFeedFoto";
+import { resolveFeedFotoUrlAsync, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
 import { mergeCsvImagesIntoWorkbook } from "@/lib/podruzhkaFeedCsvMerge";
 import {
   buildPodruzhkaErrorRows,
@@ -62,6 +62,7 @@ import type ExcelJS from "exceljs";
 
 const SK_OPENAI = "fp_podruzhka_openai_key";
 const SK_OPENAI_REM = "fp_podruzhka_openai_remember";
+const SK_FILE_FOTO = "fp_podruzhka_file_foto_only";
 /** Строк в одном запросе к API (параллельно на сервере) */
 const NOTES_CHUNK = 5;
 /** Сколько запросов к API одновременно с браузера */
@@ -138,6 +139,12 @@ export function PodruzhkaOzonTool() {
     notFound: number;
     variantRows?: number;
   } | null>(null);
+  const [fileFotoOnly, setFileFotoOnly] = useState(false);
+
+  useEffect(() => {
+    if (typeof sessionStorage === "undefined") return;
+    setFileFotoOnly(sessionStorage.getItem(SK_FILE_FOTO) === "1");
+  }, []);
 
   useEffect(() => {
     if (typeof sessionStorage === "undefined") return;
@@ -145,6 +152,18 @@ export function PodruzhkaOzonTool() {
       const k = sessionStorage.getItem(SK_OPENAI);
       if (k) setOpenaiKey(k);
     }
+  }, []);
+
+  const fotoResolveMode: FeedFotoResolveMode = fileFotoOnly ? "file" : "auto";
+
+  const toggleFileFotoOnly = useCallback(() => {
+    setFileFotoOnly((prev) => {
+      const next = !prev;
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem(SK_FILE_FOTO, next ? "1" : "0");
+      }
+      return next;
+    });
   }, []);
 
   const downloadBlob = useCallback((blob: Blob, name: string) => {
@@ -572,7 +591,7 @@ export function PodruzhkaOzonTool() {
     const layoutWarnings: { row: number; brand: string; warning: string }[] = [];
 
     for (const row of sheetInfo.rows) {
-      const el = getRowRenderEligibility(ws, sheetInfo, row);
+      const el = getRowRenderEligibility(ws, sheetInfo, row, fotoResolveMode);
       if (el.ok) {
         todo.push(row);
       } else {
@@ -640,7 +659,8 @@ export function PodruzhkaOzonTool() {
           const ai = readAiFromSheet(ws, sheetInfo, row);
           try {
             const fotoUrl =
-              (await resolveFeedFotoUrlAsync(ws, row.row, mapping, "perfume")) || row.foto;
+              (await resolveFeedFotoUrlAsync(ws, row.row, mapping, "perfume", fotoResolveMode)) ||
+              row.foto;
             const rendered = await renderPodruzhkaCardClient({
               brandName: row.brandName,
               productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
@@ -742,18 +762,18 @@ export function PodruzhkaOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan, mapping, downloadWorkbook, downloadErrorsReport]);
+  }, [wb, sheetInfo, scan, mapping, downloadWorkbook, downloadErrorsReport, fotoResolveMode]);
 
   const renderReady = useMemo(() => {
     if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0, blockers: [] as { reason: string; count: number }[] };
     const ws = wb.getWorksheet(sheetInfo.sheetName);
     if (!ws) return { ready: 0, total: sheetInfo.rows.length, blockers: [] };
     return {
-      ready: countAiReadyRows(ws, sheetInfo),
+      ready: countAiReadyRows(ws, sheetInfo, fotoResolveMode),
       total: sheetInfo.rows.length,
-      blockers: summarizeRenderBlockers(ws, sheetInfo)
+      blockers: summarizeRenderBlockers(ws, sheetInfo, fotoResolveMode)
     };
-  }, [wb, sheetInfo, scan, notesStats, infographicDone]);
+  }, [wb, sheetInfo, scan, notesStats, infographicDone, fileFotoOnly, fotoResolveMode]);
 
   const pipeline = useMemo(() => {
     if (!wb || !sheetInfo || !infographicDone) return null;
@@ -858,8 +878,20 @@ export function PodruzhkaOzonTool() {
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 space-y-3">
               <p className="text-sm text-slate-700">
                 <strong>{renderReady.ready}</strong> из <strong>{renderReady.total}</strong> строк
-                готовы к инфографике (есть model, note 1–3 и foto).
+                готовы к инфографике (есть model, note 1–3 и foto
+                {fileFotoOnly ? " в колонке foto" : ""}).
               </p>
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={fileFotoOnly}
+                  onChange={toggleFileFotoOnly}
+                />
+                <span>
+                  Только foto из Excel — без выбора из CSV / «Изображения варианта»
+                </span>
+              </label>
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
@@ -1110,6 +1142,18 @@ export function PodruzhkaOzonTool() {
               <strong>{renderReady.total}</strong>. Ошибочные позиции не останавливают процесс —
               после завершения скачается файл <strong>…-errors.xlsx</strong>.
             </p>
+            <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={fileFotoOnly}
+                onChange={toggleFileFotoOnly}
+              />
+              <span>
+                <strong>Только foto из Excel</strong> — не выбирать из CSV и не анализировать
+                галерею. Берётся первая ссылка из колонки <strong>foto</strong> в файле.
+              </span>
+            </label>
             <p className="text-xs text-slate-500">
               Параллельно до <strong>{PODRUZHKA_RENDER_PARALLEL}</strong> карточек. Каждые{" "}
               <strong>{PODRUZHKA_RENDER_FLUSH_EVERY}</strong> готовых ссылок — автоматически

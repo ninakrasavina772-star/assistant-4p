@@ -52,6 +52,7 @@ import {
 } from "@/lib/podruzhkaCosmeticsAi";
 import { PODRUZHKA_COSMETICS_FIELD_LABELS } from "@/lib/podruzhkaCosmeticsColumnMapping";
 import { mergeCsvImagesIntoWorkbook } from "@/lib/podruzhkaFeedCsvMerge";
+import { resolveFeedFotoUrlAsync, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
 import type { PodruzhkaColumnMapping } from "@/lib/podruzhkaColumnMapping";
 import { PodruzhkaInfographicPreview, type InfographicPreviewItem } from "@/components/PodruzhkaInfographicPreview";
 import {
@@ -66,6 +67,7 @@ import type ExcelJS from "exceljs";
 
 const SK_OPENAI = "fp_podruzhka_cosmetics_openai_key";
 const SK_OPENAI_REM = "fp_podruzhka_cosmetics_openai_remember";
+const SK_FILE_FOTO = "fp_podruzhka_cosmetics_file_foto_only";
 const BENEFITS_CHUNK = 5;
 const BENEFITS_PARALLEL = 4;
 import {
@@ -141,6 +143,24 @@ export function PodruzhkaCosmeticsOzonTool() {
     flushErrors?: string[];
   } | null>(null);
   const [renderPreviews, setRenderPreviews] = useState<InfographicPreviewItem[]>([]);
+  const [fileFotoOnly, setFileFotoOnly] = useState(false);
+
+  useEffect(() => {
+    if (typeof sessionStorage === "undefined") return;
+    setFileFotoOnly(sessionStorage.getItem(SK_FILE_FOTO) === "1");
+  }, []);
+
+  const fotoResolveMode: FeedFotoResolveMode = fileFotoOnly ? "file" : "auto";
+
+  const toggleFileFotoOnly = useCallback(() => {
+    setFileFotoOnly((prev) => {
+      const next = !prev;
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem(SK_FILE_FOTO, next ? "1" : "0");
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (typeof sessionStorage === "undefined") return;
@@ -643,7 +663,7 @@ export function PodruzhkaCosmeticsOzonTool() {
     const layoutWarnings: { row: number; brand: string; warning: string }[] = [];
 
     for (const row of sheetInfo.rows) {
-      const el = getCosmeticsRowRenderEligibility(ws, sheetInfo, row);
+      const el = getCosmeticsRowRenderEligibility(ws, sheetInfo, row, fotoResolveMode);
       if (el.ok) {
         todo.push(row);
       } else {
@@ -709,12 +729,15 @@ export function PodruzhkaCosmeticsOzonTool() {
         renderOne: async (row) => {
           const ai = readCosmeticsTextsFromSheet(ws, sheetInfo, row);
           try {
+            const fotoUrl =
+              (await resolveFeedFotoUrlAsync(ws, row.row, mapping, "cosmetics", fotoResolveMode)) ||
+              row.foto;
             const rendered = await renderPodruzhkaCardClient({
               brandName: row.brandName,
               productType: readCosmeticsProductTypeForCard(ws, sheetInfo, row, ai.model),
               model: ai.model,
               ml: "",
-              fotoUrl: row.foto,
+              fotoUrl,
               notes: ai.benefits,
               renderProfile: "cosmetics"
             });
@@ -826,17 +849,17 @@ export function PodruzhkaCosmeticsOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan, downloadWorkbook, downloadErrorsReport]);
+  }, [wb, sheetInfo, scan, mapping, downloadWorkbook, downloadErrorsReport, fotoResolveMode]);
 
   const renderReady = useMemo(() => {
     if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
     const ws = wb.getWorksheet(sheetInfo.sheetName);
     if (!ws) return { ready: 0, total: sheetInfo.rows.length };
     return {
-      ready: countCosmeticsReadyRows(ws, sheetInfo),
+      ready: countCosmeticsReadyRows(ws, sheetInfo, fotoResolveMode),
       total: sheetInfo.rows.length
     };
-  }, [wb, sheetInfo, scan, infographicDone]);
+  }, [wb, sheetInfo, scan, infographicDone, fileFotoOnly, fotoResolveMode]);
 
   const pipeline = useMemo(() => {
     if (!wb || !sheetInfo || !infographicDone) return null;
@@ -940,8 +963,20 @@ export function PodruzhkaCosmeticsOzonTool() {
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 space-y-3">
               <p className="text-sm text-slate-700">
                 <strong>{renderReady.ready}</strong> из <strong>{renderReady.total}</strong> строк
-                готовы к инфографике (есть model, benefit 1–3 и foto).
+                готовы к инфографике (есть model, benefit 1–3 и foto
+                {fileFotoOnly ? " в колонке foto" : ""}).
               </p>
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={fileFotoOnly}
+                  onChange={toggleFileFotoOnly}
+                />
+                <span>
+                  Только foto из Excel — без выбора из CSV / «Изображения варианта»
+                </span>
+              </label>
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
@@ -1135,6 +1170,18 @@ export function PodruzhkaCosmeticsOzonTool() {
               <strong>{renderReady.total}</strong>. Ошибочные позиции не останавливают процесс —
               после завершения скачается файл <strong>…-cosmetics-errors.xlsx</strong>.
             </p>
+            <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={fileFotoOnly}
+                onChange={toggleFileFotoOnly}
+              />
+              <span>
+                <strong>Только foto из Excel</strong> — не выбирать из CSV и не анализировать
+                галерею. Берётся первая ссылка из колонки <strong>foto</strong> в файле.
+              </span>
+            </label>
             <p className="text-xs text-slate-500">
               Параллельно до <strong>{PODRUZHKA_RENDER_PARALLEL}</strong> карточек. Каждые{" "}
               <strong>{PODRUZHKA_RENDER_FLUSH_EVERY}</strong> ссылок — скачивается Excel с{" "}
