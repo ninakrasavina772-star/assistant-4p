@@ -345,16 +345,11 @@ async function resizeProductForCard(
     fit: "inside",
     kernel: sharp.kernel.lanczos3
   });
-  const sharpen =
-    profile === "cosmetics"
-      ? scaleUp
-        ? { sigma: 0.65, m1: 0.5, m2: 0.2 }
-        : { sigma: 0.4, m1: 0.45, m2: 0.18 }
-      : scaleUp
-        ? { sigma: 0.55, m1: 0.45, m2: 0.2 }
-        : { sigma: 0.35, m1: 0.45, m2: 0.2 };
-  pipeline = pipeline.sharpen(sharpen);
-  return pipeline.png({ compressionLevel: 6 }).toBuffer();
+  if (scaleUp) {
+    pipeline = pipeline.sharpen(PRODUCT_UPSCALE_SHARPEN);
+  }
+  const resized = await pipeline.png({ compressionLevel: 6 }).toBuffer();
+  return finalizeProductCutout(resized);
 }
 
 /**
@@ -503,21 +498,21 @@ export async function removeSemiTransparentWhiteFringe(input: Buffer): Promise<B
 }
 
 type ProductFloorShadowOpts = {
-  shadowStartRatio?: number;
   avgMin?: number;
   avgMax?: number;
   maxSpread?: number;
+  maxWarmth?: number;
 };
 
-/** Contact-тень под товаром — только нейтрально-серая, не цвет упаковки. */
+/** Contact-тень снизу — flood от нижнего края, только нейтрально-серый фон. */
 export async function stripProductFloorShadow(
   input: Buffer,
   opts: ProductFloorShadowOpts = {}
 ): Promise<Buffer> {
-  const shadowStartRatio = opts.shadowStartRatio ?? 0.68;
   const avgMin = opts.avgMin ?? 95;
   const avgMax = opts.avgMax ?? 175;
-  const maxSpread = opts.maxSpread ?? 28;
+  const maxSpread = opts.maxSpread ?? 16;
+  const maxWarmth = opts.maxWarmth ?? 6;
 
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -529,24 +524,56 @@ export async function stripProductFloorShadow(
   if (!w || !h) return input;
 
   const pixels = Buffer.from(data);
-  const shadowStart = Math.floor(h * shadowStartRatio);
+  const visited = new Uint8Array(w * h);
+  const queue: number[] = [];
 
-  for (let y = shadowStart; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const a = pixels[i + 3]!;
-      if (a < 8) continue;
-      const r = pixels[i]!;
-      const g = pixels[i + 1]!;
-      const b = pixels[i + 2]!;
-      const avg = (r + g + b) / 3;
-      const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (spread >= maxSpread) continue;
-      if (r - b > 14) continue;
-      if (avg >= avgMin && avg <= avgMax) {
-        pixels[i + 3] = 0;
-      }
+  const isFloorGray = (pi: number): boolean => {
+    const a = pixels[pi + 3]!;
+    if (a < 8) return false;
+    const r = pixels[pi]!;
+    const g = pixels[pi + 1]!;
+    const b = pixels[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    if (spread > maxSpread) return false;
+    if (r - b > maxWarmth) return false;
+    return avg >= avgMin && avg <= avgMax;
+  };
+
+  const tryPush = (idx: number) => {
+    if (idx < 0 || idx >= w * h || visited[idx]) return;
+    queue.push(idx);
+  };
+
+  for (let x = 0; x < w; x++) {
+    tryPush((h - 1) * w + x);
+  }
+
+  while (queue.length) {
+    const idx = queue.pop()!;
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    const pi = idx * 4;
+    const a = pixels[pi + 3]!;
+
+    if (a < 8) {
+      const x = idx % w;
+      const y = (idx - x) / w;
+      if (x > 0) tryPush(idx - 1);
+      if (x < w - 1) tryPush(idx + 1);
+      if (y > 0) tryPush(idx - w);
+      continue;
     }
+
+    if (!isFloorGray(pi)) continue;
+    pixels[pi + 3] = 0;
+
+    const x = idx % w;
+    const y = (idx - x) / w;
+    if (x > 0) tryPush(idx - 1);
+    if (x < w - 1) tryPush(idx + 1);
+    if (y > 0) tryPush(idx - w);
+    if (y < h - 1) tryPush(idx + w);
   }
 
   return sharp(pixels, {
@@ -557,7 +584,7 @@ export async function stripProductFloorShadow(
 }
 
 export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> {
-  return stripProductFloorShadow(input);
+  return stripProductFloorShadow(input, { avgMin: 95, avgMax: 175, maxSpread: 14, maxWarmth: 6 });
 }
 
 /** Вернуть 1 px контура, если flood-fill съел anti-alias. */
@@ -642,6 +669,122 @@ export async function featherProductAlpha(input: Buffer, sigma = 0.85): Promise<
     .toBuffer();
 }
 
+/** Снять 1px белого JPEG-ореола на контуре (не трогаем тело товара). */
+export async function removeBoundaryWhiteHalo(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const src = Buffer.from(data);
+  const pixels = Buffer.from(data);
+
+  const alphaAt = (x: number, y: number) => src[(y * w + x) * 4 + 3]!;
+  const isOpaque = (x: number, y: number) => alphaAt(x, y) >= 20;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (src[i + 3]! < 20) continue;
+
+      let touchesTransparent = false;
+      for (let dy = -1; dy <= 1 && !touchesTransparent; dy++) {
+        for (let dx = -1; dx <= 1 && !touchesTransparent; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
+            touchesTransparent = true;
+            continue;
+          }
+          if (!isOpaque(nx, ny)) touchesTransparent = true;
+        }
+      }
+      if (!touchesTransparent) continue;
+
+      const r = src[i]!;
+      const g = src[i + 1]!;
+      const b = src[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (avg >= 249 && spread <= 14 && r - b <= 8) {
+        pixels[i + 3] = 0;
+      } else if (src[i + 3]! < 255 && avg >= 246 && spread <= 16 && r - b <= 8) {
+        pixels[i + 3] = 0;
+      }
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** После resize: полупрозрачные цветные пиксели внутри bbox → непрозрачные. */
+export async function solidifyProductInterior(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (pixels[(y * w + x) * 4 + 3]! >= 20) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  if (maxX < minX || maxY < minY) return input;
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const i = (y * w + x) * 4;
+      const a = pixels[i + 3]!;
+      if (a < 40 || a === 255) continue;
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (avg >= 248 && spread <= 12) continue;
+      pixels[i + 3] = 255;
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Финальная зачистка PNG перед композитом на серый макет. */
+export async function finalizeProductCutout(input: Buffer): Promise<Buffer> {
+  let buf = await removeBoundaryWhiteHalo(input);
+  buf = await solidifyProductInterior(buf);
+  buf = await removeSemiTransparentWhiteFringe(buf);
+  return buf;
+}
+
 /** @deprecated alias */
 export const removeCosmeticsWhiteFringe = removeSemiTransparentWhiteFringe;
 
@@ -675,11 +818,6 @@ export async function cleanPerfumeAlphaFringe(input: Buffer): Promise<Buffer> {
         continue;
       }
 
-      if (a < 240 && spread <= 24 && avg >= 90 && avg <= 178 && r - b <= 12) {
-        pixels[i + 3] = 0;
-        continue;
-      }
-
       if (a >= 48 && a < 255 && avg < 115 && spread > 28) {
         pixels[i + 3] = 255;
       }
@@ -703,16 +841,18 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
   buf = await stripProductEdgeBackground(buf);
   buf = await stripProductFloorShadow(buf, {
-    shadowStartRatio: 0.58,
-    avgMin: 88,
-    avgMax: 182
+    avgMin: 90,
+    avgMax: 172,
+    maxSpread: 14,
+    maxWarmth: 6
   });
   buf = await dilateProductAlpha(buf, 1);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await cleanPerfumeAlphaFringe(buf);
   buf = await collapseInternalHorizontalGaps(buf);
   buf = await trimTransparentSafe(buf);
-  return cropToVisibleProduct(buf, 8, 0.028);
+  buf = await cropToVisibleProduct(buf, 8, 0.028);
+  return finalizeProductCutout(buf);
 }
 
 /**
@@ -726,7 +866,8 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
   buf = await dilateProductAlpha(buf, 1);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await trimTransparentSafe(buf);
-  return cropToVisibleProduct(buf, 8, 0.032);
+  buf = await cropToVisibleProduct(buf, 8, 0.032);
+  return finalizeProductCutout(buf);
 }
 
 export type FitProductOptions = {
@@ -883,9 +1024,7 @@ export async function fitProductPng(
     ? opts.preparedInput
     : referenceBoxOnly
       ? await preprocessProductBuffer(input)
-      : await trimTransparentSafe(
-          await stripGrayFloorShadow(await stripNearWhiteBackground(input))
-        );
+      : await preprocessProductBuffer(input);
   const meta = await sharp(trimmed).metadata();
   const srcW = meta.width ?? 1;
   const srcH = meta.height ?? 1;
@@ -907,14 +1046,16 @@ export async function fitProductPng(
         kernel: sharp.kernel.lanczos3
       });
       if (profile === "cosmetics") {
-        scaled = scaled.sharpen({ sigma: 0.5, m1: 0.48, m2: 0.2 });
+        scaled = scaled.sharpen(PRODUCT_UPSCALE_SHARPEN);
       }
       const scaledBuf = await scaled.png().toBuffer();
       const left = Math.max(0, Math.round((width - maxW) / 2));
-      buffer = await sharp(scaledBuf)
-        .extract({ left, top: 0, width: maxW, height })
-        .png()
-        .toBuffer();
+      buffer = await finalizeProductCutout(
+        await sharp(scaledBuf)
+          .extract({ left, top: 0, width: maxW, height })
+          .png()
+          .toBuffer()
+      );
       width = maxW;
     } else {
       buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH, profile);
