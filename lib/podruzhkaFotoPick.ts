@@ -4,31 +4,50 @@ import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 export function parseFotoUrlsFromText(text: string): string[] {
   const raw = text.trim();
   if (!raw) return [];
-  const urls = [...raw.matchAll(/https?:\/\/[^\s,;<>"]+/gi)].map((m) => m[0]!.replace(/[),.;]+$/g, ""));
+  const urls = [...raw.matchAll(/https?:\/\/[^\s,;<>"]+/gi)].map((m) =>
+    m[0]!.replace(/[),.;]+$/g, "")
+  );
   return [...new Set(urls.filter(Boolean))];
 }
 
-function scorePerfumeFotoUrl(url: string, index: number, total: number): number {
+/** 900x900 jpg → huge webp (тот же hash на CDN 4stand). */
+export function normalize4standHugeWebp(url: string): string {
+  const m = url.match(
+    /^(https?:\/\/cdnru\.4stand\.com)\/(?:900x900|huge)\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]+)\.(webp|jpe?g|png)(\?.*)?$/i
+  );
+  if (!m) return url;
+  return `${m[1]}/huge/${m[2]}/${m[3]}/${m[4]}.webp`;
+}
+
+export function fotoUrlHashKey(url: string): string {
+  const m = url.match(/\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]{40,})/i);
+  return m ? `${m[1]}/${m[2]}/${m[3]}` : url;
+}
+
+export function dedupeAndNormalizeFotoUrls(urls: string[]): string[] {
+  const byKey = new Map<string, string>();
+  for (const raw of urls) {
+    const t = raw.trim();
+    if (!/^https?:\/\//i.test(t)) continue;
+    const norm = normalize4standHugeWebp(t);
+    const key = fotoUrlHashKey(norm);
+    if (!byKey.has(key)) byKey.set(key, norm);
+  }
+  return [...byKey.values()];
+}
+
+function scorePerfumeFotoUrl(url: string): number {
   const u = url.toLowerCase();
-  let score = 40;
-
-  if (/\/huge\//.test(u)) score += 35;
-  if (/4stand\.com|4partners/i.test(u)) score += 10;
-  if (/\.webp(?:\?|$)/.test(u)) score += 8;
-  if (/\.(?:jpg|jpeg|png)(?:\?|$)/.test(u)) score += 4;
-
-  if (/\/(?:thumb|small|mini|icon|preview)\//.test(u)) score -= 40;
-  if (/thumb|_small|_mini|_icon|preview/i.test(u)) score -= 25;
-  if (/lifestyle|model|banner|slide|packshot-only/i.test(u)) score -= 12;
-
-  /** Частый порядок в фиде 4Partners: 1 — мелко/флакон, 2 — флакон+коробка, 3 — lifestyle */
-  if (total === 3 && index === 1) score += 12;
-  if (total >= 2 && index === 0 && !/\/huge\//.test(u)) score -= 8;
-
+  let score = 20;
+  if (/\/huge\//.test(u)) score += 30;
+  if (/4stand\.com|4partners/i.test(u)) score += 8;
+  if (/\.webp(?:\?|$)/.test(u)) score += 10;
+  if (/\.(?:jpg|jpeg|png)(?:\?|$)/.test(u)) score += 3;
+  if (/\/(?:thumb|small|mini|icon|preview)\//.test(u)) score -= 50;
+  if (/thumb|_small|_mini|_icon|preview|lifestyle|model|banner/i.test(u)) score -= 20;
   return score;
 }
 
-/** Косметика: стандарт уточним; пока — крупное фото без thumb. */
 function scoreCosmeticsFotoUrl(url: string, index: number): number {
   const u = url.toLowerCase();
   let score = 40;
@@ -39,26 +58,57 @@ function scoreCosmeticsFotoUrl(url: string, index: number): number {
   return score;
 }
 
+/** Быстрый выбор по URL (без загрузки картинки). */
 export function pickBestFotoUrl(
   urls: string[],
   profile: PodruzhkaRenderProfile = "perfume"
 ): string {
-  const list = urls.map((u) => u.trim()).filter((u) => /^https?:\/\//i.test(u));
+  const list = dedupeAndNormalizeFotoUrls(urls);
   if (!list.length) return "";
   if (list.length === 1) return list[0]!;
 
-  const scoreFn =
-    profile === "cosmetics" ? scoreCosmeticsFotoUrl : scorePerfumeFotoUrl;
+  if (profile === "cosmetics") {
+    let best = list[0]!;
+    let bestScore = -Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const score = scoreCosmeticsFotoUrl(list[i]!, i);
+      if (score > bestScore) {
+        bestScore = score;
+        best = list[i]!;
+      }
+    }
+    return best;
+  }
 
   let best = list[0]!;
   let bestScore = -Infinity;
-  for (let i = 0; i < list.length; i++) {
-    const url = list[i]!;
-    const score = scoreFn(url, i, list.length);
+  for (const url of list) {
+    const score = scorePerfumeFotoUrl(url);
     if (score > bestScore) {
       bestScore = score;
       best = url;
     }
   }
   return best;
+}
+
+/** Парфюм: визуальный выбор через API (duo на белом → один флакон). */
+export async function pickBestPerfumeFotoAsync(urls: string[]): Promise<string> {
+  const list = dedupeAndNormalizeFotoUrls(urls);
+  if (!list.length) return "";
+  if (list.length === 1) return list[0]!;
+
+  try {
+    const res = await fetch("/api/podruzhka/foto/pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: list })
+    });
+    const data = (await res.json()) as { url?: string; error?: string };
+    if (res.ok && data.url) return data.url;
+  } catch {
+    /* fallback */
+  }
+
+  return pickBestFotoUrl(list, "perfume");
 }

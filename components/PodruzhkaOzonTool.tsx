@@ -13,6 +13,10 @@ import { OzonImageConverter } from "@/components/OzonImageConverter";
 import { PodruzhkaColumnMappingUI } from "@/components/PodruzhkaColumnMappingUI";
 import { PodruzhkaDetectedLayout } from "@/components/PodruzhkaDetectedLayout";
 import { FourPartnersApiKeyField } from "@/components/FourPartnersApiKeyField";
+import {
+  PodruzhkaFeedCsvField,
+  type FeedCsvMergeSource
+} from "@/components/PodruzhkaFeedCsvField";
 import { PodruzhkaExcelExample } from "@/components/PodruzhkaExcelExample";
 import {
   applyAiResults,
@@ -42,6 +46,8 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
+import { resolveFeedFotoUrlAsync } from "@/lib/podruzhkaFeedFoto";
+import { mergeCsvImagesIntoWorkbook } from "@/lib/podruzhkaFeedCsvMerge";
 import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
 import type { PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
@@ -113,6 +119,11 @@ export function PodruzhkaOzonTool() {
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
+  const [feedCsvMergeStats, setFeedCsvMergeStats] = useState<{
+    merged: number;
+    notFound: number;
+    variantRows?: number;
+  } | null>(null);
 
   useEffect(() => {
     if (typeof sessionStorage === "undefined") return;
@@ -154,6 +165,55 @@ export function PodruzhkaOzonTool() {
       return info;
     },
     []
+  );
+
+  const applyFeedCsv = useCallback(
+    async (source: FeedCsvMergeSource) => {
+      if (!wb || !scan) {
+        setError("Сначала загрузите Excel");
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      setProgress("Скачиваем CSV и подтягиваем foto…");
+      try {
+        const res = await fetch("/api/podruzhka/feed-csv/index", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(source)
+        });
+        const data = (await res.json()) as {
+          byArticle?: Record<string, string>;
+          variantRows?: number;
+          error?: string;
+        };
+        if (!res.ok || !data.byArticle) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
+
+        const ws = wb.getWorksheet(scan.sheetName);
+        if (!ws) throw new Error("Лист не найден");
+
+        const byArticle = new Map(Object.entries(data.byArticle));
+        const result = mergeCsvImagesIntoWorkbook(ws, scan, mapping, byArticle);
+        setMapping(result.mapping);
+        const fresh = refreshWorkbookScan(wb, scan) ?? scan;
+        setScan(fresh);
+        syncSheetInfo(wb, fresh, result.mapping);
+        setFeedCsvMergeStats({
+          merged: result.merged,
+          notFound: result.notFound,
+          variantRows: data.variantRows
+        });
+        setMappingConfirmed(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка CSV");
+      } finally {
+        setBusy(false);
+        setProgress(null);
+      }
+    },
+    [wb, scan, mapping, syncSheetInfo]
   );
 
   const confirmMapping = useCallback(() => {
@@ -520,12 +580,15 @@ export function PodruzhkaOzonTool() {
           chunk.map(async (row) => {
             const ai = readAiFromSheet(ws, sheetInfo, row);
             try {
+              const fotoUrl =
+                (await resolveFeedFotoUrlAsync(ws, row.row, mapping, "perfume")) ||
+                row.foto;
               const rendered = await renderPodruzhkaCardClient({
                 brandName: row.brandName,
                 productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
                 model: ai.model,
                 ml: row.ml,
-                fotoUrl: row.foto,
+                fotoUrl,
                 notes: ai.notes
               });
 
@@ -563,7 +626,7 @@ export function PodruzhkaOzonTool() {
               if (!previewUrl) setPreviewUrl(data.url);
               if (!visionNote) {
                 visionNote =
-                  "Рендер: html-figma-v13, новый template-base (петля).";
+                  "Рендер: html-figma-v13. Фото: duo на белом → один флакон (анализ картинки).";
               }
             } catch (e) {
               fail++;
@@ -599,7 +662,7 @@ export function PodruzhkaOzonTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan, previewUrl]);
+  }, [wb, sheetInfo, scan, mapping, previewUrl]);
 
   const renderReady = useMemo(() => {
     if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
@@ -651,8 +714,9 @@ export function PodruzhkaOzonTool() {
         </div>
         <div className={`${homeCardBody} text-sm text-slate-600 space-y-2`}>
           <p>
-            <strong>1.</strong> Загрузить Excel как <strong>образец.xlsx</strong> — колонки
-            распознаются сами (name, brand name, foto, note 1…).
+            <strong>1.</strong> Вставьте ссылку на CSV 4Partners (блок ниже) и загрузите Excel — колонки
+            распознаются сами (name, brand name, foto…). Нажмите{" "}
+            <strong>«Подтянуть foto из CSV»</strong> по артикулу (tpv_… / id).
           </p>
           <p>
             <strong>2.</strong> Два пути: <strong>AI</strong> заполняет model и ноты — или сразу{" "}
@@ -677,10 +741,18 @@ export function PodruzhkaOzonTool() {
 
       <section className={homeCard}>
         <div className={homeCardHeader}>
-          <h2 className={homeCardTitle}>Excel-фид</h2>
+          <h2 className={homeCardTitle}>Excel + CSV 4Partners</h2>
         </div>
         <div className={`${homeCardBody} space-y-4`}>
           <PodruzhkaExcelExample variant="perfume" />
+          <PodruzhkaFeedCsvField
+            storageKeyPrefix="podruzhka_perfume"
+            disabled={busy}
+            busy={busy && Boolean(progress?.includes("CSV"))}
+            mergeEnabled={Boolean(wb && mappingConfirmed)}
+            mergeStats={feedCsvMergeStats}
+            onMerge={applyFeedCsv}
+          />
           <FourPartnersApiKeyField storageKeyPrefix="podruzhka_perfume" />
           <input
             ref={fileRef}

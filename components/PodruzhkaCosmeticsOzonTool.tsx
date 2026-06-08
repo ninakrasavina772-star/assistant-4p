@@ -13,6 +13,10 @@ import { OzonImageConverter } from "@/components/OzonImageConverter";
 import { PodruzhkaCosmeticsColumnMappingUI } from "@/components/PodruzhkaCosmeticsColumnMappingUI";
 import { PodruzhkaCosmeticsDetectedLayout } from "@/components/PodruzhkaCosmeticsDetectedLayout";
 import { FourPartnersApiKeyField } from "@/components/FourPartnersApiKeyField";
+import {
+  PodruzhkaFeedCsvField,
+  type FeedCsvMergeSource
+} from "@/components/PodruzhkaFeedCsvField";
 import { PodruzhkaExcelExample } from "@/components/PodruzhkaExcelExample";
 import {
   applyCosmeticsAiResults,
@@ -47,6 +51,8 @@ import {
   expandCosmeticsAiResults
 } from "@/lib/podruzhkaCosmeticsAi";
 import { PODRUZHKA_COSMETICS_FIELD_LABELS } from "@/lib/podruzhkaCosmeticsColumnMapping";
+import { mergeCsvImagesIntoWorkbook } from "@/lib/podruzhkaFeedCsvMerge";
+import type { PodruzhkaColumnMapping } from "@/lib/podruzhkaColumnMapping";
 import { PodruzhkaInfographicPreview, type InfographicPreviewItem } from "@/components/PodruzhkaInfographicPreview";
 import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
 import type { PodruzhkaAiResult, PodruzhkaFeedRow } from "@/lib/podruzhkaTypes";
@@ -95,6 +101,11 @@ export function PodruzhkaCosmeticsOzonTool() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
+  const [feedCsvMergeStats, setFeedCsvMergeStats] = useState<{
+    merged: number;
+    notFound: number;
+    variantRows?: number;
+  } | null>(null);
   const [textsDone, setTextsDone] = useState(false);
   const [textsStats, setTextsStats] = useState<{
     ok: number;
@@ -158,6 +169,60 @@ export function PodruzhkaCosmeticsOzonTool() {
       return info;
     },
     []
+  );
+
+  const applyFeedCsv = useCallback(
+    async (source: FeedCsvMergeSource) => {
+      if (!wb || !scan) {
+        setError("Сначала загрузите Excel");
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      setProgress("Скачиваем CSV и подтягиваем foto…");
+      try {
+        const res = await fetch("/api/podruzhka/feed-csv/index", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(source)
+        });
+        const data = (await res.json()) as {
+          byArticle?: Record<string, string>;
+          variantRows?: number;
+          error?: string;
+        };
+        if (!res.ok || !data.byArticle) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
+
+        const ws = wb.getWorksheet(scan.sheetName);
+        if (!ws) throw new Error("Лист не найден");
+
+        const byArticle = new Map(Object.entries(data.byArticle));
+        const result = mergeCsvImagesIntoWorkbook(
+          ws,
+          scan,
+          mapping as PodruzhkaColumnMapping,
+          byArticle
+        );
+        setMapping(result.mapping as PodruzhkaCosmeticsColumnMapping);
+        const fresh = refreshWorkbookScan(wb, scan) ?? scan;
+        setScan(fresh);
+        syncSheetInfo(wb, fresh, result.mapping as PodruzhkaCosmeticsColumnMapping);
+        setFeedCsvMergeStats({
+          merged: result.merged,
+          notFound: result.notFound,
+          variantRows: data.variantRows
+        });
+        setMappingConfirmed(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка CSV");
+      } finally {
+        setBusy(false);
+        setProgress(null);
+      }
+    },
+    [wb, scan, mapping, syncSheetInfo]
   );
 
   const confirmMapping = useCallback(() => {
@@ -728,8 +793,9 @@ export function PodruzhkaCosmeticsOzonTool() {
         </div>
         <div className={`${homeCardBody} text-sm text-slate-600 space-y-2`}>
           <p>
-            <strong>1.</strong> Загрузить Excel — колонки фида распознаются сами (name, brand name,
-            foto…).
+            <strong>1.</strong> Вставьте ссылку на CSV 4Partners и загрузите Excel — колонки фида
+            распознаются сами (name, brand name, foto…). Затем{" "}
+            <strong>«Подтянуть foto из CSV»</strong> по артикулу.
           </p>
           <p>
             <strong>2.</strong> AI-категорийный менеджер заполняет <strong>model</strong> и три свойства{" "}
@@ -753,10 +819,18 @@ export function PodruzhkaCosmeticsOzonTool() {
 
       <section className={homeCard}>
         <div className={homeCardHeader}>
-          <h2 className={homeCardTitle}>Excel-фид</h2>
+          <h2 className={homeCardTitle}>Excel + CSV 4Partners</h2>
         </div>
         <div className={`${homeCardBody} space-y-4`}>
           <PodruzhkaExcelExample variant="cosmetics" />
+          <PodruzhkaFeedCsvField
+            storageKeyPrefix="podruzhka_cosmetics"
+            disabled={busy}
+            busy={busy && Boolean(progress?.includes("CSV"))}
+            mergeEnabled={Boolean(wb && mappingConfirmed)}
+            mergeStats={feedCsvMergeStats}
+            onMerge={applyFeedCsv}
+          />
           <FourPartnersApiKeyField storageKeyPrefix="podruzhka_cosmetics" />
           <input
             ref={fileRef}
