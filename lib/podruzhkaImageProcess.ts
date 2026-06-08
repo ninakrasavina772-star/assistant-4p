@@ -4,7 +4,7 @@ import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
 const COSMETICS_SOURCE_MIN_LONG_EDGE = 1400;
-const COSMETICS_UPSCALE_SHARPEN = { sigma: 0.55, m1: 0.55, m2: 0.22 } as const;
+const COSMETICS_UPSCALE_SHARPEN = { sigma: 0.38, m1: 0.42, m2: 0.16 } as const;
 
 /**
  * Убирает только белый фон, связанный с краями кадра (типичный JPEG с Ozon).
@@ -73,6 +73,71 @@ export async function stripEdgeNearWhiteBackground(
     .toBuffer();
 }
 
+/** Белый фон с краёв — для косметики: не заходим в беж/персик (r−b). */
+export async function stripCosmeticsEdgeBackground(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const visited = new Uint8Array(w * h);
+  const queue: number[] = [];
+
+  const isBackgroundWhite = (pi: number): boolean => {
+    const r = pixels[pi]!;
+    const g = pixels[pi + 1]!;
+    const b = pixels[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    const warmth = r - b;
+    if (avg < 251 || spread > 18) return false;
+    if (warmth > 9) return false;
+    if (warmth > 5 && avg < 249) return false;
+    return true;
+  };
+
+  const tryPush = (idx: number) => {
+    if (idx < 0 || idx >= w * h || visited[idx]) return;
+    if (!isBackgroundWhite(idx * 4)) return;
+    queue.push(idx);
+  };
+
+  for (let x = 0; x < w; x++) {
+    tryPush(x);
+    tryPush((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    tryPush(y * w);
+    tryPush(y * w + (w - 1));
+  }
+
+  while (queue.length) {
+    const idx = queue.pop()!;
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    const pi = idx * 4;
+    if (!isBackgroundWhite(pi)) continue;
+    pixels[pi + 3] = 0;
+    const x = idx % w;
+    const y = (idx - x) / w;
+    if (x > 0) tryPush(idx - 1);
+    if (x < w - 1) tryPush(idx + 1);
+    if (y > 0) tryPush(idx - w);
+    if (y < h - 1) tryPush(idx + w);
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 export async function stripNearWhiteBackground(
   input: Buffer,
   threshold = 238
@@ -104,7 +169,8 @@ export async function stripNearWhiteBackground(
 /** Обрезка до bbox непрозрачного товара (белая коробка Dior и т.п. сохраняется). */
 export async function cropToVisibleProduct(
   input: Buffer,
-  alphaThreshold = 14
+  alphaThreshold = 14,
+  padRatio = 0.015
 ): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -133,8 +199,8 @@ export async function cropToVisibleProduct(
 
   if (maxX < minX || maxY < minY) return input;
 
-  const padX = Math.max(2, Math.round((maxX - minX + 1) * 0.015));
-  const padY = Math.max(2, Math.round((maxY - minY + 1) * 0.015));
+  const padX = Math.max(3, Math.round((maxX - minX + 1) * padRatio));
+  const padY = Math.max(3, Math.round((maxY - minY + 1) * padRatio));
   const left = Math.max(0, minX - padX);
   const top = Math.max(0, minY - padY);
   const width = Math.min(w - left, maxX - minX + 1 + padX * 2);
@@ -395,8 +461,8 @@ export async function enhanceSourceForProcessing(
   return pipeline.sharpen(COSMETICS_UPSCALE_SHARPEN).png({ compressionLevel: 6 }).toBuffer();
 }
 
-/** Снять 1–2 px белого/бежевого ореола по контуру (Sisley, светлая упаковка на белом). */
-export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
+/** Снять только полупрозрачный белый ореол — непрозрачный беж/персик товара не трогаем. */
+export async function removeCosmeticsWhiteFringe(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
     .raw()
@@ -406,54 +472,156 @@ export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
   const h = info.height;
   if (!w || !h) return input;
 
-  const src = Buffer.from(data);
-  const out = Buffer.from(data);
-
-  const alphaAt = (x: number, y: number) => src[(y * w + x) * 4 + 3]!;
-  const isOpaque = (x: number, y: number) => alphaAt(x, y) >= 20;
+  const pixels = Buffer.from(data);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
-      const a = src[i + 3]!;
-      if (a < 20) continue;
+      const a = pixels[i + 3]!;
+      if (a >= 250) continue;
 
-      let touchesTransparent = false;
-      for (let dy = -1; dy <= 1 && !touchesTransparent; dy++) {
-        for (let dx = -1; dx <= 1 && !touchesTransparent; dx++) {
-          if (!dx && !dy) continue;
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
-            touchesTransparent = true;
-            continue;
-          }
-          if (!isOpaque(nx, ny)) touchesTransparent = true;
-        }
-      }
-      if (!touchesTransparent) continue;
-
-      const r = src[i]!;
-      const g = src[i + 1]!;
-      const b = src[i + 2]!;
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
 
-      if (a < 255 && avg >= 150 && spread <= 42) {
-        out[i + 3] = 0;
-        continue;
-      }
-      if (a >= 200 && avg >= 178 && spread <= 38) {
-        out[i + 3] = 0;
+      if (a < 250 && avg >= 241 && spread <= 28) {
+        pixels[i + 3] = 0;
       }
     }
   }
 
-  return sharp(out, {
+  return sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
   })
     .png()
     .toBuffer();
+}
+
+/** Тень под товаром — только нейтрально-серая, не беж флакона. */
+export async function stripCosmeticsFloorShadow(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const shadowStart = Math.floor(h * 0.68);
+
+  for (let y = shadowStart; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = pixels[i + 3]!;
+      if (a < 8) continue;
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (spread >= 28) continue;
+      if (avg >= 95 && avg <= 175) {
+        pixels[i + 3] = 0;
+      }
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Вернуть 1 px контура, если flood-fill съел anti-alias. */
+export async function dilateProductAlpha(input: Buffer, radius = 1): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const alpha = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    alpha[i] = pixels[i * 4 + 3]!;
+  }
+
+  const out = new Uint8Array(alpha);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (alpha[idx] >= 128) continue;
+      let maxA = alpha[idx]!;
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          maxA = Math.max(maxA, alpha[ny * w + nx]!);
+        }
+      }
+      if (maxA > alpha[idx]!) out[idx] = maxA;
+    }
+  }
+
+  for (let i = 0; i < w * h; i++) {
+    pixels[i * 4 + 3] = out[i]!;
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Сгладить «лесенку» на контуре cut-out без съедания товара. */
+export async function featherProductAlpha(input: Buffer, sigma = 0.85): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const alphaPlane = Buffer.alloc(w * h);
+  for (let i = 0; i < w * h; i++) {
+    alphaPlane[i] = pixels[i * 4 + 3]!;
+  }
+
+  const blurred = await sharp(alphaPlane, {
+    raw: { width: w, height: h, channels: 1 }
+  })
+    .blur(sigma)
+    .raw()
+    .toBuffer();
+
+  for (let i = 0; i < w * h; i++) {
+    pixels[i * 4 + 3] = blurred[i]!;
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** @deprecated Используйте removeCosmeticsWhiteFringe — старый defringe резал бежевые края. */
+export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
+  return removeCosmeticsWhiteFringe(input);
 }
 
 /** Предобработка PNG перед fit (парфюм). */
@@ -469,17 +637,17 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
 }
 
 /**
- * Косметика на белом (Ozon): апскейл → мягче cut-out → defringe.
- * Светлые флаконы/тубы не «съедаются» порогом 248.
+ * Косметика на белом (Ozon): апскейл → мягкий cut-out → feather контура.
+ * Не вызываем cleanProductAlphaFringe / defringe — они «съедали» бежевые края Sisley.
  */
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
-  buf = await stripEdgeNearWhiteBackground(buf, 252);
-  buf = await stripGrayFloorShadow(buf);
-  buf = await cleanProductAlphaFringe(buf);
-  buf = await defringeLightProductHalo(buf);
+  buf = await stripCosmeticsEdgeBackground(buf);
+  buf = await stripCosmeticsFloorShadow(buf);
+  buf = await dilateProductAlpha(buf, 1);
+  buf = await removeCosmeticsWhiteFringe(buf);
   buf = await trimTransparentSafe(buf);
-  return cropToVisibleProduct(buf);
+  return cropToVisibleProduct(buf, 8, 0.032);
 }
 
 export type FitProductOptions = {
