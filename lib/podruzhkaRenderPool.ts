@@ -37,6 +37,7 @@ export type RunPodruzhkaRenderPoolResult = {
   fail: number;
   batchesSaved: number;
   errors: { row: number; error: string }[];
+  flushErrors: string[];
   layoutVersion?: string;
 };
 
@@ -53,6 +54,7 @@ export async function runPodruzhkaRenderPool<T>(
 
   const allUrls = new Map<number, string>();
   const errors: { row: number; error: string }[] = [];
+  const flushErrors: string[] = [];
   let ok = 0;
   let fail = 0;
   let done = 0;
@@ -82,7 +84,11 @@ export async function runPodruzhkaRenderPool<T>(
     flushChain = flushChain.then(async () => {
       batchesSaved = batchIndex;
       lastBatchLinks = batch.size;
-      await opts.onFlush(batch, batchIndex);
+      try {
+        await opts.onFlush(batch, batchIndex);
+      } catch (e) {
+        flushErrors.push(e instanceof Error ? e.message : "ошибка сохранения партии Excel");
+      }
       emitProgress();
     });
   };
@@ -138,5 +144,5 @@ export async function runPodruzhkaRenderPool<T>(
     await flushChain;
   }
 
-  return { allUrls, ok, fail, batchesSaved, errors, layoutVersion };
+  return { allUrls, ok, fail, batchesSaved, errors, flushErrors, layoutVersion };
 }

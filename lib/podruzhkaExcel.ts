@@ -239,14 +239,30 @@ function readNoteBlock(
   const descCol = cols[`note${i}_desc` as PodruzhkaAiColumnKey];
   if (!mainCol) return { title: "", desc: "" };
 
+  const titleRaw = cellPlainValue(ws.getCell(row, mainCol).value);
+  const descRaw = descCol ? cellPlainValue(ws.getCell(row, descCol).value) : "";
+
   if (descCol) {
-    return {
-      title: cellPlainValue(ws.getCell(row, mainCol).value),
-      desc: cellPlainValue(ws.getCell(row, descCol).value)
-    };
+    if (titleRaw.trim()) {
+      return { title: titleRaw, desc: descRaw };
+    }
+    if (descRaw.trim()) {
+      const parsed = parseNoteCellText(descRaw);
+      return parsed.title.trim() ? parsed : { title: descRaw, desc: "" };
+    }
+    return { title: "", desc: "" };
   }
 
-  return parseNoteCellText(cellPlainValue(ws.getCell(row, mainCol).value));
+  return parseNoteCellText(titleRaw);
+}
+
+/** model из колонки model, иначе product name / name */
+export function resolveModelForRender(model: string, feedRow: PodruzhkaFeedRow): string {
+  const m = model.trim();
+  if (m) return m;
+  const productName = feedRow.productName.trim();
+  if (productName) return productName;
+  return feedRow.name.trim();
 }
 
 function normalizeNoteDesc(s: string): string {
@@ -313,7 +329,7 @@ export type RowRenderEligibility = {
 };
 
 function noteIsComplete(n: PodruzhkaNoteBlock): boolean {
-  return Boolean(n.title.trim() && n.desc.trim());
+  return Boolean(n.title.trim());
 }
 
 /** Можно ли рисовать инфографику (model + 3 ноты; статус «ok» не обязателен) */
@@ -323,24 +339,25 @@ export function getRowRenderEligibility(
   feedRow: PodruzhkaFeedRow
 ): RowRenderEligibility {
   const ai = readAiFromSheet(ws, info, feedRow);
+  const model = resolveModelForRender(ai.model, feedRow);
   const reasons: string[] = [];
 
   if (!feedRow.brandName.trim()) reasons.push("нет brand name");
-  if (!feedRow.foto.trim()) reasons.push("нет foto");
-  if (!ai.model.trim()) reasons.push("нет model");
+  const foto = resolveFeedFotoUrl(ws, feedRow.row, info.mapping, "perfume").trim();
+  if (!foto) reasons.push("нет foto");
+  if (!model) reasons.push("нет model");
   for (let i = 0; i < 3; i++) {
     const n = ai.notes[i]!;
     if (!n.title.trim()) reasons.push(`пустой note ${i + 1}`);
-    else if (!n.desc.trim()) reasons.push(`нет описания в note ${i + 1}`);
   }
 
   const ok =
     reasons.length === 0 &&
-    ai.model.trim().length > 0 &&
+    model.length > 0 &&
     ai.notes.length >= 3 &&
     ai.notes.every(noteIsComplete);
 
-  return { ok, model: ai.model, notes: ai.notes, status: ai.status, reasons };
+  return { ok, model, notes: ai.notes, status: ai.status, reasons };
 }
 
 /** Почему строку нельзя отправить в AI (пустой brand и т.п.) */
@@ -382,6 +399,24 @@ export function countAiReadyRows(
   info: PodruzhkaSheetInfo
 ): number {
   return info.rows.filter((r) => getRowRenderEligibility(ws, info, r).ok).length;
+}
+
+/** Сводка причин, почему строки не готовы к инфографике */
+export function summarizeRenderBlockers(
+  ws: ExcelJS.Worksheet,
+  info: PodruzhkaSheetInfo
+): { reason: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const row of info.rows) {
+    const el = getRowRenderEligibility(ws, info, row);
+    if (el.ok) continue;
+    for (const reason of el.reasons) {
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count);
 }
 
 export function applyAiResults(

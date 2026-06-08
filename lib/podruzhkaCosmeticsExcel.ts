@@ -165,7 +165,7 @@ export function readCosmeticsTextsFromSheet(
 }
 
 function blockComplete(n: PodruzhkaNoteBlock): boolean {
-  return Boolean(n.title.trim() && n.desc.trim());
+  return Boolean(n.title.trim());
 }
 
 export type CosmeticsRowRenderEligibility = {
@@ -185,12 +185,12 @@ export function getCosmeticsRowRenderEligibility(
   const reasons: string[] = [];
 
   if (!feedRow.brandName.trim()) reasons.push("нет brand name");
-  if (!feedRow.foto.trim()) reasons.push("нет foto");
+  const foto = resolveFeedFotoUrl(ws, feedRow.row, info.mapping, "cosmetics").trim();
+  if (!foto) reasons.push("нет foto");
   if (!ai.model.trim()) reasons.push("нет model");
   for (let i = 0; i < 3; i++) {
     const b = ai.benefits[i]!;
     if (!b.title.trim()) reasons.push(`пустой benefit ${i + 1}`);
-    else if (!b.desc.trim()) reasons.push(`нет описания в benefit ${i + 1}`);
   }
 
   const ok =

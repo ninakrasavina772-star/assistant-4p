@@ -34,7 +34,9 @@ import {
   mappingIsComplete,
   readAiFromSheet,
   readProductTypeForCard,
+  resolveModelForRender,
   rowNeedsAiGeneration,
+  summarizeRenderBlockers,
   readWorkbookFromFile,
   refreshWorkbookScan,
   scanWorkbookHeaders,
@@ -48,6 +50,12 @@ import {
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
 import { resolveFeedFotoUrlAsync } from "@/lib/podruzhkaFeedFoto";
 import { mergeCsvImagesIntoWorkbook } from "@/lib/podruzhkaFeedCsvMerge";
+import {
+  buildPodruzhkaErrorRows,
+  buildPodruzhkaErrorsWorkbook,
+  defaultPodruzhkaErrorsDownloadName,
+  type PodruzhkaErrorRow
+} from "@/lib/podruzhkaErrorReport";
 import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
 import type { PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
@@ -120,6 +128,8 @@ export function PodruzhkaOzonTool() {
     noFotoRows: { row: number; brand: string; error: string }[];
     layoutWarnings: { row: number; brand: string; warning: string }[];
     batchesSaved?: number;
+    errorRows?: PodruzhkaErrorRow[];
+    flushErrors?: string[];
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
@@ -144,6 +154,19 @@ export function PodruzhkaOzonTool() {
     a.click();
     URL.revokeObjectURL(a.href);
   }, []);
+
+  const downloadErrorsReport = useCallback(
+    async (rows: PodruzhkaErrorRow[]) => {
+      if (!rows.length) return;
+      try {
+        const blob = await buildPodruzhkaErrorsWorkbook(rows);
+        downloadBlob(blob, defaultPodruzhkaErrorsDownloadName(fileName));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Не удалось сохранить файл ошибок");
+      }
+    },
+    [fileName, downloadBlob]
+  );
 
   const downloadWorkbook = useCallback(
     async (suffix: "notes" | "infographic" | "foto3", part?: number) => {
@@ -282,6 +305,7 @@ export function PodruzhkaOzonTool() {
           fail: info.rows.length - ready,
           written: 0
         });
+        setStep(2);
       } else {
         setNotesDone(false);
         setNotesStats(null);
@@ -527,7 +551,7 @@ export function PodruzhkaOzonTool() {
   const runRender = useCallback(async () => {
     if (!wb || !sheetInfo || !scan) return;
     const wsCheck = wb.getWorksheet(sheetInfo.sheetName);
-    if (!wsCheck || countAiReadyRows(wsCheck, sheetInfo) === 0) return;
+    if (!wsCheck) return;
 
     setBusy(true);
     setError(null);
@@ -561,10 +585,29 @@ export function PodruzhkaOzonTool() {
     }
 
     if (todo.length === 0) {
+      const errorRows = buildPodruzhkaErrorRows(sheetInfo.rows, skipped, []);
+      if (errorRows.length > 0) {
+        await downloadErrorsReport(errorRows);
+      }
+      setRenderStats({
+        ok: 0,
+        fail: 0,
+        noFoto: 0,
+        sampleFotoError: null,
+        visionNote: null,
+        skipped,
+        noFotoRows: [],
+        layoutWarnings,
+        errorRows
+      });
+      setInfographicDone(errorRows.length > 0);
       setError(
-        `Нет строк для картинок (0 из ${sheetInfo.rows.length}). Запустите шаг 1 AI или заполните model и note 1–3 вручную.`
+        errorRows.length > 0
+          ? `Готовых строк: 0. Проблемные позиции (${errorRows.length}) — в файле «…-errors.xlsx».`
+          : `Нет строк для картинок (0 из ${sheetInfo.rows.length}). Заполните model и note 1–3 или foto.`
       );
       setBusy(false);
+      setProgress(null);
       return;
     }
 
@@ -601,7 +644,7 @@ export function PodruzhkaOzonTool() {
             const rendered = await renderPodruzhkaCardClient({
               brandName: row.brandName,
               productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
-              model: ai.model,
+              model: resolveModelForRender(ai.model, row),
               ml: row.ml,
               fotoUrl,
               notes: ai.notes
@@ -658,6 +701,11 @@ export function PodruzhkaOzonTool() {
         error: e.error
       }));
 
+      const errorRows = buildPodruzhkaErrorRows(sheetInfo.rows, skipped, noFotoRows);
+      if (errorRows.length > 0) {
+        await downloadErrorsReport(errorRows);
+      }
+
       setRenderStats({
         ok: poolResult.ok,
         fail: poolResult.fail,
@@ -667,24 +715,43 @@ export function PodruzhkaOzonTool() {
         skipped,
         noFotoRows,
         layoutWarnings,
-        batchesSaved: poolResult.batchesSaved
+        batchesSaved: poolResult.batchesSaved,
+        errorRows,
+        flushErrors: poolResult.flushErrors.length ? poolResult.flushErrors : undefined
       });
-      setInfographicDone(true);
+      setInfographicDone(poolResult.ok > 0 || poolResult.batchesSaved > 0 || errorRows.length > 0);
+
+      if (errorRows.length > 0 && poolResult.ok > 0) {
+        setError(
+          `Готово: ${poolResult.ok}, ошибок: ${errorRows.length}. Проблемные позиции — в файле «…-errors.xlsx».`
+        );
+      } else if (poolResult.flushErrors.length > 0) {
+        setError(
+          `Часть партий Excel не сохранилась. Успешных карточек: ${poolResult.ok}. Скачайте Excel вручную.`
+        );
+      } else if (errorRows.length > 0 && poolResult.ok === 0) {
+        setError(
+          `Все попытки рендера завершились ошибкой (${errorRows.length}). Список — в «…-errors.xlsx».`
+        );
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка инфографики");
+      setError(
+        `${e instanceof Error ? e.message : "Ошибка инфографики"}. Уже готовые карточки — в скачанных Excel-партиях.`
+      );
     } finally {
       setBusy(false);
       setProgress(null);
     }
-  }, [wb, sheetInfo, scan, mapping, downloadWorkbook]);
+  }, [wb, sheetInfo, scan, mapping, downloadWorkbook, downloadErrorsReport]);
 
   const renderReady = useMemo(() => {
-    if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0 };
+    if (!wb || !sheetInfo || !scan) return { ready: 0, total: 0, blockers: [] as { reason: string; count: number }[] };
     const ws = wb.getWorksheet(sheetInfo.sheetName);
-    if (!ws) return { ready: 0, total: sheetInfo.rows.length };
+    if (!ws) return { ready: 0, total: sheetInfo.rows.length, blockers: [] };
     return {
       ready: countAiReadyRows(ws, sheetInfo),
-      total: sheetInfo.rows.length
+      total: sheetInfo.rows.length,
+      blockers: summarizeRenderBlockers(ws, sheetInfo)
     };
   }, [wb, sheetInfo, scan, notesStats, infographicDone]);
 
@@ -703,7 +770,7 @@ export function PodruzhkaOzonTool() {
 
   const headerOptions = scan?.headers ?? [];
   const step1Ready = Boolean(wb && mappingConfirmed && sheetInfo);
-  const canRenderInfographic = step1Ready && renderReady.ready > 0;
+  const canOpenInfographicStep = step1Ready;
 
   const stepBtn = (n: Step, label: string, enabled: boolean) => (
     <button
@@ -747,7 +814,7 @@ export function PodruzhkaOzonTool() {
           </p>
           <div className="flex flex-wrap gap-2 pt-2">
             {stepBtn(1, "1. Ноты (AI)", Boolean(wb))}
-            {stepBtn(2, "2. Инфографика", canRenderInfographic)}
+            {stepBtn(2, "2. Инфографика", canOpenInfographicStep)}
             {stepBtn(3, "3. Foto 3", infographicDone)}
           </div>
         </div>
@@ -805,20 +872,37 @@ export function PodruzhkaOzonTool() {
                 <button
                   type="button"
                   className={homeBtnPrimary}
-                  disabled={busy || renderReady.ready === 0}
-                  title={
-                    renderReady.ready === 0
-                      ? "Сначала заполните model и note 1–3 (AI или вручную в Excel)"
-                      : undefined
-                  }
+                  disabled={busy}
                   onClick={() => setStep(2)}
                 >
                   2. Сразу генерировать инфографику
                 </button>
               </div>
-              {renderReady.ready === 0 ? (
+              {renderReady.ready === 0 && renderReady.blockers.length > 0 ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 space-y-1">
+                  <p className="font-semibold">Почему 0 готовых строк:</p>
+                  <ul className="list-inside list-disc">
+                    {renderReady.blockers.map((b) => (
+                      <li key={b.reason}>
+                        {b.reason} — {b.count} из {renderReady.total}
+                      </li>
+                    ))}
+                  </ul>
+                  {renderReady.blockers.some((b) => b.reason === "нет foto") ? (
+                    <p>
+                      Нажмите <strong>«Подтянуть foto из CSV»</strong> выше — без foto инфографика
+                      не соберётся.
+                    </p>
+                  ) : null}
+                  <p>
+                    Кнопка ниже всё равно откроет шаг 2 — можно запустить, ошибки попадут в файл
+                    «…-errors.xlsx».
+                  </p>
+                </div>
+              ) : renderReady.ready === 0 ? (
                 <p className="text-xs text-amber-900">
-                  Нет готовых строк — запустите AI или заполните model, note 1–3 и note 1 (2)… в Excel.
+                  Пока 0 готовых строк — откройте шаг 2 и запустите: что можно — обработается,
+                  остальное — в файл ошибок.
                 </p>
               ) : null}
             </div>
@@ -1015,12 +1099,17 @@ export function PodruzhkaOzonTool() {
         </section>
       )}
 
-      {canRenderInfographic && step === 2 ? (
+      {canOpenInfographicStep && step === 2 ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>Шаг 2 — инфографика</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
+            <p className="text-sm text-slate-600">
+              Готово к рендеру: <strong>{renderReady.ready}</strong> из{" "}
+              <strong>{renderReady.total}</strong>. Ошибочные позиции не останавливают процесс —
+              после завершения скачается файл <strong>…-errors.xlsx</strong>.
+            </p>
             <p className="text-xs text-slate-500">
               Параллельно до <strong>{PODRUZHKA_RENDER_PARALLEL}</strong> карточек. Каждые{" "}
               <strong>{PODRUZHKA_RENDER_FLUSH_EVERY}</strong> готовых ссылок — автоматически
@@ -1114,6 +1203,16 @@ export function PodruzhkaOzonTool() {
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img src={previewUrl} alt="Превью" className="max-w-xs rounded-lg border" />
                 ) : null}
+                {renderStats.errorRows && renderStats.errorRows.length > 0 ? (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-amber-700 bg-white px-4 py-2 text-sm font-semibold text-amber-950"
+                    disabled={busy}
+                    onClick={() => void downloadErrorsReport(renderStats.errorRows!)}
+                  >
+                    Скачать файл ошибок ({renderStats.errorRows.length})
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className={homeBtnPrimary}
@@ -1147,7 +1246,7 @@ export function PodruzhkaOzonTool() {
         </section>
       ) : null}
 
-      {canRenderInfographic && step === 3 && infographicDone && (
+      {canOpenInfographicStep && step === 3 && infographicDone && (
         <OzonImageConverter embedded pipeline={pipeline} />
       )}
     </div>

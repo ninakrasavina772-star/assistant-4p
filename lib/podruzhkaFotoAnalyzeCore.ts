@@ -77,14 +77,21 @@ export function analyzePerfumePixels(
 
   /** Два отдельных предмета (флакон + коробка), между ними «воздух». */
   const twoProducts =
-    peakCount >= 2 && gapRatio >= 0.06 && leftShare >= 0.2 && rightShare >= 0.25;
+    peakCount >= 2 &&
+    gapRatio >= 0.025 &&
+    leftShare >= 0.18 &&
+    rightShare >= 0.22;
+
+  /** Тени 4stand считаются «товаром» — whiteRatio низкий, productRatio высокий. */
+  const shadowHeavyPackshot = whiteRatio < 0.42 && peakCount >= 2;
 
   const duoWhite =
     twoProducts &&
-    whiteRatio >= 0.45 &&
-    whiteRatio <= 0.88 &&
-    productRatio >= 0.08 &&
-    productRatio <= 0.5;
+    whiteRatio >= 0.18 &&
+    whiteRatio <= 0.9 &&
+    (shadowHeavyPackshot
+      ? productRatio >= 0.12 && productRatio <= 0.78
+      : productRatio >= 0.08 && productRatio <= 0.58);
 
   const singleWhite =
     !duoWhite &&

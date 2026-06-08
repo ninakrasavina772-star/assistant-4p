@@ -180,7 +180,7 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
   if (!w || !h) return input;
 
   const pixels = Buffer.from(data);
-  const shadowStart = Math.floor(h * 0.72);
+  const shadowStart = Math.floor(h * 0.58);
 
   for (let y = shadowStart; y < h; y++) {
     const rowWeight = (y - shadowStart) / Math.max(1, h - shadowStart);
@@ -193,9 +193,9 @@ export async function stripGrayFloorShadow(input: Buffer): Promise<Buffer> {
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (spread >= 32) continue;
+      if (spread >= 36) continue;
       // Нейтральная серая тень (сильнее к низу кадра)
-      if (avg >= 82 && avg <= 218 && (rowWeight > 0.15 || avg >= 110)) {
+      if (avg >= 78 && avg <= 228 && (rowWeight > 0.08 || avg >= 100)) {
         pixels[i + 3] = 0;
       }
     }
@@ -238,13 +238,14 @@ export async function cleanProductAlphaFringe(input: Buffer): Promise<Buffer> {
         continue;
       }
 
-      // Полупрозрачная серая contact-тень — убираем, не делаем непрозрачной
-      if (a < 248 && spread <= 34 && avg >= 88 && avg <= 225) {
+      // Полупрозрачная серая/белая contact-тень и ореол cut-out — убираем
+      if (a < 248 && spread <= 38 && avg >= 78) {
         pixels[i + 3] = 0;
         continue;
       }
 
-      if (a >= 32 && a < 255) {
+      // Тёмные края товара — оставляем непрозрачными; светлый полупрозрачный ореол не «заливаем»
+      if (a >= 48 && a < 255 && avg < 115 && spread > 28) {
         pixels[i + 3] = 255;
       }
     }
@@ -269,9 +270,7 @@ async function resizeProductForCard(
     fit: "inside",
     kernel: sharp.kernel.lanczos3
   });
-  if (scaleUp) {
-    pipeline = pipeline.sharpen({ sigma: 0.55, m1: 0.45, m2: 0.22 });
-  }
+  pipeline = pipeline.sharpen({ sigma: scaleUp ? 0.55 : 0.35, m1: 0.45, m2: 0.2 });
   return pipeline.png({ compressionLevel: 6 }).toBuffer();
 }
 
