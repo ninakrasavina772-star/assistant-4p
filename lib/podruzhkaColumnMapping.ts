@@ -7,6 +7,7 @@ export type PodruzhkaFieldKey =
   | "productName"
   | "name"
   | "foto"
+  | "fotoImages"
   | "ml"
   | "id"
   | "foto2";
@@ -16,7 +17,8 @@ export const PODRUZHKA_FIELD_LABELS: Record<PodruzhkaFieldKey, string> = {
   productType: "Тип товара (серый текст)",
   productName: "Название аромата в фиде",
   name: "Полное название (для AI)",
-  foto: "Фото товара — исходная ссылка",
+  foto: "Фото товара — одна ссылка",
+  fotoImages: "Несколько ссылок на фото (CSV 4Partners)",
   ml: "Объём (мл)",
   id: "ID товара (необязательно)",
   foto2: "foto 2 — ссылка на готовую инфографику"
@@ -28,7 +30,9 @@ export const PODRUZHKA_FIELD_HINTS: Record<PodruzhkaFieldKey, string> = {
   productType: "Серая строка на карточке (product_type из Excel)",
   productName: "Колонка product name в вашем фиде",
   name: "Колонка name — по ней AI ищет аромат в интернете",
-  foto: "Ссылка на JPG/PNG товара (текст или гиперссылка в ячейке)",
+  foto: "Одна ссылка JPG/PNG/WebP (если нет колонки с несколькими фото)",
+  fotoImages:
+    "Из фида 4Partners: «Изображения варианта» / «Изображение» — несколько URL в ячейке; для парфюма выберем флакон+коробку",
   ml: "Например 60 или 100 мл — внизу карточки",
   id: "Только для вашего учёта",
   foto2: "Если пусто — программа создаст столбец «foto 2»"
@@ -41,6 +45,7 @@ export const SOURCE_EXCEL_FIELDS: PodruzhkaFieldKey[] = [
   "productName",
   "name",
   "foto",
+  "fotoImages",
   "ml",
   "id",
   "foto2"
@@ -81,7 +86,15 @@ const GUESS: Record<PodruzhkaFieldKey, string[]> = {
   productType: ["product_type", "product type", "тип", "описание товара"],
   productName: ["product name", "product_name", "название аромата"],
   name: ["name", "название", "title"],
-  foto: ["foto", "фото", "image", "картинка"],
+  foto: ["foto", "фото", "image url", "картинка"],
+  fotoImages: [
+    "изображения варианта",
+    "variant images",
+    "product images",
+    "изображение",
+    "изображения",
+    "images"
+  ],
   ml: ["ml", "мл", "объем", "объём", "volume"],
   id: ["id", "id товара", "sku", "tpv", "артикул", "offer id"],
   foto2: ["foto 2", "foto2", "фото 2"]
@@ -111,6 +124,13 @@ export function guessColumnMapping(headers: ExcelHeaderOption[]): PodruzhkaColum
 
 export function mappingIsComplete(m: PodruzhkaColumnMapping): string | null {
   for (const k of REQUIRED_FEED_FIELDS) {
+    if (k === "foto") {
+      const hasFoto = (m.foto && m.foto > 0) || (m.fotoImages && m.fotoImages > 0);
+      if (!hasFoto) {
+        return "Выберите колонку foto или «Несколько ссылок на фото» (Изображения варианта)";
+      }
+      continue;
+    }
     if (!m[k] || m[k]! < 1) {
       return `Выберите колонку: ${PODRUZHKA_FIELD_LABELS[k]}`;
     }

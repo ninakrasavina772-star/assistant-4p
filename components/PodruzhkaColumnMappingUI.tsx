@@ -71,7 +71,11 @@ export function PodruzhkaColumnMappingUI({
                 <td className="px-3 py-3 align-top">
                   <span className="font-medium text-slate-800">
                     {PODRUZHKA_FIELD_LABELS[field]}
-                    {REQUIRED_FEED_FIELDS.includes(field) ? (
+                    {field === "foto" ? (
+                      !mapping.foto && !mapping.fotoImages ? (
+                        <span className="text-red-600"> *</span>
+                      ) : null
+                    ) : REQUIRED_FEED_FIELDS.includes(field) ? (
                       <span className="text-red-600"> *</span>
                     ) : null}
                   </span>

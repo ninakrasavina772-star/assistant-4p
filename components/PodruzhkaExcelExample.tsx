@@ -23,9 +23,14 @@ const PERFUME_FEED: ExampleCol[] = [
   { header: "ml", sample: "100", required: true, note: "внизу карточки" },
   {
     header: "foto",
-    sample: "https://…/product.jpg",
+    sample: "https://…/one.jpg",
+    note: "одна ссылка — или см. «Изображения варианта»"
+  },
+  {
+    header: "Изображения варианта",
+    sample: "https://…/a.webp https://…/b.webp https://…/c.webp",
     required: true,
-    note: "ссылка JPG/PNG"
+    note: "из CSV 4Partners — выберем флакон+коробку (/huge/)"
   },
   { header: "id", sample: "12345678", note: "id товара 4Partners — необязательно" }
 ];
@@ -48,9 +53,14 @@ const COSMETICS_FEED: ExampleCol[] = [
   { header: "name", sample: "DIOR Show Mono 001 Backstage", required: true },
   {
     header: "foto",
-    sample: "https://…/product.jpg",
+    sample: "https://…/one.jpg",
+    note: "одна ссылка — или «Изображения варианта»"
+  },
+  {
+    header: "Изображения варианта",
+    sample: "https://…/a.webp https://…/b.webp",
     required: true,
-    note: "исходное фото"
+    note: "из CSV — лучшее фото для косметики (стандарт уточним)"
   },
   { header: "product name", sample: "Show Mono", note: "необязательно" },
   { header: "id", sample: "tpv_482910", note: "артикул вариации — необязательно" }
@@ -123,12 +133,13 @@ export function PodruzhkaExcelExample({ variant }: Props) {
             {isPerfume ? (
               <>
                 В файле до AI нужны колонки фида (<span className="text-rose-600">*</span>).
-                Столбцы model и note 1–3 можно заполнить AI или вручную — тогда сразу шаг 2.
+                Фото: колонка <strong>foto</strong> или <strong>Изображения варианта</strong> из CSV
+                (несколько ссылок — подберём лучшую). Model и note 1–3 — AI или вручную.
               </>
             ) : (
               <>
-                В файле до AI нужны brand name, product_type, name и foto. Объём (ml) на карточке
-                не показывается. benefit 1–3 — через AI или вручную.
+                Нужны brand name, product_type, name и фото (foto или «Изображения варианта» из
+                CSV). Объём не показывается. benefit 1–3 — AI или вручную.
               </>
             )}
           </p>

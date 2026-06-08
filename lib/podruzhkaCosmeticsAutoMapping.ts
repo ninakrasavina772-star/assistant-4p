@@ -13,6 +13,13 @@ const TEMPLATE_HEADERS: Record<PodruzhkaCosmeticsFieldKey, string[]> = {
   productType: ["product_type", "product type"],
   productName: ["product name"],
   foto: ["foto"],
+  fotoImages: [
+    "изображения варианта",
+    "variant images",
+    "product images",
+    "изображение",
+    "изображения"
+  ],
   ml: ["ml"],
   id: ["id", "sku", "offer id"],
   foto2: ["foto 2", "foto2"]
@@ -49,6 +56,7 @@ export function autoDetectCosmeticsMapping(
     "brandName",
     "productType",
     "foto",
+    "fotoImages",
     "foto2",
     "id"
   ];

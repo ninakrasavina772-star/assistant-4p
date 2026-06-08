@@ -13,6 +13,13 @@ const TEMPLATE_HEADERS: Record<PodruzhkaFieldKey, string[]> = {
   productType: ["product_type", "product type"],
   productName: ["product name"],
   foto: ["foto"],
+  fotoImages: [
+    "изображения варианта",
+    "variant images",
+    "product images",
+    "изображение",
+    "изображения"
+  ],
   ml: ["ml"],
   id: ["id", "sku", "offer id"],
   foto2: ["foto 2", "foto2"]
@@ -63,6 +70,7 @@ export function autoDetectPodruzhkaMapping(headers: ExcelHeaderOption[]): AutoDe
     "productType",
     "productName",
     "foto",
+    "fotoImages",
     "ml",
     "foto2",
     "id"

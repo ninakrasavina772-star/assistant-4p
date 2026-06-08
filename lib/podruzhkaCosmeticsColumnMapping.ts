@@ -6,6 +6,7 @@ export type PodruzhkaCosmeticsFieldKey =
   | "productName"
   | "name"
   | "foto"
+  | "fotoImages"
   | "ml"
   | "id"
   | "foto2";
@@ -15,7 +16,8 @@ export const PODRUZHKA_COSMETICS_FIELD_LABELS: Record<PodruzhkaCosmeticsFieldKey
   productType: "Тип товара (серый текст)",
   productName: "Название продукта (необязательно)",
   name: "Полное название SKU (name)",
-  foto: "Фото товара — исходная ссылка",
+  foto: "Фото товара — одна ссылка",
+  fotoImages: "Несколько ссылок на фото (CSV 4Partners)",
   ml: "Объём — не нужен для косметики",
   id: "ID товара (необязательно)",
   foto2: "foto 2 — ссылка на готовую инфографику"
@@ -26,7 +28,8 @@ export const PODRUZHKA_COSMETICS_FIELD_HINTS: Record<PodruzhkaCosmeticsFieldKey,
   productType: "Серая строка на карточке (product_type из Excel)",
   productName: "Колонка product name (если нет — берём name)",
   name: "Колонка name — полное название SKU",
-  foto: "Ссылка на JPG/PNG товара",
+  foto: "Одна ссылка JPG/PNG/WebP",
+  fotoImages: "«Изображения варианта» из CSV — выберем лучшее (стандарт косметики уточним)",
   ml: "Не используется на карточке косметики (необязательно)",
   id: "Только для вашего учёта",
   foto2: "Если пусто — программа создаст столбец «foto 2»"
@@ -37,6 +40,7 @@ export const COSMETICS_SOURCE_EXCEL_FIELDS: PodruzhkaCosmeticsFieldKey[] = [
   "productType",
   "name",
   "foto",
+  "fotoImages",
   "productName",
   "id",
   "foto2"
@@ -60,7 +64,15 @@ const GUESS: Record<PodruzhkaCosmeticsFieldKey, string[]> = {
   productType: ["product_type", "product type", "тип", "категория"],
   productName: ["product name", "product_name", "название продукта"],
   name: ["name", "название", "title"],
-  foto: ["foto", "фото", "image", "картинка"],
+  foto: ["foto", "фото", "image url", "картинка"],
+  fotoImages: [
+    "изображения варианта",
+    "variant images",
+    "product images",
+    "изображение",
+    "изображения",
+    "images"
+  ],
   ml: ["ml", "мл", "г", "gr", "объем", "объём", "volume"],
   id: ["id", "id товара", "sku", "tpv", "tpv_", "артикул", "артикул вариации"],
   foto2: ["foto 2", "foto2", "фото 2"]
@@ -92,6 +104,13 @@ export function guessCosmeticsColumnMapping(
 
 export function cosmeticsMappingIsComplete(m: PodruzhkaCosmeticsColumnMapping): string | null {
   for (const k of COSMETICS_REQUIRED_FEED_FIELDS) {
+    if (k === "foto") {
+      const hasFoto = (m.foto && m.foto > 0) || (m.fotoImages && m.fotoImages > 0);
+      if (!hasFoto) {
+        return "Выберите колонку foto или «Несколько ссылок на фото» (Изображения варианта)";
+      }
+      continue;
+    }
     if (!m[k] || m[k]! < 1) {
       return `Выберите колонку: ${PODRUZHKA_COSMETICS_FIELD_LABELS[k]}`;
     }

@@ -21,6 +21,7 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { sanitizeBenefitTitle } from "@/lib/podruzhkaCosmeticsAi";
+import { resolveFeedFotoUrl } from "@/lib/podruzhkaFeedFoto";
 import type { PodruzhkaFeedRow, PodruzhkaNoteBlock, PodruzhkaAiResult } from "@/lib/podruzhkaTypes";
 import {
   autoDetectCosmeticsMapping,
@@ -316,7 +317,7 @@ export function buildCosmeticsSheetFromMapping(
 
   for (let row = scan.headerRow + 1; row <= lastRow; row++) {
     const brandName = cellPlainValue(ws.getCell(row, brandCol).value);
-    const foto = m.foto ? cellAsUrlFromCell(ws.getCell(row, m.foto)) : "";
+    const foto = resolveFeedFotoUrl(ws, row, m, "cosmetics");
     if (!brandName && !foto) continue;
 
     rows.push({

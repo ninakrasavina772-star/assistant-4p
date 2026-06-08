@@ -12,6 +12,7 @@ import {
 import { OzonImageConverter } from "@/components/OzonImageConverter";
 import { PodruzhkaColumnMappingUI } from "@/components/PodruzhkaColumnMappingUI";
 import { PodruzhkaDetectedLayout } from "@/components/PodruzhkaDetectedLayout";
+import { FourPartnersApiKeyField } from "@/components/FourPartnersApiKeyField";
 import { PodruzhkaExcelExample } from "@/components/PodruzhkaExcelExample";
 import {
   applyAiResults,
@@ -680,6 +681,7 @@ export function PodruzhkaOzonTool() {
         </div>
         <div className={`${homeCardBody} space-y-4`}>
           <PodruzhkaExcelExample variant="perfume" />
+          <FourPartnersApiKeyField storageKeyPrefix="podruzhka_perfume" />
           <input
             ref={fileRef}
             type="file"

@@ -23,6 +23,7 @@ import {
   isFoto3Header,
   type Foto2ColumnInfo
 } from "@/lib/ozonImageExcel";
+import { resolveFeedFotoUrl } from "@/lib/podruzhkaFeedFoto";
 
 export { readWorkbookFromFile, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 export type { PodruzhkaSheetInfo, PodruzhkaColumnMapping, ExcelHeaderOption } from "@/lib/podruzhkaColumnMapping";
@@ -108,7 +109,7 @@ export function buildSheetFromMapping(
 
   for (let row = scan.headerRow + 1; row <= lastRow; row++) {
     const brandName = cellPlainValue(ws.getCell(row, brandCol).value);
-    const foto = m.foto ? cellAsUrlFromCell(ws.getCell(row, m.foto)) : "";
+    const foto = resolveFeedFotoUrl(ws, row, m, "perfume");
     if (!brandName && !foto) continue;
 
     rows.push({
