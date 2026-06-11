@@ -140,6 +140,9 @@ export async function drawPodruzhkaCard(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
+  /* Товар под текстом — непрозрачный bbox foto не затирает надписи слева */
+  ctx.drawImage(productImg, foto.drawX, foto.drawY, foto.width, foto.height);
+
   const header = computeHeaderStack(measureFromCanvas2D(ctx), {
     brandName: data.brandName,
     productType: data.productType,
@@ -208,8 +211,6 @@ export async function drawPodruzhkaCard(
     ctx.textBaseline = "top";
     ctx.fillText(ml, F.ml.x, F.ml.y);
   }
-
-  ctx.drawImage(productImg, foto.drawX, foto.drawY, foto.width, foto.height);
 
   return { notesTruncated: notesLayout.truncated };
 }

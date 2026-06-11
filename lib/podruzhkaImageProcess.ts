@@ -73,6 +73,13 @@ export async function stripEdgeNearWhiteBackground(
     .toBuffer();
 }
 
+/** Ozon packshot: сначала серо-белый (#F5F5F5) с краёв, затем строгий белый. */
+async function stripProductPackshotBackground(input: Buffer): Promise<Buffer> {
+  let buf = await stripEdgeNearWhiteBackground(input, 236);
+  buf = await stripProductEdgeBackground(buf);
+  return buf;
+}
+
 /** Белый фон с краёв: не заходим в тёплые/бежевые края товара (r−b). */
 export async function stripProductEdgeBackground(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
@@ -711,9 +718,9 @@ export async function removeBoundaryWhiteHalo(input: Buffer): Promise<Buffer> {
       const b = src[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (avg >= 249 && spread <= 14 && r - b <= 8) {
+      if (avg >= 242 && spread <= 16 && r - b <= 8) {
         pixels[i + 3] = 0;
-      } else if (src[i + 3]! < 255 && avg >= 246 && spread <= 16 && r - b <= 8) {
+      } else if (src[i + 3]! < 255 && avg >= 238 && spread <= 18 && r - b <= 8) {
         pixels[i + 3] = 0;
       }
     }
@@ -839,7 +846,7 @@ export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
 /** Предобработка PNG перед fit (парфюм): апскейл → мягкий cut-out → duo-gap. */
 export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
-  buf = await stripProductEdgeBackground(buf);
+  buf = await stripProductPackshotBackground(buf);
   buf = await stripProductFloorShadow(buf, {
     avgMin: 90,
     avgMax: 172,
@@ -861,7 +868,7 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
  */
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
-  buf = await stripProductEdgeBackground(buf);
+  buf = await stripProductPackshotBackground(buf);
   buf = await stripCosmeticsFloorShadow(buf);
   buf = await dilateProductAlpha(buf, 1);
   buf = await removeSemiTransparentWhiteFringe(buf);
