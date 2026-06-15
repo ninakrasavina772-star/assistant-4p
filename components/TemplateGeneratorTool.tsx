@@ -323,27 +323,53 @@ export function TemplateGeneratorTool() {
     setError("");
     setCsvLoading(true);
     try {
-      const res = await fetch("/api/template-generator/fetch-csv", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      });
-      const j = (await res.json()) as { text?: string; label?: string; error?: string };
-      if (!res.ok) {
-        throw new Error(j.error ?? `HTTP ${res.status}`);
+      let csvText: string | null = null;
+      let label = url;
+
+      // Сначала — напрямую из браузера (для больших фидов и когда у вас открыта сессия 4Partners)
+      try {
+        const direct = await fetch(url, { redirect: "follow" });
+        if (direct.ok) {
+          csvText = await direct.text();
+          try {
+            label = new URL(url).pathname.split("/").pop() || label;
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* CORS или сеть — попробуем через сервер */
       }
-      const table = parseCsvText(j.text ?? "");
+
+      if (!csvText?.trim()) {
+        const res = await fetch("/api/template-generator/fetch-csv", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        const j = (await res.json()) as { text?: string; label?: string; error?: string };
+        if (!res.ok) {
+          throw new Error(
+            j.error ??
+              "Не удалось загрузить по ссылке. Скачайте CSV в браузере и нажмите «Загрузить файл»."
+          );
+        }
+        csvText = j.text ?? "";
+        label = j.label ?? label;
+      }
+
+      const table = parseCsvText(csvText);
       if (!table.headers.length) {
         throw new Error("CSV пустой или не распознан");
       }
-      const { map } = await applyCsvTable(table, j.label ?? url);
+      const { map } = await applyCsvTable(table, label);
       void eventReply(
-        `Загрузила CSV по ссылке: ${j.label ?? url} (${table.rows.length} строк).`,
+        `Загрузила CSV по ссылке: ${label} (${table.rows.length} строк).`,
         {
           templateFile: fileName || undefined,
           sheetName: sheetName || undefined,
           rowCount: scan?.dataRowCount,
-          csvLabel: j.label ?? url,
+          csvLabel: label,
           csvRowCount: table.rows.length,
           skuColumn: map.skuColumn,
           enabledColCount: Object.values(enabledCols).filter(Boolean).length
@@ -661,6 +687,8 @@ export function TemplateGeneratorTool() {
               <p className="text-sm font-semibold text-slate-800">CSV-фид (опционально)</p>
               <p className="text-xs text-slate-600">
                 Матчинг по артикулу вариации — «Артикул товара (SKU)». Можно файлом или ссылкой.
+                Большие фиды 4Partners (~80+ МБ) — откройте ссылку в браузере, сохраните файл и
+                загрузите кнопкой «Загрузить файл».
               </p>
               <input
                 ref={csvRef}
