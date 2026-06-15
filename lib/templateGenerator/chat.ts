@@ -1,3 +1,6 @@
+import type { CsvColumnMap } from "@/lib/templateGenerator/types";
+import type { CsvTable } from "@/lib/templateGenerator/csvIndex";
+
 export type ChatRole = "user" | "assistant";
 
 export type ChatMessage = {
@@ -5,6 +8,20 @@ export type ChatMessage = {
   role: ChatRole;
   content: string;
   at: number;
+};
+
+export type TemplateColumnBrief = {
+  header: string;
+  hint: string;
+  enabled: boolean;
+  readonly: boolean;
+};
+
+export type TemplateProductSample = {
+  sku: string;
+  name: string;
+  brand: string;
+  preview: Record<string, string>;
 };
 
 export type TemplateChatContext = {
@@ -19,20 +36,80 @@ export type TemplateChatContext = {
   photoEnabled?: boolean;
   photoMin?: number;
   photoTarget?: number;
+  columns?: TemplateColumnBrief[];
+  productSamples?: TemplateProductSample[];
+  uniqueBrands?: string[];
+  csvHeaders?: string[];
+  csvSampleRows?: Record<string, string>[];
+  csvMappedColumns?: Record<string, string>;
 };
 
 const CHAT_SYSTEM = `Ты ассистент «Генератор шаблонов» для контент-отдела маркетплейса Ozon.
 
+ВАЖНО — данные файлов уже в контексте ниже:
+- Если есть «Примеры товаров из шаблона» — ты ВИДИШЬ SKU, бренды и названия. НЕ проси пользователя «указать бренд или продукт».
+- Если есть CSV — используй заголовки и примеры строк из фида.
+- Если шаблон не загружен — скажи загрузить Excel (.xlsx) жёлтой кнопкой сверху.
+
 Твоя роль:
-- Общаться с контент-менеджером на русском, кратко и по делу.
-- Запоминать ВСЕ указания из диалога — они станут заданием при массовом заполнении Excel.
-- Когда загружают файлы — подтверди что получил, перечисли факты (вкладка, строки, CSV) и спроси что делать дальше.
-- Подсказывай: ниже на странице — таблица столбцов с галочками и кнопка «Запустить AI для всех строк».
-- Не выдумывай что заполнение уже запущено — запуск только по кнопке пользователя.
-- Можешь рекомендовать какие столбцы включить (описание, ноты, тип, пол и т.д.), стиль текста, проверку по официальному сайту бренда.
-- Не проси прислать файлы повторно, если в контексте они уже есть.
+- Общаться на русском, кратко и по делу.
+- Запоминать указания из диалога — они станут заданием при массовом заполнении.
+- Рекомендовать столбцы, стиль описания, проверку по официальному сайту бренда.
+- Напоминать: галочки у столбцов и кнопка «Запустить AI для всех строк» ниже на странице.
+- Не выдумывай, что заполнение уже идёт.
 
 Отвечай обычным текстом, без JSON.`;
+
+const PREVIEW_KEYS = [
+  "бренд",
+  "название",
+  "тип",
+  "пол",
+  "семейство",
+  "описание",
+  "объем",
+  "объём",
+  "ноты",
+  "линейка"
+];
+
+function trimVal(s: string, max = 160): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}…`;
+}
+
+function pickPreviewFields(cells: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(cells)) {
+    if (!v.trim()) continue;
+    const n = k.toLowerCase();
+    if (PREVIEW_KEYS.some((p) => n.includes(p))) {
+      out[k] = trimVal(v);
+    }
+    if (Object.keys(out).length >= 8) break;
+  }
+  return out;
+}
+
+export function buildCsvSampleRows(
+  table: CsvTable,
+  map: CsvColumnMap | null,
+  limit = 3
+): Record<string, string>[] {
+  const out: Record<string, string>[] = [];
+  const skuCol = map?.skuColumn ?? "";
+  for (const row of table.rows.slice(0, limit)) {
+    const rec: Record<string, string> = {};
+    table.headers.forEach((h, i) => {
+      const v = String(row[i] ?? "").trim();
+      if (v) rec[h] = trimVal(v, 120);
+    });
+    if (skuCol && rec[skuCol]) rec["__sku"] = rec[skuCol]!;
+    out.push(rec);
+  }
+  return out;
+}
 
 export function chatStorageKey(apiKey: string): string {
   const tail = apiKey.trim().slice(-12) || "anon";
@@ -49,37 +126,84 @@ export function welcomeMessage(): ChatMessage {
     role: "assistant",
     at: Date.now(),
     content:
-      "Привет! Загрузите Excel-шаблон Ozon (.xlsx) — CSV не обязателен. Напишите, какие столбцы заполнять; я запомню до конца сессии."
+      "Привет! Сначала загрузите Excel-шаблон Ozon (.xlsx) — я увижу товары и столбцы. CSV опционален. Напишите, что заполнять."
   };
 }
 
 export function buildContextBlock(ctx: TemplateChatContext): string {
-  const lines: string[] = ["Текущее состояние сессии:"];
+  const lines: string[] = ["=== КОНТЕКСТ ЗАГРУЖЕННЫХ ФАЙЛОВ (используй при ответе) ==="];
+
   if (ctx.templateFile) {
     lines.push(
-      `- Шаблон Excel: «${ctx.templateFile}»`,
-      `  Вкладка: ${ctx.sheetName ?? "?"}`,
-      `  Строк товаров: ${ctx.rowCount ?? "?"}`,
-      `  Отмечено столбцов для генерации: ${ctx.enabledColCount ?? "?"}`
+      "",
+      `Шаблон Excel: «${ctx.templateFile}»`,
+      `Вкладка: ${ctx.sheetName ?? "?"}`,
+      `Строк товаров: ${ctx.rowCount ?? "?"}`,
+      `Отмечено для генерации: ${ctx.enabledColCount ?? 0} столбцов`
     );
   } else {
-    lines.push("- Шаблон Excel: ещё не загружен");
+    lines.push("", "Шаблон Excel: НЕ ЗАГРУЖЕН — попроси пользователя нажать «Загрузить шаблон Excel»");
   }
+
+  if (ctx.columns?.length) {
+    lines.push("", "Столбцы шаблона (заголовок | подсказка | заполнять?):");
+    for (const c of ctx.columns.slice(0, 55)) {
+      const flag = c.readonly ? "readonly" : c.enabled ? "ДА" : "нет";
+      lines.push(`  · ${c.header} | ${trimVal(c.hint, 80) || "—"} | ${flag}`);
+    }
+    if (ctx.columns.length > 55) lines.push(`  … ещё ${ctx.columns.length - 55} столбцов`);
+  }
+
+  if (ctx.productSamples?.length) {
+    lines.push("", "Примеры товаров из шаблона (уже загружены, не спрашивай бренд заново):");
+    for (const p of ctx.productSamples) {
+      lines.push(`  SKU ${p.sku} | ${p.brand || "?"} | ${trimVal(p.name, 100)}`);
+      const prev = Object.entries(p.preview)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("; ");
+      if (prev) lines.push(`    ${prev}`);
+    }
+  }
+
+  if (ctx.uniqueBrands?.length) {
+    lines.push("", `Бренды в шаблоне (фрагмент): ${ctx.uniqueBrands.slice(0, 20).join(", ")}`);
+  }
+
   if (ctx.csvLabel) {
     lines.push(
-      `- CSV: ${ctx.csvLabel}`,
-      `  Строк в фиде: ${ctx.csvRowCount ?? "?"}`,
-      `  Колонка SKU: ${ctx.skuColumn ?? "?"}`
+      "",
+      `CSV-фид: ${ctx.csvLabel}`,
+      `Строк в фиде: ${ctx.csvRowCount ?? "?"}`,
+      `Колонка SKU: ${ctx.skuColumn ?? "?"}`
     );
-  } else {
-    lines.push("- CSV: не прикреплён");
   }
+
+  if (ctx.csvHeaders?.length) {
+    lines.push("", `Колонки CSV: ${ctx.csvHeaders.slice(0, 40).join(" | ")}`);
+  }
+
+  if (ctx.csvMappedColumns && Object.keys(ctx.csvMappedColumns).length) {
+    lines.push("", "Сопоставление CSV → шаблон:");
+    for (const [tpl, csv] of Object.entries(ctx.csvMappedColumns).slice(0, 20)) {
+      lines.push(`  ${tpl} ← ${csv}`);
+    }
+  }
+
+  if (ctx.csvSampleRows?.length) {
+    lines.push("", "Примеры строк CSV:");
+    ctx.csvSampleRows.forEach((row, i) => {
+      lines.push(`  [${i + 1}] ${JSON.stringify(row)}`);
+    });
+  }
+
   if (ctx.selectedColumns?.length) {
-    lines.push(`- Выбранные столбцы: ${ctx.selectedColumns.slice(0, 25).join("; ")}`);
+    lines.push("", `Сейчас отмечены для AI: ${ctx.selectedColumns.join("; ")}`);
   }
+
   if (ctx.photoEnabled) {
-    lines.push(`- Доп. фото: да, минимум ${ctx.photoMin}, цель ${ctx.photoTarget}`);
+    lines.push(`Доп. фото: мин ${ctx.photoMin}, цель ${ctx.photoTarget}`);
   }
+
   return lines.join("\n");
 }
 
