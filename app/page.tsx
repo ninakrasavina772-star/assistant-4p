@@ -32,7 +32,8 @@ const tools: {
     href: "/ozon-cosmetics",
     title: "Инфографика для ЛК Подружка · Ozon косметика",
     emoji: "💄"
-  }
+  },
+  { href: "/template-generator", title: "Генератор шаблонов", emoji: "📋" }
 ];
 
 export default function AssistantHome() {
@@ -129,10 +130,10 @@ export default function AssistantHome() {
             <h2 className={homeCardTitle}>Скоро</h2>
           </div>
           <p className="text-sm leading-relaxed text-slate-600 sm:text-[0.95rem] px-4 py-4 sm:px-5 sm:py-4">
-            <span className="font-medium text-slate-800">Обновление по шаблону</span>
+            <span className="font-medium text-slate-800">Обработка фото с фоном</span>
             <span className="text-slate-500">
               {" "}
-              — вынесем в отдельный сценарий позже, следите за разделом.
+              — композитинг флакона на фон, как в инфографике (следующий этап).
             </span>
           </p>
         </section>
