@@ -65,6 +65,8 @@ export function TemplateGeneratorTool() {
   const [csvTable, setCsvTable] = useState<CsvTable | null>(null);
   const [csvMap, setCsvMap] = useState<CsvColumnMap | null>(null);
   const [csvMapLabel, setCsvMapLabel] = useState("");
+  const [csvUrl, setCsvUrl] = useState("");
+  const [csvLoading, setCsvLoading] = useState(false);
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
@@ -85,6 +87,8 @@ export function TemplateGeneratorTool() {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<FillRowResult[]>([]);
   const [done, setDone] = useState(false);
+
+  const step2Ref = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (sessionStorage.getItem(SK_OPENAI_REM) !== "0") {
@@ -112,6 +116,93 @@ export function TemplateGeneratorTool() {
     setDropdownSource(ds);
   }, []);
 
+  const applyCsvTable = useCallback(
+    async (table: CsvTable, label: string) => {
+      setCsvTable(table);
+      const heuristic = scan
+        ? mergeCsvMapHeuristic(table, scan.columns.map((c) => c.header))
+        : { skuColumn: "", columns: {} };
+      let map = heuristic;
+      if (scan && openaiKey.trim()) {
+        const res = await fetch("/api/template-generator/map-csv", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            openaiApiKey: openaiKey.trim(),
+            csvHeaders: table.headers,
+            templateHeaders: scan.columns.map((c) => c.header),
+            sampleRows: table.rows.slice(0, 5)
+          })
+        });
+        const j = (await res.json()) as { map?: CsvColumnMap };
+        if (j.map) map = j.map;
+      }
+      setCsvMap(map);
+      setCsvMapLabel(
+        `${label} · ${table.rows.length} строк · SKU: ${map.skuColumn || "?"}`
+      );
+    },
+    [openaiKey, scan]
+  );
+
+  useEffect(() => {
+    if (!csvTable || !scan) return;
+    const label = csvMapLabel.split(" · ")[0] || "CSV";
+    void applyCsvTable(csvTable, label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remap when template/sheet appears
+  }, [scan?.sheetName]);
+
+  const onCsvFile = useCallback(
+    async (file: File) => {
+      setError("");
+      setCsvLoading(true);
+      try {
+        const text = await file.text();
+        const table = parseCsvText(text);
+        if (!table.headers.length) {
+          setError("CSV пустой или не распознан");
+          return;
+        }
+        await applyCsvTable(table, file.name);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка чтения CSV");
+      } finally {
+        setCsvLoading(false);
+      }
+    },
+    [applyCsvTable]
+  );
+
+  const onCsvUrlLoad = useCallback(async () => {
+    const url = csvUrl.trim();
+    if (!url) {
+      setError("Вставьте ссылку на CSV");
+      return;
+    }
+    setError("");
+    setCsvLoading(true);
+    try {
+      const res = await fetch("/api/template-generator/fetch-csv", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      const j = (await res.json()) as { text?: string; label?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(j.error ?? `HTTP ${res.status}`);
+      }
+      const table = parseCsvText(j.text ?? "");
+      if (!table.headers.length) {
+        throw new Error("CSV пустой или не распознан");
+      }
+      await applyCsvTable(table, j.label ?? url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка загрузки CSV по ссылке");
+    } finally {
+      setCsvLoading(false);
+    }
+  }, [csvUrl, applyCsvTable]);
+
   const onTemplateFile = useCallback(
     async (file: File) => {
       setError("");
@@ -135,38 +226,12 @@ export function TemplateGeneratorTool() {
       setSheetName(preferred);
       setScan(scanned.scans[preferred]!);
       initColumns(scanned.scans[preferred]!);
-      setStep(1);
+      setStep(2);
+      requestAnimationFrame(() => {
+        step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     },
     [initColumns]
-  );
-
-  const onCsvFile = useCallback(
-    async (file: File) => {
-      const text = await file.text();
-      const table = parseCsvText(text);
-      setCsvTable(table);
-      const heuristic = scan
-        ? mergeCsvMapHeuristic(table, scan.columns.map((c) => c.header))
-        : { skuColumn: "", columns: {} };
-      let map = heuristic;
-      if (scan && openaiKey.trim()) {
-        const res = await fetch("/api/template-generator/map-csv", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            openaiApiKey: openaiKey.trim(),
-            csvHeaders: table.headers,
-            templateHeaders: scan.columns.map((c) => c.header),
-            sampleRows: table.rows.slice(0, 5)
-          })
-        });
-        const j = (await res.json()) as { map?: CsvColumnMap };
-        if (j.map) map = j.map;
-      }
-      setCsvMap(map);
-      setCsvMapLabel(`${file.name} · SKU: ${map.skuColumn || "?"}`);
-    },
-    [openaiKey, scan]
   );
 
   const onSheetChange = useCallback(
@@ -322,11 +387,25 @@ export function TemplateGeneratorTool() {
 
   const sheetNames = wb ? wb.worksheets.map((w) => w.name) : [];
 
+  const enabledColCount = useMemo(
+    () => Object.values(enabledCols).filter(Boolean).length,
+    [enabledCols]
+  );
+
+  const scrollToStep = (n: Step) => {
+    setStep(n);
+    if (n === 2) {
+      requestAnimationFrame(() => {
+        step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  };
+
   const stepBtn = (n: Step, label: string, enabled: boolean) => (
     <button
       type="button"
       disabled={!enabled}
-      onClick={() => enabled && setStep(n)}
+      onClick={() => enabled && scrollToStep(n)}
       className="rounded-lg px-3 py-1.5 text-sm font-semibold disabled:opacity-40"
       style={{
         background: step === n ? "#ffd740" : "#e5e7eb",
@@ -351,12 +430,18 @@ export function TemplateGeneratorTool() {
         </div>
       ) : null}
 
-      {step === 1 ? (
-        <section className={homeCard}>
-          <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>1. Шаблон и данные</h2>
-          </div>
-          <div className={`${homeCardBody} space-y-4`}>
+      {!wb ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <strong>Шаг 1:</strong> загрузите шаблон Excel — после этого ниже появятся выбор вкладки,
+          столбцов для генерации и кнопка «Запустить AI».
+        </p>
+      ) : null}
+
+      <section className={homeCard}>
+        <div className={homeCardHeader}>
+          <h2 className={homeCardTitle}>1. Шаблон и данные</h2>
+        </div>
+        <div className={`${homeCardBody} space-y-4`}>
             <input
               ref={tplRef}
               type="file"
@@ -373,7 +458,7 @@ export function TemplateGeneratorTool() {
             </button>
             {fileName ? <p className="text-sm text-slate-600">Файл: {fileName}</p> : null}
 
-            {wb && sheetNames.length > 1 ? (
+            {scan ? (
               <label className="block text-sm">
                 Вкладка для заполнения
                 <select
@@ -384,7 +469,7 @@ export function TemplateGeneratorTool() {
                   {sheetNames.map((n) => (
                     <option key={n} value={n}>
                       {n}
-                      {scan?.sheetName === n ? ` (${scan.dataRowCount} строк)` : ""}
+                      {n === sheetName && scan ? ` (${scan.dataRowCount} строк)` : ""}
                     </option>
                   ))}
                 </select>
@@ -398,25 +483,61 @@ export function TemplateGeneratorTool() {
               </p>
             ) : null}
 
-            <input
-              ref={csvRef}
-              type="file"
-              accept=".csv,.txt,.xlsx"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void onCsvFile(f);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold"
-              onClick={() => csvRef.current?.click()}
-            >
-              Прикрепить CSV (опционально)
-            </button>
-            {csvMapLabel ? <p className="text-sm text-slate-600">CSV: {csvMapLabel}</p> : null}
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-sm font-semibold text-slate-800">CSV-фид (опционально)</p>
+              <p className="text-xs text-slate-600">
+                Матчинг по артикулу вариации — «Артикул товара (SKU)». Можно файлом или ссылкой.
+              </p>
+              <input
+                ref={csvRef}
+                type="file"
+                accept=".csv,.txt"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void onCsvFile(f);
+                  e.target.value = "";
+                }}
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold"
+                  disabled={csvLoading}
+                  onClick={() => csvRef.current?.click()}
+                >
+                  Загрузить файл
+                </button>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="block min-w-0 flex-1 text-sm">
+                  Ссылка на CSV
+                  <input
+                    type="url"
+                    className={`${homeInput} mt-1 w-full`}
+                    placeholder="https://yandex.market.4partners.io/my/feed/....csv"
+                    value={csvUrl}
+                    onChange={(e) => setCsvUrl(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={csvLoading || !csvUrl.trim()}
+                  onClick={() => void onCsvUrlLoad()}
+                >
+                  {csvLoading ? "Загрузка…" : "Загрузить по ссылке"}
+                </button>
+              </div>
+              {csvMapLabel ? (
+                <p className="text-sm text-green-800">✓ CSV: {csvMapLabel}</p>
+              ) : null}
+              {!scan && csvTable ? (
+                <p className="text-xs text-amber-800">
+                  CSV загружен. Загрузите шаблон Excel — сопоставим колонки автоматически.
+                </p>
+              ) : null}
+            </div>
 
             <label className="block text-sm">
               OpenAI API key
@@ -446,21 +567,25 @@ export function TemplateGeneratorTool() {
               />
             </label>
 
-            {wb ? (
-              <button type="button" className={homeBtnPrimary} onClick={() => setStep(2)}>
-                Далее → столбцы
+            {scan ? (
+              <button type="button" className={homeBtnPrimary} onClick={() => scrollToStep(2)}>
+                Далее → выбор столбцов и запуск ({enabledColCount} отмечено)
               </button>
             ) : null}
           </div>
         </section>
-      ) : null}
 
-      {step === 2 && scan ? (
-        <section className={homeCard}>
+      {scan ? (
+        <section ref={step2Ref} className={homeCard}>
           <div className={homeCardHeader}>
-            <h2 className={homeCardTitle}>2. Столбцы и фото</h2>
+            <h2 className={homeCardTitle}>2. Столбцы, вкладка и запуск</h2>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
+            <p className="text-sm text-slate-700">
+              Вкладка: <strong>{sheetName}</strong> · отмечено для генерации:{" "}
+              <strong>{enabledColCount}</strong> столбцов. Снимите галочки с полей, которые не
+              нужно менять.
+            </p>
             <div className="max-h-80 overflow-auto rounded border border-slate-200">
               <table className="w-full text-left text-xs">
                 <thead className="sticky top-0 bg-slate-100">
@@ -581,18 +706,18 @@ export function TemplateGeneratorTool() {
 
             <button
               type="button"
-              className={homeBtnPrimary}
+              className={`${homeBtnPrimary} w-full max-w-md py-3 text-base`}
               disabled={busy}
               onClick={() => void runFill()}
             >
-              {busy ? "Обработка…" : "Запустить AI для всех строк"}
+              {busy ? "Обработка…" : `Запустить AI для всех ${scan.dataRowCount} строк`}
             </button>
             {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
           </div>
         </section>
       ) : null}
 
-      {step === 3 && done ? (
+      {done ? (
         <section className={homeCard}>
           <div className={homeCardHeader}>
             <h2 className={homeCardTitle}>3. Готово</h2>
