@@ -13,7 +13,7 @@ import {
   type CsvTable
 } from "@/lib/templateGenerator/csvIndex";
 import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
-import { collectRowContexts, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
+import { collectRowContexts, loadListSheetValues, scanTemplateSheet, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
 import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import {
   buildFillPromptFromChat,
@@ -76,6 +76,9 @@ export function TemplateGeneratorTool() {
   const [csvMapLabel, setCsvMapLabel] = useState("");
   const [csvUrl, setCsvUrl] = useState("");
   const [csvLoading, setCsvLoading] = useState(false);
+  const [tplLoading, setTplLoading] = useState(false);
+
+  const listValuesRef = useRef<Map<string, string[]>>(new Map());
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
@@ -387,41 +390,60 @@ export function TemplateGeneratorTool() {
       setError("");
       setDone(false);
       setPreview([]);
-      const workbook = await readWorkbookFromFile(file);
-      const scanned = scanTemplateWorkbook(workbook);
-      const names = Object.keys(scanned.scans);
-      const preferred =
-        scanned.scans[OZON_DATA_SHEET] ? OZON_DATA_SHEET : names.sort(
-          (a, b) => (scanned.scans[b]?.dataRowCount ?? 0) - (scanned.scans[a]?.dataRowCount ?? 0)
-        )[0];
-
-      if (!preferred) {
-        setError("Не удалось разобрать листы шаблона");
-        return;
-      }
-
-      const sheetScan = scanned.scans[preferred]!;
-      setWb(workbook);
-      setFileName(file.name);
-      setSheetName(preferred);
-      setScan(sheetScan);
-      initColumns(sheetScan);
-      setStep(2);
-      requestAnimationFrame(() => {
-        step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-      const defaultCols = sheetScan.columns.filter(
-        (c) => !c.readonly && c.contentDefault
-      ).length;
-      void eventReply(
-        `Загрузила шаблон Excel «${file.name}»: вкладка «${preferred}», ${sheetScan.dataRowCount} товаров, по умолчанию отмечено ${defaultCols} столбцов.`,
-        {
-          templateFile: file.name,
-          sheetName: preferred,
-          rowCount: sheetScan.dataRowCount,
-          enabledColCount: defaultCols
+      setTplLoading(true);
+      try {
+        if (!/\.xlsx?$/i.test(file.name)) {
+          throw new Error("Нужен файл Excel (.xlsx). Старый .xls не поддерживается.");
         }
-      );
+        await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+        const workbook = await readWorkbookFromFile(file);
+        const listValues = loadListSheetValues(workbook);
+        listValuesRef.current = listValues;
+        const scanned = scanTemplateWorkbook(workbook);
+        const names = Object.keys(scanned.scans);
+        const preferred =
+          scanned.scans[OZON_DATA_SHEET] ? OZON_DATA_SHEET : names.sort(
+            (a, b) => (scanned.scans[b]?.dataRowCount ?? 0) - (scanned.scans[a]?.dataRowCount ?? 0)
+          )[0];
+
+        if (!preferred) {
+          setError(
+            "Не нашли вкладку с товарами (ожидаем «Данные о товарах» или столбцы «Название товара», «Артикул»). Проверьте, что это шаблон Ozon."
+          );
+          return;
+        }
+
+        const sheetScan = scanned.scans[preferred]!;
+        setWb(workbook);
+        setFileName(file.name);
+        setSheetName(preferred);
+        setScan(sheetScan);
+        initColumns(sheetScan);
+        setStep(2);
+        requestAnimationFrame(() => {
+          step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        const defaultCols = sheetScan.columns.filter(
+          (c) => !c.readonly && c.contentDefault
+        ).length;
+        void eventReply(
+          `Загрузила шаблон Excel «${file.name}»: вкладка «${preferred}», ${sheetScan.dataRowCount} товаров, по умолчанию отмечено ${defaultCols} столбцов.`,
+          {
+            templateFile: file.name,
+            sheetName: preferred,
+            rowCount: sheetScan.dataRowCount,
+            enabledColCount: defaultCols
+          }
+        );
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Не удалось открыть Excel. Попробуйте другой файл или обновите страницу."
+        );
+      } finally {
+        setTplLoading(false);
+      }
     },
     [initColumns, eventReply]
   );
@@ -429,8 +451,7 @@ export function TemplateGeneratorTool() {
   const onSheetChange = useCallback(
     (name: string) => {
       if (!wb) return;
-      const scanned = scanTemplateWorkbook(wb);
-      const s = scanned.scans[name];
+      const s = scanTemplateSheet(wb, name, listValuesRef.current);
       if (!s) return;
       setSheetName(name);
       setScan(s);
@@ -632,10 +653,15 @@ export function TemplateGeneratorTool() {
 
       {!wb ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          <strong>Шаг 1:</strong> загрузите шаблон Excel — после этого ниже появятся выбор вкладки,
-          столбцов для генерации и кнопка «Запустить AI».
+          <strong>Шаг 1:</strong> загрузите шаблон Excel (.xlsx) — CSV не нужен. После загрузки
+          (10–30 сек на большой файл) появятся столбцы и кнопка «Запустить AI».
         </p>
-      ) : null}
+      ) : (
+        <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+          ✓ Шаблон «{fileName}» загружен · {scan?.dataRowCount ?? 0} товаров · прокрутите вниз к
+          блоку «2. Столбцы и запуск»
+        </p>
+      )}
 
       <section className={homeCard}>
         <div className={homeCardHeader}>
@@ -645,17 +671,26 @@ export function TemplateGeneratorTool() {
             <input
               ref={tplRef}
               type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
+              disabled={tplLoading}
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) void onTemplateFile(f);
                 e.target.value = "";
               }}
             />
-            <button type="button" className={homeBtnPrimary} onClick={() => tplRef.current?.click()}>
-              Загрузить шаблон Excel (.xlsx)
+            <button
+              type="button"
+              className={homeBtnPrimary}
+              disabled={tplLoading}
+              onClick={() => tplRef.current?.click()}
+            >
+              {tplLoading ? "Читаем шаблон… (подождите)" : "Загрузить шаблон Excel (.xlsx)"}
             </button>
+            {tplLoading ? (
+              <p className="text-sm text-slate-600">Парсим Excel в браузере — CSV не требуется.</p>
+            ) : null}
             {fileName ? <p className="text-sm text-slate-600">Файл: {fileName}</p> : null}
 
             {scan ? (
@@ -684,9 +719,10 @@ export function TemplateGeneratorTool() {
             ) : null}
 
             <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-sm font-semibold text-slate-800">CSV-фид (опционально)</p>
+              <p className="text-sm font-semibold text-slate-800">CSV-фид — необязательно</p>
               <p className="text-xs text-slate-600">
-                Матчинг по артикулу вариации — «Артикул товара (SKU)». Можно файлом или ссылкой.
+                Только если нужны доп. данные из вашего фида. Без CSV ассистент заполнит поля из
+                интернета и шаблона. Матчинг по «Артикул товара (SKU)».
                 Большие фиды 4Partners (~80+ МБ) — откройте ссылку в браузере, сохраните файл и
                 загрузите кнопкой «Загрузить файл».
               </p>

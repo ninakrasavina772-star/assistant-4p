@@ -7,6 +7,7 @@ import {
   isSkuHeader,
   listSheetNameForHeader,
   LIST_VALUES_SHEET,
+  OZON_DATA_SHEET,
   normHeader
 } from "@/lib/templateGenerator/presets";
 import type { TemplateColumnMeta, TemplateSheetScan } from "@/lib/templateGenerator/types";
@@ -165,11 +166,41 @@ export function scanTemplateWorkbook(wb: ExcelJS.Workbook): {
   const listValues = loadListSheetValues(wb);
   const sheetNames = wb.worksheets.map((w) => w.name);
   const scans: Record<string, TemplateSheetScan> = {};
+
+  const skipNames = new Set(
+    ["инструкция", "требования", "meta", "список значений", "list values"].map((s) => s.toLowerCase())
+  );
+
   for (const name of sheetNames) {
+    if (skipNames.has(name.trim().toLowerCase())) continue;
+    const ws = wb.getWorksheet(name);
+    if (!ws) continue;
+    if (name !== OZON_DATA_SHEET && !sheetLooksLikeProductData(ws)) continue;
     const scan = scanTemplateSheet(wb, name, listValues);
     if (scan && scan.columns.length > 0) scans[name] = scan;
   }
+
+  if (!scans[OZON_DATA_SHEET]) {
+    for (const name of sheetNames) {
+      if (scans[name]) continue;
+      const scan = scanTemplateSheet(wb, name, listValues);
+      if (scan && scan.columns.length > 0 && scan.dataRowCount > 0) {
+        scans[name] = scan;
+      }
+    }
+  }
+
   return { sheetNames, listValues, scans };
+}
+
+function sheetLooksLikeProductData(ws: ExcelJS.Worksheet): boolean {
+  const { headerRow } = findHeaderRow(ws);
+  const headers = readRowHeaders(ws, headerRow, 30);
+  for (const h of headers.values()) {
+    const n = normHeader(h);
+    if (n.includes("название товара") || n.includes("артикул товара")) return true;
+  }
+  return false;
 }
 
 export function collectRowContexts(
