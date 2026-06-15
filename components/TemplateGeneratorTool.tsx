@@ -16,6 +16,15 @@ import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGene
 import { collectRowContexts, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
 import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import {
+  buildFillPromptFromChat,
+  chatStorageKey,
+  newChatId,
+  welcomeMessage,
+  type ChatMessage,
+  type TemplateChatContext
+} from "@/lib/templateGenerator/chat";
+import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
+import {
   homeBtnPrimary,
   homeCard,
   homeCardBody,
@@ -70,9 +79,8 @@ export function TemplateGeneratorTool() {
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
-  const [userPrompt, setUserPrompt] = useState(
-    "Заполняй только контентные характеристики. Описание — продающее, факты проверяй по официальному сайту бренда."
-  );
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([welcomeMessage()]);
+  const chatKeyLoadedRef = useRef("");
 
   const [enabledCols, setEnabledCols] = useState<Record<string, boolean>>({});
   const [strictDropdown, setStrictDropdown] = useState<Record<string, boolean>>({});
@@ -96,6 +104,126 @@ export function TemplateGeneratorTool() {
       if (k) setOpenaiKey(k);
     }
   }, []);
+
+  useEffect(() => {
+    const k = openaiKey.trim();
+    if (!k) return;
+    if (chatKeyLoadedRef.current === k) return;
+    chatKeyLoadedRef.current = k;
+    try {
+      const raw = sessionStorage.getItem(chatStorageKey(k));
+      if (raw) {
+        const parsed = JSON.parse(raw) as ChatMessage[];
+        if (Array.isArray(parsed) && parsed.length) {
+          setChatMessages(parsed);
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    setChatMessages([welcomeMessage()]);
+  }, [openaiKey]);
+
+  useEffect(() => {
+    const k = openaiKey.trim();
+    if (!k || !chatMessages.length) return;
+    sessionStorage.setItem(chatStorageKey(k), JSON.stringify(chatMessages));
+  }, [chatMessages, openaiKey]);
+
+  const chatContext = useMemo((): TemplateChatContext => {
+    const selected = scan
+      ? scan.columns.filter((c) => !c.readonly && enabledCols[c.header]).map((c) => c.header)
+      : [];
+    return {
+      templateFile: fileName || undefined,
+      sheetName: sheetName || undefined,
+      rowCount: scan?.dataRowCount,
+      csvLabel: csvMapLabel || undefined,
+      csvRowCount: csvTable?.rows.length,
+      skuColumn: csvMap?.skuColumn,
+      selectedColumns: selected,
+      enabledColCount: selected.length,
+      photoEnabled,
+      photoMin,
+      photoTarget
+    };
+  }, [
+    fileName,
+    sheetName,
+    scan,
+    enabledCols,
+    csvMapLabel,
+    csvTable,
+    csvMap,
+    photoEnabled,
+    photoMin,
+    photoTarget
+  ]);
+
+  const eventReply = useCallback(
+    async (eventText: string, ctx: TemplateChatContext) => {
+      const key = openaiKey.trim();
+      const userMsg: ChatMessage = {
+        id: newChatId(),
+        role: "user",
+        content: eventText,
+        at: Date.now()
+      };
+      let merged: ChatMessage[] = [];
+      setChatMessages((prev) => {
+        merged = [...prev, userMsg];
+        return merged;
+      });
+
+      const fallback = (() => {
+        if (eventText.includes("шаблон") || eventText.includes("Шаблон")) {
+          return `Получила шаблон. Вкладка «${ctx.sheetName ?? "?"}», ${ctx.rowCount ?? "?"} строк, отмечено ${ctx.enabledColCount ?? 0} столбцов. Напишите, что заполнять — или прокрутите к блоку «Столбцы и запуск» и нажмите жёлтую кнопку.`;
+        }
+        if (eventText.includes("CSV")) {
+          return `CSV подключён (${ctx.csvRowCount ?? "?"} строк, SKU: ${ctx.skuColumn ?? "?"}). Что делаем дальше?`;
+        }
+        return "Поняла. Напишите, какие характеристики заполнять.";
+      })();
+
+      if (!key) {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: newChatId(), role: "assistant", content: fallback, at: Date.now() }
+        ]);
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/template-generator/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            openaiApiKey: key,
+            messages: merged,
+            context: ctx
+          })
+        });
+        const j = (await res.json()) as { reply?: string; error?: string };
+        if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: newChatId(),
+            role: "assistant",
+            content: j.reply ?? fallback,
+            at: Date.now()
+          }
+        ]);
+      } catch {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: newChatId(), role: "assistant", content: fallback, at: Date.now() }
+        ]);
+      }
+    },
+    [openaiKey]
+  );
 
   const initColumns = useCallback((s: TemplateSheetScan) => {
     const en: Record<string, boolean> = {};
@@ -141,6 +269,7 @@ export function TemplateGeneratorTool() {
       setCsvMapLabel(
         `${label} · ${table.rows.length} строк · SKU: ${map.skuColumn || "?"}`
       );
+      return { table, map, label };
     },
     [openaiKey, scan]
   );
@@ -163,14 +292,26 @@ export function TemplateGeneratorTool() {
           setError("CSV пустой или не распознан");
           return;
         }
-        await applyCsvTable(table, file.name);
+        const { map } = await applyCsvTable(table, file.name);
+        void eventReply(
+          `Загрузила CSV «${file.name}»: ${table.rows.length} строк, колонок ${table.headers.length}.`,
+          {
+            templateFile: fileName || undefined,
+            sheetName: sheetName || undefined,
+            rowCount: scan?.dataRowCount,
+            csvLabel: `${file.name} · ${table.rows.length} строк`,
+            csvRowCount: table.rows.length,
+            skuColumn: map.skuColumn,
+            enabledColCount: Object.values(enabledCols).filter(Boolean).length
+          }
+        );
       } catch (e) {
         setError(e instanceof Error ? e.message : "Ошибка чтения CSV");
       } finally {
         setCsvLoading(false);
       }
     },
-    [applyCsvTable]
+    [applyCsvTable, eventReply, fileName, sheetName, scan, enabledCols]
   );
 
   const onCsvUrlLoad = useCallback(async () => {
@@ -195,13 +336,25 @@ export function TemplateGeneratorTool() {
       if (!table.headers.length) {
         throw new Error("CSV пустой или не распознан");
       }
-      await applyCsvTable(table, j.label ?? url);
+      const { map } = await applyCsvTable(table, j.label ?? url);
+      void eventReply(
+        `Загрузила CSV по ссылке: ${j.label ?? url} (${table.rows.length} строк).`,
+        {
+          templateFile: fileName || undefined,
+          sheetName: sheetName || undefined,
+          rowCount: scan?.dataRowCount,
+          csvLabel: j.label ?? url,
+          csvRowCount: table.rows.length,
+          skuColumn: map.skuColumn,
+          enabledColCount: Object.values(enabledCols).filter(Boolean).length
+        }
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки CSV по ссылке");
     } finally {
       setCsvLoading(false);
     }
-  }, [csvUrl, applyCsvTable]);
+  }, [csvUrl, applyCsvTable, eventReply, fileName, sheetName, scan, enabledCols]);
 
   const onTemplateFile = useCallback(
     async (file: File) => {
@@ -221,17 +374,30 @@ export function TemplateGeneratorTool() {
         return;
       }
 
+      const sheetScan = scanned.scans[preferred]!;
       setWb(workbook);
       setFileName(file.name);
       setSheetName(preferred);
-      setScan(scanned.scans[preferred]!);
-      initColumns(scanned.scans[preferred]!);
+      setScan(sheetScan);
+      initColumns(sheetScan);
       setStep(2);
       requestAnimationFrame(() => {
         step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
+      const defaultCols = sheetScan.columns.filter(
+        (c) => !c.readonly && c.contentDefault
+      ).length;
+      void eventReply(
+        `Загрузила шаблон Excel «${file.name}»: вкладка «${preferred}», ${sheetScan.dataRowCount} товаров, по умолчанию отмечено ${defaultCols} столбцов.`,
+        {
+          templateFile: file.name,
+          sheetName: preferred,
+          rowCount: sheetScan.dataRowCount,
+          enabledColCount: defaultCols
+        }
+      );
     },
-    [initColumns]
+    [initColumns, eventReply]
   );
 
   const onSheetChange = useCallback(
@@ -319,6 +485,8 @@ export function TemplateGeneratorTool() {
       };
     });
 
+    const fillPrompt = buildFillPromptFromChat(chatMessages);
+
     let doneRows = 0;
     for (let i = 0; i < chunks.length; i += FILL_PARALLEL) {
       const wave = chunks.slice(i, i + FILL_PARALLEL);
@@ -330,7 +498,7 @@ export function TemplateGeneratorTool() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               openaiApiKey: key,
-              userPrompt,
+              userPrompt: fillPrompt,
               columns: selectionList,
               columnMeta,
               rows,
@@ -362,13 +530,19 @@ export function TemplateGeneratorTool() {
     setDone(true);
     setBusy(false);
     setStep(3);
+    void eventReply(
+      `Заполнение завершено: успешно ${allResults.filter((r) => r.ok).length} из ${allResults.length} строк. Можно скачать файл.`,
+      chatContext
+    );
   }, [
     wb,
     scan,
     openaiKey,
     rememberKey,
     selectionList,
-    userPrompt,
+    chatMessages,
+    chatContext,
+    eventReply,
     csvTable,
     csvMap,
     photoEnabled,
@@ -558,14 +732,13 @@ export function TemplateGeneratorTool() {
               Запомнить ключ в браузере
             </label>
 
-            <label className="block text-sm">
-              Задание для AI (ожидания по столбцам)
-              <textarea
-                className={`${homeInput} mt-1 min-h-[100px] w-full`}
-                value={userPrompt}
-                onChange={(e) => setUserPrompt(e.target.value)}
-              />
-            </label>
+            <TemplateGeneratorChat
+              apiKey={openaiKey}
+              messages={chatMessages}
+              onMessagesChange={setChatMessages}
+              context={chatContext}
+              onError={setError}
+            />
 
             {scan ? (
               <button type="button" className={homeBtnPrimary} onClick={() => scrollToStep(2)}>
