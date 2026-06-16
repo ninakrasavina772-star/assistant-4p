@@ -25,7 +25,7 @@ import {
   type TemplateChatContext,
   type TemplateProductSample
 } from "@/lib/templateGenerator/chat";
-import { extractWorkbookListValidations } from "@/lib/templateGenerator/xlsxValidations";
+import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
 import {
   homeBtnPrimary,
@@ -96,7 +96,9 @@ export function TemplateGeneratorTool() {
   const csvRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>(1);
-  const [wb, setWb] = useState<ExcelJS.Workbook | null>(null);
+  const wbRef = useRef<ExcelJS.Workbook | null>(null);
+  const [hasWb, setHasWb] = useState(false);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [fileName, setFileName] = useState("");
   const [sheetName, setSheetName] = useState("");
   const [scan, setScan] = useState<TemplateSheetScan | null>(null);
@@ -127,6 +129,8 @@ export function TemplateGeneratorTool() {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<FillRowResult[]>([]);
   const [done, setDone] = useState(false);
+  const [productSamples, setProductSamples] = useState<TemplateProductSample[] | undefined>();
+  const [uniqueBrands, setUniqueBrands] = useState<string[] | undefined>();
 
   const step2Ref = useRef<HTMLElement>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
@@ -178,11 +182,6 @@ export function TemplateGeneratorTool() {
         }))
       : undefined;
 
-    const { samples: productSamples, brands: uniqueBrands } =
-      wb && scan
-        ? buildProductSamples(wb, scan)
-        : { samples: undefined, brands: undefined };
-
     return {
       templateFile: fileName || undefined,
       sheetName: sheetName || undefined,
@@ -196,8 +195,8 @@ export function TemplateGeneratorTool() {
       photoMin,
       photoTarget,
       columns,
-      productSamples,
-      uniqueBrands,
+      productSamples: hasWb ? productSamples : undefined,
+      uniqueBrands: hasWb ? uniqueBrands : undefined,
       csvHeaders: csvTable?.headers,
       csvSampleRows: csvTable ? buildCsvSampleRows(csvTable, csvMap, 3) : undefined,
       csvMappedColumns: csvMap?.columns
@@ -206,7 +205,9 @@ export function TemplateGeneratorTool() {
     fileName,
     sheetName,
     scan,
-    wb,
+    hasWb,
+    productSamples,
+    uniqueBrands,
     enabledCols,
     csvMapLabel,
     csvTable,
@@ -456,10 +457,9 @@ export function TemplateGeneratorTool() {
         }
         await new Promise((r) => requestAnimationFrame(() => r(undefined)));
         const buf = await file.arrayBuffer();
-        const [listValidations, workbook] = await Promise.all([
-          extractWorkbookListValidations(buf),
-          readWorkbookFromBuffer(buf)
-        ]);
+        const listValidations = await extractWorkbookListValidations(buf);
+        const safeBuf = await sanitizeOzonXlsxBuffer(buf);
+        const workbook = await readWorkbookFromBuffer(safeBuf);
         const listValues = loadListSheetValues(workbook);
         listValuesRef.current = listValues;
         const scanned = scanTemplateWorkbook(workbook, listValidations);
@@ -477,7 +477,9 @@ export function TemplateGeneratorTool() {
         }
 
         const sheetScan = scanned.scans[preferred]!;
-        setWb(workbook);
+        wbRef.current = workbook;
+        setHasWb(true);
+        setSheetNames(workbook.worksheets.map((w) => w.name));
         setFileName(file.name);
         setSheetName(preferred);
         setScan(sheetScan);
@@ -490,6 +492,8 @@ export function TemplateGeneratorTool() {
           (c) => !c.readonly && c.contentDefault
         ).length;
         const { samples, brands } = buildProductSamples(workbook, sheetScan);
+        setProductSamples(samples);
+        setUniqueBrands(brands);
         chatContextRef.current = {
           ...chatContextRef.current,
           templateFile: file.name,
@@ -526,14 +530,18 @@ export function TemplateGeneratorTool() {
 
   const onSheetChange = useCallback(
     (name: string) => {
+      const wb = wbRef.current;
       if (!wb) return;
       const s = scanTemplateSheet(wb, name, listValuesRef.current);
       if (!s) return;
       setSheetName(name);
       setScan(s);
       initColumns(s);
+      const { samples, brands } = buildProductSamples(wb, s);
+      setProductSamples(samples);
+      setUniqueBrands(brands);
     },
-    [wb, initColumns]
+    [initColumns]
   );
 
   const selectionList = useMemo((): ColumnSelection[] => {
@@ -549,6 +557,7 @@ export function TemplateGeneratorTool() {
   }, [scan, enabledCols, strictDropdown, dropdownSource]);
 
   const runFill = useCallback(async () => {
+    const wb = wbRef.current;
     if (!wb || !scan) return;
     const key = openaiKey.trim();
     if (!key) {
@@ -657,7 +666,6 @@ export function TemplateGeneratorTool() {
       `Заполнение завершено: успешно ${allResults.filter((r) => r.ok).length} из ${allResults.length} строк. Можно скачать файл.`
     );
   }, [
-    wb,
     scan,
     openaiKey,
     rememberKey,
@@ -675,13 +683,12 @@ export function TemplateGeneratorTool() {
   ]);
 
   const download = useCallback(async () => {
+    const wb = wbRef.current;
     if (!wb) return;
     const blob = await writeWorkbookToBlob(wb);
     const base = fileName.replace(/\.xlsx?$/i, "") || "template";
     downloadBlob(blob, `${base}-filled.xlsx`);
-  }, [wb, fileName]);
-
-  const sheetNames = wb ? wb.worksheets.map((w) => w.name) : [];
+  }, [fileName]);
 
   const enabledColCount = useMemo(
     () => Object.values(enabledCols).filter(Boolean).length,
@@ -715,8 +722,8 @@ export function TemplateGeneratorTool() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        {stepBtn(1, "Шаблон", Boolean(wb))}
-        {stepBtn(2, "Столбцы и запуск", Boolean(wb && scan))}
+        {stepBtn(1, "Шаблон", hasWb)}
+        {stepBtn(2, "Столбцы и запуск", Boolean(hasWb && scan))}
         {stepBtn(3, "Результат", done)}
       </div>
 
@@ -726,7 +733,7 @@ export function TemplateGeneratorTool() {
         </div>
       ) : null}
 
-      {!wb ? (
+      {!hasWb ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           <strong>Шаг 1:</strong> загрузите шаблон Excel (.xlsx) — CSV не нужен. После загрузки
           (10–30 сек на большой файл) появятся столбцы и кнопка «Запустить AI».

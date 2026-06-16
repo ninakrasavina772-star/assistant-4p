@@ -100,3 +100,39 @@ export async function extractWorkbookListValidations(buf: ArrayBuffer): Promise<
   }
   return out;
 }
+
+const DV_BLOCK_RE = /<dataValidations(?:\s[^>]*)?>[\s\S]*?<\/dataValidations>/gi;
+const DV_SELF_CLOSE_RE = /<dataValidations[^>]*\/>/gi;
+const DEFINED_NAMES_RE = /<definedNames>[\s\S]*?<\/definedNames>/gi;
+
+/**
+ * Убирает из .xlsx узлы, из‑за которых ExcelJS раздувает объект до миллионов свойств.
+ * Валидации нужно извлечь заранее через extractWorkbookListValidations.
+ */
+export async function sanitizeOzonXlsxBuffer(buf: ArrayBuffer): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(buf);
+  let changed = false;
+
+  for (const [path, entry] of Object.entries(zip.files)) {
+    if (entry.dir || !/^xl\/worksheets\/sheet\d+\.xml$/i.test(path)) continue;
+    const xml = await entry.async("string");
+    const next = xml.replace(DV_BLOCK_RE, "").replace(DV_SELF_CLOSE_RE, "");
+    if (next !== xml) {
+      zip.file(path, next);
+      changed = true;
+    }
+  }
+
+  const wbEntry = zip.file("xl/workbook.xml");
+  if (wbEntry) {
+    const xml = await wbEntry.async("string");
+    const next = xml.replace(DEFINED_NAMES_RE, "");
+    if (next !== xml) {
+      zip.file("xl/workbook.xml", next);
+      changed = true;
+    }
+  }
+
+  if (!changed) return buf;
+  return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+}

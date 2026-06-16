@@ -187,7 +187,14 @@ export async function readWorkbookFromBuffer(
   const ExcelJS = await loadExcelJS();
   const wb = new ExcelJS.Workbook();
   const skipDv = options?.skipDataValidations !== false;
-  await wb.xlsx.load(buf, skipDv ? { ignoreNodes: ["dataValidations"] } : undefined);
+  await wb.xlsx.load(
+    buf,
+    skipDv
+      ? {
+          ignoreNodes: ["dataValidations", "conditionalFormatting"]
+        }
+      : undefined
+  );
   return wb;
 }
 
