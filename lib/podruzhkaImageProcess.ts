@@ -456,20 +456,7 @@ function trimHorizontalWhiteMargins(
   }
 }
 
-function groupContiguousYs(ys: number[], maxGap = 5): number[][] {
-  if (!ys.length) return [];
-  const sorted = [...ys].sort((a, b) => a - b);
-  const groups: number[][] = [[sorted[0]!]];
-  for (let i = 1; i < sorted.length; i++) {
-    const y = sorted[i]!;
-    const last = groups[groups.length - 1]!;
-    if (y - last[last.length - 1]! <= maxGap) last.push(y);
-    else groups.push([y]);
-  }
-  return groups;
-}
-
-/** Белый колпачок: вертикальный стек от якорей, без заливки белого фона между частями товара. */
+/** Белый колпачок: только вверх от верхнего якоря + узкий bridge в cap-зоне. */
 function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8Array {
   const keep = new Uint8Array(w * h);
 
@@ -506,39 +493,22 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
     }
     if (!anchorY.length) continue;
 
-    const groups = groupContiguousYs(anchorY);
-    for (let gi = 0; gi < groups.length; gi++) {
-      const group = groups[gi]!;
-      const isTopGroup = gi === 0;
-      const isBottomGroup = gi === groups.length - 1;
+    const topY = Math.min(...anchorY);
+    const botY = Math.max(...anchorY);
 
-      let yTop = Math.min(...group);
-      let yBot = Math.max(...group);
+    for (let y = topY - 1; y >= capFloorY; y--) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 228, 40)) break;
+      mark(x, y);
+    }
 
-      if (isTopGroup) {
-        for (let y = yTop - 1; y >= capFloorY; y--) {
-          const pi = (y * w + x) * 4;
-          if (!readNearWhiteRgb(src, pi, 234, 34)) break;
-          mark(x, y);
-          yTop = y;
-        }
-      }
-
-      if (isBottomGroup) {
-        const reflectionStop = Math.min(h - 1, yBot + maxReflectionDrop);
-        for (let y = yBot + 1; y <= reflectionStop; y++) {
-          const pi = (y * w + x) * 4;
-          if (!readNearWhiteRgb(src, pi, 234, 34)) break;
-          mark(x, y);
-          yBot = y;
-        }
-      }
-
-      for (const y of group) mark(x, y);
+    for (let y = botY + 1; y <= Math.min(h - 1, botY + maxReflectionDrop); y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+      mark(x, y);
     }
   }
 
-  // Горизонтальный bridge только в зоне колпачка и только по ширине уже найденного стека
   for (let y = capFloorY; y < globalMinAnchorY; y++) {
     let rowLeft = w;
     let rowRight = -1;
@@ -563,7 +533,7 @@ function shouldKeepCosmeticsProductPixel(
   idx: number
 ): boolean {
   const pi = idx * 4;
-  if (!readNearWhiteRgb(src, pi, 234, 34)) return true;
+  if (!readNearWhiteRgb(src, pi, 234, 34)) return isBodyAnchorPixel(src, pi);
   return whiteCapKeep[idx] === 1;
 }
 
@@ -648,6 +618,16 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   }
 
   purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
+
+  for (let idx = 0; idx < w * h; idx++) {
+    if (whiteCapKeep[idx] !== 1) continue;
+    const pi = idx * 4;
+    pixels[pi] = src[pi]!;
+    pixels[pi + 1] = src[pi + 1]!;
+    pixels[pi + 2] = src[pi + 2]!;
+    pixels[pi + 3] = 255;
+  }
+
   trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
 
   return sharp(pixels, {
