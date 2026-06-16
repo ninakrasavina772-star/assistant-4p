@@ -84,7 +84,9 @@ export async function fetchProcessedFoto(
 ): Promise<ProcessedFoto> {
   const q = encodeURIComponent(fotoUrl.trim());
   const p = profile === "cosmetics" ? "&profile=cosmetics" : "";
-  const res = await fetch(`/api/podruzhka/foto?url=${q}${p}`);
+  const layoutV =
+    profile === "cosmetics" ? PODRUZHKA_COSMETICS_LAYOUT_VERSION : PODRUZHKA_HTML_LAYOUT_VERSION;
+  const res = await fetch(`/api/podruzhka/foto?url=${q}${p}&v=${encodeURIComponent(layoutV)}`);
   if (!res.ok) {
     let msg = `foto: HTTP ${res.status}`;
     try {

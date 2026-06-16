@@ -456,7 +456,20 @@ function trimHorizontalWhiteMargins(
   }
 }
 
-/** Белый колпачок: только вертикальный стек над/под якорями тела в колонке (без горизонтального bridge). */
+function groupContiguousYs(ys: number[], maxGap = 5): number[][] {
+  if (!ys.length) return [];
+  const sorted = [...ys].sort((a, b) => a - b);
+  const groups: number[][] = [[sorted[0]!]];
+  for (let i = 1; i < sorted.length; i++) {
+    const y = sorted[i]!;
+    const last = groups[groups.length - 1]!;
+    if (y - last[last.length - 1]! <= maxGap) last.push(y);
+    else groups.push([y]);
+  }
+  return groups;
+}
+
+/** Белый колпачок: вертикальный стек от якорей, без заливки белого фона между частями товара. */
 function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8Array {
   const keep = new Uint8Array(w * h);
 
@@ -479,6 +492,7 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
   const x1 = Math.min(w - 1, coreMaxX + padX);
   const maxCapRise = Math.round(productW * 0.88);
   const capFloorY = Math.max(0, globalMinAnchorY - maxCapRise);
+  const maxReflectionDrop = Math.min(14, Math.max(6, Math.round(productW * 0.03)));
 
   const mark = (x: number, y: number) => {
     if (x < x0 || x > x1 || y < 0 || y >= h) return;
@@ -492,46 +506,55 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
     }
     if (!anchorY.length) continue;
 
-    let yTop = Math.min(...anchorY);
-    let yBot = Math.max(...anchorY);
+    const groups = groupContiguousYs(anchorY);
+    for (let gi = 0; gi < groups.length; gi++) {
+      const group = groups[gi]!;
+      const isTopGroup = gi === 0;
+      const isBottomGroup = gi === groups.length - 1;
 
-    for (let y = yTop - 1; y >= capFloorY; y--) {
-      const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
-      mark(x, y);
-      yTop = y;
-    }
-    for (let y = yBot + 1; y < h; y++) {
-      const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
-      mark(x, y);
-      yBot = y;
-    }
+      let yTop = Math.min(...group);
+      let yBot = Math.max(...group);
 
-    for (const y of anchorY) mark(x, y);
-    for (let y = yTop; y <= yBot; y++) {
-      const pi = (y * w + x) * 4;
-      if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
-    }
-  }
+      if (isTopGroup) {
+        for (let y = yTop - 1; y >= capFloorY; y--) {
+          const pi = (y * w + x) * 4;
+          if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+          mark(x, y);
+          yTop = y;
+        }
+      }
 
-  // Горизонтальный bridge только в зоне колпачка (не на всю высоту товара)
-  let capSourceMinX = w;
-  let capSourceMaxX = -1;
-  for (let y = capFloorY; y < globalMinAnchorY; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
-      capSourceMinX = Math.min(capSourceMinX, x);
-      capSourceMaxX = Math.max(capSourceMaxX, x);
-    }
-  }
-  if (capSourceMaxX >= capSourceMinX) {
-    for (let y = capFloorY; y < globalMinAnchorY; y++) {
-      for (let x = capSourceMinX; x <= capSourceMaxX; x++) {
+      if (isBottomGroup) {
+        const reflectionStop = Math.min(h - 1, yBot + maxReflectionDrop);
+        for (let y = yBot + 1; y <= reflectionStop; y++) {
+          const pi = (y * w + x) * 4;
+          if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+          mark(x, y);
+          yBot = y;
+        }
+      }
+
+      for (const y of group) mark(x, y);
+      for (let y = yTop; y <= yBot; y++) {
         const pi = (y * w + x) * 4;
         if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
       }
+    }
+  }
+
+  // Горизонтальный bridge только в зоне колпачка и только по ширине уже найденного стека
+  for (let y = capFloorY; y < globalMinAnchorY; y++) {
+    let rowLeft = w;
+    let rowRight = -1;
+    for (let x = x0; x <= x1; x++) {
+      if (!keep[y * w + x]) continue;
+      rowLeft = Math.min(rowLeft, x);
+      rowRight = Math.max(rowRight, x);
+    }
+    if (rowRight < rowLeft) continue;
+    for (let x = rowLeft; x <= rowRight; x++) {
+      const pi = (y * w + x) * 4;
+      if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
     }
   }
 
