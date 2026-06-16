@@ -171,11 +171,31 @@ export function applyFoto3Column(
   return filled;
 }
 
-export async function readWorkbookFromFile(file: File): Promise<ExcelJS.Workbook> {
+export type WorkbookLoadOptions = {
+  /**
+   * Ozon-шаблоны часто задают data validation на целый столбец (до 1 048 576 строк).
+   * ExcelJS разворачивает каждую ячейку → «Too many properties to enumerate».
+   * По умолчанию пропускаем; списки для dropdown читаем из XML отдельно.
+   */
+  skipDataValidations?: boolean;
+};
+
+export async function readWorkbookFromBuffer(
+  buf: ArrayBuffer,
+  options?: WorkbookLoadOptions
+): Promise<ExcelJS.Workbook> {
   const ExcelJS = await loadExcelJS();
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(await file.arrayBuffer());
+  const skipDv = options?.skipDataValidations !== false;
+  await wb.xlsx.load(buf, skipDv ? { ignoreNodes: ["dataValidations"] } : undefined);
   return wb;
+}
+
+export async function readWorkbookFromFile(
+  file: File,
+  options?: WorkbookLoadOptions
+): Promise<ExcelJS.Workbook> {
+  return readWorkbookFromBuffer(await file.arrayBuffer(), options);
 }
 
 export async function writeWorkbookToBlob(wb: ExcelJS.Workbook): Promise<Blob> {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type ExcelJS from "exceljs";
-import { readWorkbookFromFile, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
+import { readWorkbookFromBuffer, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 import { applyFillResults } from "@/lib/templateGenerator/apply";
 import type { FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
 import {
@@ -25,6 +25,7 @@ import {
   type TemplateChatContext,
   type TemplateProductSample
 } from "@/lib/templateGenerator/chat";
+import { extractWorkbookListValidations } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
 import {
   homeBtnPrimary,
@@ -454,10 +455,14 @@ export function TemplateGeneratorTool() {
           throw new Error("Нужен файл Excel (.xlsx). Старый .xls не поддерживается.");
         }
         await new Promise((r) => requestAnimationFrame(() => r(undefined)));
-        const workbook = await readWorkbookFromFile(file);
+        const buf = await file.arrayBuffer();
+        const [listValidations, workbook] = await Promise.all([
+          extractWorkbookListValidations(buf),
+          readWorkbookFromBuffer(buf)
+        ]);
         const listValues = loadListSheetValues(workbook);
         listValuesRef.current = listValues;
-        const scanned = scanTemplateWorkbook(workbook);
+        const scanned = scanTemplateWorkbook(workbook, listValidations);
         const names = Object.keys(scanned.scans);
         const preferred =
           scanned.scans[OZON_DATA_SHEET] ? OZON_DATA_SHEET : names.sort(

@@ -10,6 +10,7 @@ import {
   OZON_DATA_SHEET,
   normHeader
 } from "@/lib/templateGenerator/presets";
+import type { WorkbookListValidations } from "@/lib/templateGenerator/xlsxValidations";
 import type { TemplateColumnMeta, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import { extractListValidationValues } from "@/lib/templateGenerator/validation";
 
@@ -53,10 +54,28 @@ function detectDataStartRow(
   return hintRow + 2;
 }
 
+function effectiveLastRow(ws: ExcelJS.Worksheet, startRow: number, skuCol: number | null): number {
+  const col = skuCol ?? 1;
+  const hardMax = Math.min(ws.rowCount || startRow + 5000, startRow + 50000);
+  let last = startRow;
+  let emptyStreak = 0;
+  for (let r = startRow; r <= hardMax; r++) {
+    const v = cellPlainValue(ws.getCell(r, col).value);
+    if (v && v !== "-") {
+      last = r;
+      emptyStreak = 0;
+    } else {
+      emptyStreak++;
+      if (emptyStreak >= 40) break;
+    }
+  }
+  return last;
+}
+
 function countDataRows(ws: ExcelJS.Worksheet, dataStart: number, skuCol: number | null): number {
   const col = skuCol ?? 1;
   let n = 0;
-  const last = ws.rowCount || dataStart;
+  const last = effectiveLastRow(ws, dataStart, skuCol);
   for (let r = dataStart; r <= last; r++) {
     const v = cellPlainValue(ws.getCell(r, col).value);
     if (v && v !== "-") n++;
@@ -95,7 +114,8 @@ export function loadListSheetValues(wb: ExcelJS.Workbook): Map<string, string[]>
 export function scanTemplateSheet(
   wb: ExcelJS.Workbook,
   sheetName: string,
-  listValues: Map<string, string[]>
+  listValues: Map<string, string[]>,
+  columnFormulae?: Map<number, string>
 ): TemplateSheetScan | null {
   const ws = wb.getWorksheet(sheetName);
   if (!ws) return null;
@@ -142,7 +162,13 @@ export function scanTemplateSheet(
   const validationSampleRow = dataStartRow;
 
   for (const col of columns) {
-    col.templateValidationValues = extractListValidationValues(wb, ws, validationSampleRow, col.col);
+    col.templateValidationValues = extractListValidationValues(
+      wb,
+      ws,
+      validationSampleRow,
+      col.col,
+      columnFormulae
+    );
   }
 
   return {
@@ -158,7 +184,10 @@ export function scanTemplateSheet(
   };
 }
 
-export function scanTemplateWorkbook(wb: ExcelJS.Workbook): {
+export function scanTemplateWorkbook(
+  wb: ExcelJS.Workbook,
+  listValidations?: WorkbookListValidations
+): {
   sheetNames: string[];
   listValues: Map<string, string[]>;
   scans: Record<string, TemplateSheetScan>;
@@ -176,14 +205,16 @@ export function scanTemplateWorkbook(wb: ExcelJS.Workbook): {
     const ws = wb.getWorksheet(name);
     if (!ws) continue;
     if (name !== OZON_DATA_SHEET && !sheetLooksLikeProductData(ws)) continue;
-    const scan = scanTemplateSheet(wb, name, listValues);
+    const formulae = listValidations?.get(name);
+    const scan = scanTemplateSheet(wb, name, listValues, formulae);
     if (scan && scan.columns.length > 0) scans[name] = scan;
   }
 
   if (!scans[OZON_DATA_SHEET]) {
     for (const name of sheetNames) {
       if (scans[name]) continue;
-      const scan = scanTemplateSheet(wb, name, listValues);
+      const formulae = listValidations?.get(name);
+      const scan = scanTemplateSheet(wb, name, listValues, formulae);
       if (scan && scan.columns.length > 0 && scan.dataRowCount > 0) {
         scans[name] = scan;
       }
@@ -208,7 +239,7 @@ export function collectRowContexts(
   scan: TemplateSheetScan
 ): { row: number; sku: string; cells: Record<string, string> }[] {
   const out: { row: number; sku: string; cells: Record<string, string> }[] = [];
-  const last = ws.rowCount || scan.dataStartRow;
+  const last = effectiveLastRow(ws, scan.dataStartRow, scan.skuCol);
   const skuCol = scan.skuCol ?? 1;
 
   for (let r = scan.dataStartRow; r <= last; r++) {

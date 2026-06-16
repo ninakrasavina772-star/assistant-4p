@@ -53,8 +53,10 @@ function readRangeValues(wb: ExcelJS.Workbook, ws: ExcelJS.Worksheet, ref: strin
 
   const out: string[] = [];
   const seen = new Set<string>();
-  for (let r = parsed.r1; r <= parsed.r2; r++) {
-    for (let c = parsed.c1; c <= parsed.c2; c++) {
+  const rowEnd = Math.min(parsed.r2, parsed.r1 + 8000);
+  const colEnd = Math.min(parsed.c2, parsed.c1 + 40);
+  for (let r = parsed.r1; r <= rowEnd; r++) {
+    for (let c = parsed.c1; c <= colEnd; c++) {
       const v = cellPlainValue(sheet.getCell(r, c).value).trim();
       if (!v || seen.has(v.toLowerCase())) continue;
       seen.add(v.toLowerCase());
@@ -69,13 +71,16 @@ export function extractListValidationValues(
   wb: ExcelJS.Workbook,
   ws: ExcelJS.Worksheet,
   row: number,
-  col: number
+  col: number,
+  columnFormulae?: Map<number, string>
 ): string[] {
-  const cell = ws.getCell(row, col);
-  const dv = cell.dataValidation;
-  if (!dv || dv.type !== "list" || !dv.formulae?.length) return [];
-
-  const formula = String(dv.formulae[0] ?? "").trim();
+  let formula = columnFormulae?.get(col)?.trim() ?? "";
+  if (!formula) {
+    const cell = ws.getCell(row, col);
+    const dv = cell.dataValidation;
+    if (!dv || dv.type !== "list" || !dv.formulae?.length) return [];
+    formula = String(dv.formulae[0] ?? "").trim();
+  }
   if (!formula) return [];
 
   if (formula.startsWith('"') || (!formula.includes("!") && !formula.includes("$"))) {
