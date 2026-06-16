@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
+import { PODRUZHKA_COSMETICS_FOTO_MODE } from "@/lib/podruzhkaCosmeticsLayout";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
 const PRODUCT_SOURCE_MIN_LONG_EDGE = 1400;
@@ -753,9 +754,7 @@ export async function binarizeProductAlpha(input: Buffer, threshold = 64): Promi
 
 /** Финал для косметики — без halo/fringe/dilate. */
 export async function finalizeCosmeticsCutout(input: Buffer): Promise<Buffer> {
-  let buf = await dilateProductAlpha(input, 1);
-  buf = await binarizeProductAlpha(buf, 32);
-  return buf;
+  return binarizeProductAlpha(input, 32);
 }
 
 /**
@@ -1181,6 +1180,9 @@ async function resizeProductForCard(
     pipeline = pipeline.sharpen(PRODUCT_UPSCALE_SHARPEN);
   }
   const resized = await pipeline.png({ compressionLevel: 6 }).toBuffer();
+  if (profile === "cosmetics" && PODRUZHKA_COSMETICS_FOTO_MODE === "raw") {
+    return resized;
+  }
   return profile === "cosmetics"
     ? finalizeCosmeticsCutout(resized)
     : finalizeProductCutout(resized);
@@ -1769,6 +1771,14 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Косметика: только апскейл исходника — foto вставляется в шаблон как на Ozon.
+ */
+export async function preprocessCosmeticsProductBufferRaw(input: Buffer): Promise<Buffer> {
+  const buf = await enhanceSourceForProcessing(input);
+  return sharp(buf).png({ compressionLevel: 6 }).toBuffer();
+}
+
+/**
  * Косметика на белом (Ozon): апскейл → мягкий cut-out → dilate.
  * Не вызываем cleanProductAlphaFringe — он «съедал» бежевые края.
  */
@@ -1856,7 +1866,9 @@ export async function prepareProductImage(
 ): Promise<PreparedProductImage> {
   const buffer =
     profile === "cosmetics"
-      ? await preprocessCosmeticsProductBuffer(input)
+      ? PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
+        ? await preprocessCosmeticsProductBufferRaw(input)
+        : await preprocessCosmeticsProductBuffer(input)
       : await preprocessProductBuffer(input);
   const meta = await sharp(buffer).metadata();
   const srcW = meta.width ?? 1;
@@ -1961,12 +1973,16 @@ export async function fitProductPng(
       }
       const scaledBuf = await scaled.png().toBuffer();
       const left = Math.max(0, Math.round((width - maxW) / 2));
-      buffer = await (profile === "cosmetics" ? finalizeCosmeticsCutout : finalizeProductCutout)(
-        await sharp(scaledBuf)
-          .extract({ left, top: 0, width: maxW, height })
-          .png()
-          .toBuffer()
-      );
+      const extracted = await sharp(scaledBuf)
+        .extract({ left, top: 0, width: maxW, height })
+        .png()
+        .toBuffer();
+      buffer =
+        profile === "cosmetics" && PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
+          ? extracted
+          : await (profile === "cosmetics" ? finalizeCosmeticsCutout : finalizeProductCutout)(
+              extracted
+            );
       width = maxW;
     } else {
       buffer = await resizeProductForCard(trimmed, width, height, srcW, srcH, profile);

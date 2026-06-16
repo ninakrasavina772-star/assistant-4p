@@ -22,6 +22,7 @@ import {
 
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 import {
+  PODRUZHKA_COSMETICS_FOTO_MODE,
   PODRUZHKA_COSMETICS_PRODUCT_SCALE,
   PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL,
   PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL,
@@ -305,7 +306,10 @@ async function resolveCosmeticsUniformPlacement(
     fit: cappedFit,
     drawX,
     drawY,
-    strategyId: `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
+    strategyId:
+      PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
+        ? `cosmetics-raw-v1${isNarrow ? "-narrow" : ""}`
+        : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
     visualScore: 100
   };
 }
