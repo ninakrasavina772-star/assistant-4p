@@ -269,6 +269,189 @@ function isPaddingRow(
   return outside > Math.max(8, inside * 1.2);
 }
 
+/** Белый фон Ozon, достижимый с края кадра (только near-white). */
+function buildExteriorNearWhiteMask(
+  src: Buffer,
+  w: number,
+  h: number,
+  threshold = 235
+): Uint8Array {
+  const exterior = new Uint8Array(w * h);
+  const visited = new Uint8Array(w * h);
+  const queue: number[] = [];
+
+  const tryPush = (idx: number) => {
+    if (idx < 0 || idx >= w * h || visited[idx]) return;
+    if (!readNearWhiteRgb(src, idx * 4, threshold, 32)) return;
+    queue.push(idx);
+  };
+
+  for (let x = 0; x < w; x++) {
+    tryPush(x);
+    tryPush((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    tryPush(y * w);
+    tryPush(y * w + (w - 1));
+  }
+
+  while (queue.length) {
+    const idx = queue.pop()!;
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    exterior[idx] = 1;
+    const x = idx % w;
+    const y = (idx - x) / w;
+    if (x > 0) tryPush(idx - 1);
+    if (x < w - 1) tryPush(idx + 1);
+    if (y > 0) tryPush(idx - w);
+    if (y < h - 1) tryPush(idx + w);
+  }
+
+  return exterior;
+}
+
+function isBodyAnchorPixel(src: Buffer, pi: number): boolean {
+  if (!readNearWhiteRgb(src, pi, 242, 30)) return true;
+  return isSubstantiveSourcePixel(src, pi);
+}
+
+type ColumnSpan = { yTop: number; yBot: number };
+
+/** Вернуть белые колпачки/крышки в колонках товара — не считать их фоном. */
+function reclaimProductWhiteInColumns(
+  src: Buffer,
+  exterior: Uint8Array,
+  w: number,
+  h: number
+): Uint8Array {
+  const isExterior = Uint8Array.from(exterior);
+
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isBodyAnchorPixel(src, (y * w + x) * 4)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  if (coreMaxX < coreMinX) return isExterior;
+
+  const padX = Math.max(6, Math.round((coreMaxX - coreMinX + 1) * 0.14));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
+  const capGap = Math.max(12, Math.round((coreMaxX - coreMinX + 1) * 0.05));
+  const columnSpans = new Map<number, ColumnSpan>();
+
+  const reclaimWhiteStack = (x: number, yTop: number, yBot: number) => {
+    for (let y = yTop - 1; y >= 0; y--) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 235, 32)) break;
+      if (isPaddingRow(src, w, y, x0, x1)) break;
+      isExterior[y * w + x] = 0;
+      yTop = y;
+    }
+    for (let y = yBot + 1; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 235, 32)) break;
+      if (isPaddingRow(src, w, y, x0, x1)) break;
+      isExterior[y * w + x] = 0;
+      yBot = y;
+    }
+    columnSpans.set(x, { yTop, yBot });
+  };
+
+  for (let x = x0; x <= x1; x++) {
+    const anchorY: number[] = [];
+    for (let y = 0; y < h; y++) {
+      if (isBodyAnchorPixel(src, (y * w + x) * 4)) anchorY.push(y);
+    }
+    if (!anchorY.length) continue;
+    reclaimWhiteStack(x, Math.min(...anchorY), Math.max(...anchorY));
+  }
+
+  for (let x = x0; x <= x1; x++) {
+    if (columnSpans.has(x)) continue;
+    let bestDist = capGap + 1;
+    let bestSpan: ColumnSpan | null = null;
+    for (const [nx, span] of columnSpans) {
+      const dist = Math.abs(nx - x);
+      if (dist > capGap || dist >= bestDist) continue;
+      bestDist = dist;
+      bestSpan = span;
+    }
+    if (!bestSpan) continue;
+    for (let y = bestSpan.yTop; y <= bestSpan.yBot; y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 235, 32)) continue;
+      isExterior[y * w + x] = 0;
+    }
+  }
+
+  return isExterior;
+}
+
+/**
+ * Косметика на белом Ozon: маска из исходника — белые колпачки остаются непрозрачными,
+ * без dilate/halo (нет «мазни» и дыр в белом).
+ */
+export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const src = Buffer.from(data);
+  const exterior = buildExteriorNearWhiteMask(src, w, h);
+  const isExterior = reclaimProductWhiteInColumns(src, exterior, w, h);
+
+  const pixels = Buffer.alloc(src.length);
+  for (let idx = 0; idx < w * h; idx++) {
+    const pi = idx * 4;
+    pixels[pi] = src[pi]!;
+    pixels[pi + 1] = src[pi + 1]!;
+    pixels[pi + 2] = src[pi + 2]!;
+    pixels[pi + 3] = isExterior[idx] ? 0 : 255;
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Жёсткая альфа: без полупрозрачного ореола вокруг товара. */
+export async function binarizeProductAlpha(input: Buffer, threshold = 64): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const pixels = Buffer.from(data);
+  for (let i = 0; i < pixels.length; i += 4) {
+    pixels[i + 3] = pixels[i + 3]! >= threshold ? 255 : 0;
+  }
+
+  return sharp(pixels, {
+    raw: { width: info.width, height: info.height, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Финал для косметики — без halo/fringe/dilate. */
+export async function finalizeCosmeticsCutout(input: Buffer): Promise<Buffer> {
+  let buf = await binarizeProductAlpha(input, 64);
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
+  return binarizeProductAlpha(buf, 64);
+}
+
 /**
  * Восстанавливает белые детали товара (колпачки, перемычки) только в колонках над/между
  * цветным телом — без горизонтального заливания белого фона Ozon по бокам.
@@ -692,7 +875,9 @@ async function resizeProductForCard(
     pipeline = pipeline.sharpen(PRODUCT_UPSCALE_SHARPEN);
   }
   const resized = await pipeline.png({ compressionLevel: 6 }).toBuffer();
-  return finalizeProductCutout(resized);
+  return profile === "cosmetics"
+    ? finalizeCosmeticsCutout(resized)
+    : finalizeProductCutout(resized);
 }
 
 /**
@@ -1283,14 +1468,11 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
  */
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
-  buf = await stripProductPackshotBackground(buf);
+  buf = await extractCosmeticsPackshotFromWhite(buf);
   buf = await stripCosmeticsFloorShadow(buf);
-  buf = await dilateProductAlpha(buf, 1);
-  buf = await stripEdgeConnectedOpaqueWhite(buf);
-  buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await trimTransparentSafe(buf);
   buf = await cropToVisibleProduct(buf, 8, 0.032);
-  return finalizeProductCutout(buf);
+  return finalizeCosmeticsCutout(buf);
 }
 
 export type FitProductOptions = {
@@ -1473,7 +1655,7 @@ export async function fitProductPng(
       }
       const scaledBuf = await scaled.png().toBuffer();
       const left = Math.max(0, Math.round((width - maxW) / 2));
-      buffer = await finalizeProductCutout(
+      buffer = await (profile === "cosmetics" ? finalizeCosmeticsCutout : finalizeProductCutout)(
         await sharp(scaledBuf)
           .extract({ left, top: 0, width: maxW, height })
           .png()
