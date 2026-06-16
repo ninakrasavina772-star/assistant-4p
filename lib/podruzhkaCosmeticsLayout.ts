@@ -1,5 +1,5 @@
 /** Вёрстка косметики — v5: новый template-base (петля) */
-export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v12";
+export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v13";
 
 /** Серые описания benefit: +2px к парфюму (20 → 22) */
 export const PODRUZHKA_COSMETICS_NOTE_DESC_SIZE = 22;

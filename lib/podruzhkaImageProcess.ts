@@ -130,23 +130,28 @@ function computeOpaqueFootprint(
   };
 }
 
-function hasOpaqueInColumn(
+function isColorfulOpaquePixel(pixels: Buffer, pi: number): boolean {
+  if (pixels[pi + 3]! < 20) return false;
+  return !readNearWhiteRgb(pixels, pi, 236, 28);
+}
+
+function hasColorfulOpaqueInColumn(
   pixels: Buffer,
   w: number,
   h: number,
   x: number,
   y: number,
   dir: -1 | 1,
-  footprint: OpaqueFootprint,
-  alphaMin = 20,
+  x0: number,
+  x1: number,
   maxStep = 220
 ): boolean {
   for (let step = 1; step <= maxStep; step++) {
     const ny = y + dir * step;
     if (ny < 0 || ny >= h) return false;
-    if (ny < footprint.minY - 4 || ny > footprint.maxY + 4) return false;
-    if (x < footprint.x0 || x > footprint.x1) return false;
-    if (pixels[(ny * w + x) * 4 + 3]! >= alphaMin) return true;
+    if (x < x0 || x > x1) return false;
+    const pi = (ny * w + x) * 4;
+    if (isColorfulOpaquePixel(pixels, pi)) return true;
   }
   return false;
 }
@@ -167,37 +172,91 @@ function isWhiteProductInteriorPixel(
 
   const opaque = pixels[pi + 3]! >= alphaMin;
   if (opaque) {
-    const above = hasOpaqueInColumn(pixels, w, h, x, y, -1, footprint, alphaMin);
-    const below = hasOpaqueInColumn(pixels, w, h, x, y, 1, footprint, alphaMin);
+    const above = hasColorfulOpaqueInColumn(
+      pixels,
+      w,
+      h,
+      x,
+      y,
+      -1,
+      footprint.x0,
+      footprint.x1
+    );
+    const below = hasColorfulOpaqueInColumn(
+      pixels,
+      w,
+      h,
+      x,
+      y,
+      1,
+      footprint.x0,
+      footprint.x1
+    );
     return above || below;
   }
 
-  const above = hasOpaqueInColumn(pixels, w, h, x, y, -1, footprint, alphaMin);
-  const below = hasOpaqueInColumn(pixels, w, h, x, y, 1, footprint, alphaMin);
+  const above = hasColorfulOpaqueInColumn(
+    pixels,
+    w,
+    h,
+    x,
+    y,
+    -1,
+    footprint.x0,
+    footprint.x1
+  );
+  const below = hasColorfulOpaqueInColumn(
+    pixels,
+    w,
+    h,
+    x,
+    y,
+    1,
+    footprint.x0,
+    footprint.x1
+  );
   if (above && below) return true;
 
-  let leftOpaque = false;
-  let rightOpaque = false;
+  let leftColor = false;
+  let rightColor = false;
   for (let dx = 1; dx <= 48 && x - dx >= footprint.x0; dx++) {
-    if (pixels[(y * w + (x - dx)) * 4 + 3]! >= alphaMin) {
-      leftOpaque = true;
+    if (isColorfulOpaquePixel(pixels, (y * w + (x - dx)) * 4)) {
+      leftColor = true;
       break;
     }
   }
   for (let dx = 1; dx <= 48 && x + dx <= footprint.x1; dx++) {
-    if (pixels[(y * w + (x + dx)) * 4 + 3]! >= alphaMin) {
-      rightOpaque = true;
+    if (isColorfulOpaquePixel(pixels, (y * w + (x + dx)) * 4)) {
+      rightColor = true;
       break;
     }
   }
-  return leftOpaque && rightOpaque;
+  return leftColor && rightColor;
+}
+
+function isPaddingRow(
+  src: Buffer,
+  w: number,
+  y: number,
+  x0: number,
+  x1: number
+): boolean {
+  let inside = 0;
+  let outside = 0;
+  for (let x = 0; x < w; x++) {
+    const pi = (y * w + x) * 4;
+    if (!readNearWhiteRgb(src, pi, 236, 28)) continue;
+    if (x >= x0 && x <= x1) inside++;
+    else outside++;
+  }
+  return outside > Math.max(8, inside * 1.2);
 }
 
 /**
- * После flood-fill белого фона с краёв возвращает белые детали товара (колпачки, крышки, белые панели),
- * которые ошибочно считались фоном из-за цвета #FFF.
+ * Восстанавливает белые детали товара (колпачки, перемычки) только в колонках над/между
+ * цветным телом — без горизонтального заливания белого фона Ozon по бокам.
  */
-export async function restoreAttachedWhiteProductRegions(
+export async function rebuildProductAlphaByColumn(
   cutout: Buffer,
   source: Buffer
 ): Promise<Buffer> {
@@ -213,11 +272,22 @@ export async function restoreAttachedWhiteProductRegions(
   if (!w || !h) return cutout;
 
   const pixels = Buffer.from(data);
-  const footprint = computeOpaqueFootprint(pixels, w, h);
-  if (!footprint) return cutout;
 
-  const nearWhiteAt = (x: number, y: number) =>
-    readNearWhiteRgb(src, (y * w + x) * 4, 236, 28);
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (!isColorfulOpaquePixel(pixels, pi)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  if (coreMaxX < coreMinX) return cutout;
+
+  const padX = Math.max(2, Math.round((coreMaxX - coreMinX + 1) * 0.06));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
 
   const restoreAt = (x: number, y: number) => {
     const i = (y * w + x) * 4;
@@ -229,63 +299,34 @@ export async function restoreAttachedWhiteProductRegions(
 
   const opaqueAt = (x: number, y: number) => pixels[(y * w + x) * 4 + 3]! >= 20;
 
-  // Колпачок / крышка над телом товара
-  for (let y = footprint.minY - 1; y >= 0; y--) {
-    let inColumn = 0;
-    let outsideColumn = 0;
-    for (let x = 0; x < w; x++) {
-      if (!nearWhiteAt(x, y)) continue;
-      if (x >= footprint.x0 && x <= footprint.x1) inColumn++;
-      else outsideColumn++;
+  for (let x = x0; x <= x1; x++) {
+    const colorfulY: number[] = [];
+    const opaqueY: number[] = [];
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 20) continue;
+      opaqueY.push(y);
+      if (isColorfulOpaquePixel(pixels, pi)) colorfulY.push(y);
     }
-    if (outsideColumn > Math.max(12, inColumn * 1.5)) break;
-    for (let x = footprint.x0; x <= footprint.x1; x++) {
-      if (!nearWhiteAt(x, y) || opaqueAt(x, y)) continue;
+
+    const anchorY = colorfulY.length ? colorfulY : opaqueY;
+    if (!anchorY.length) continue;
+
+    const yTop = Math.min(...anchorY);
+    const yBot = Math.max(...anchorY);
+
+    for (let y = yTop; y <= yBot; y++) {
+      const pi = (y * w + x) * 4;
+      if (opaqueAt(x, y)) continue;
+      if (!readNearWhiteRgb(src, pi, 236, 28)) continue;
       restoreAt(x, y);
     }
-  }
 
-  // Белые «окна» внутри силуэта (коробки и т.п.)
-  for (let y = footprint.minY; y <= footprint.maxY; y++) {
-    for (let x = footprint.minX; x <= footprint.maxX; x++) {
-      if (opaqueAt(x, y) || !nearWhiteAt(x, y)) continue;
-      if (!isWhiteProductInteriorPixel(pixels, w, h, x, y, footprint)) continue;
+    for (let y = yTop - 1; y >= 0; y--) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 236, 28)) break;
+      if (isPaddingRow(src, w, y, x0, x1)) break;
       restoreAt(x, y);
-    }
-  }
-
-  // Тонкая белая перемычка между колпачком и телом
-  const queue: number[] = [];
-  const seen = new Uint8Array(w * h);
-  const push = (x: number, y: number) => {
-    if (x < footprint.x0 || x > footprint.x1 || y < 0 || y >= h) return;
-    const idx = y * w + x;
-    if (seen[idx] || pixels[idx * 4 + 3]! < 20) return;
-    seen[idx] = 1;
-    queue.push(idx);
-  };
-  for (let y = 0; y < h; y++) {
-    for (let x = footprint.x0; x <= footprint.x1; x++) {
-      if (opaqueAt(x, y)) push(x, y);
-    }
-  }
-  while (queue.length) {
-    const idx = queue.pop()!;
-    const x = idx % w;
-    const y = (idx - x) / w;
-    for (const [nx, ny] of [
-      [x - 1, y],
-      [x + 1, y],
-      [x, y - 1],
-      [x, y + 1]
-    ] as const) {
-      if (nx < footprint.x0 || nx > footprint.x1 || ny < 0 || ny >= h) continue;
-      const nidx = ny * w + nx;
-      if (seen[nidx]) continue;
-      if (!nearWhiteAt(nx, ny) && pixels[nidx * 4 + 3]! < 20) continue;
-      if (nearWhiteAt(nx, ny)) restoreAt(nx, ny);
-      seen[nidx] = 1;
-      queue.push(nidx);
     }
   }
 
@@ -296,11 +337,70 @@ export async function restoreAttachedWhiteProductRegions(
     .toBuffer();
 }
 
+/** Убрать непрозрачный белый фон, связанный с краем кадра (не через прозрачные «мосты»). */
+export async function stripEdgeConnectedOpaqueWhite(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const visited = new Uint8Array(w * h);
+  const queue: number[] = [];
+
+  const isOpaqueWhite = (pi: number) =>
+    pixels[pi + 3]! >= 20 && readNearWhiteRgb(pixels, pi, 240, 24);
+
+  const tryPush = (idx: number) => {
+    if (idx < 0 || idx >= w * h || visited[idx]) return;
+    if (!isOpaqueWhite(idx * 4)) return;
+    queue.push(idx);
+  };
+
+  for (let x = 0; x < w; x++) {
+    tryPush(x);
+    tryPush((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    tryPush(y * w);
+    tryPush(y * w + (w - 1));
+  }
+
+  while (queue.length) {
+    const idx = queue.pop()!;
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    const pi = idx * 4;
+    if (!isOpaqueWhite(pi)) continue;
+    pixels[pi + 3] = 0;
+
+    const x = idx % w;
+    const y = (idx - x) / w;
+    if (x > 0) tryPush(idx - 1);
+    if (x < w - 1) tryPush(idx + 1);
+    if (y > 0) tryPush(idx - w);
+    if (y < h - 1) tryPush(idx + w);
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** @deprecated alias */
+export const restoreAttachedWhiteProductRegions = rebuildProductAlphaByColumn;
+
 /** Ozon packshot: сначала серо-белый (#F5F5F5) с краёв, затем строгий белый. */
 async function stripProductPackshotBackground(input: Buffer): Promise<Buffer> {
   let buf = await stripEdgeNearWhiteBackground(input, 236);
   buf = await stripProductEdgeBackground(buf);
-  buf = await restoreAttachedWhiteProductRegions(buf, input);
+  buf = await rebuildProductAlphaByColumn(buf, input);
   return buf;
 }
 
@@ -846,6 +946,8 @@ export async function dilateProductAlpha(input: Buffer, radius = 1): Promise<Buf
     for (let x = 0; x < w; x++) {
       const idx = y * w + x;
       if (alpha[idx] >= 128) continue;
+      const pi = idx * 4;
+      if (alpha[idx]! < 20 && readNearWhiteRgb(pixels, pi, 236, 28)) continue;
       let maxA = alpha[idx]!;
       for (let dy = -radius; dy <= radius; dy++) {
         for (let dx = -radius; dx <= radius; dx++) {
@@ -1034,6 +1136,7 @@ export async function finalizeProductCutout(input: Buffer): Promise<Buffer> {
   let buf = await removeBoundaryWhiteHalo(input);
   buf = await solidifyProductInterior(buf);
   buf = await removeSemiTransparentWhiteFringe(buf);
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
   return buf;
 }
 
@@ -1099,6 +1202,7 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
     maxWarmth: 6
   });
   buf = await dilateProductAlpha(buf, 1);
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await cleanPerfumeAlphaFringe(buf);
   buf = await collapseInternalHorizontalGaps(buf);
@@ -1116,6 +1220,7 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
   buf = await stripProductPackshotBackground(buf);
   buf = await stripCosmeticsFloorShadow(buf);
   buf = await dilateProductAlpha(buf, 1);
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await trimTransparentSafe(buf);
   buf = await cropToVisibleProduct(buf, 8, 0.032);
