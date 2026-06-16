@@ -130,9 +130,52 @@ function computeOpaqueFootprint(
   };
 }
 
+function isSubstantiveSourcePixel(pixels: Buffer, pi: number): boolean {
+  const r = pixels[pi]!;
+  const g = pixels[pi + 1]!;
+  const b = pixels[pi + 2]!;
+  const avg = (r + g + b) / 3;
+  const spread = Math.max(r, g, b) - Math.min(r, g, b);
+  const warmth = r - b;
+  if (!readNearWhiteRgb(pixels, pi, 242, 30)) return true;
+  if (warmth >= 4 && spread >= 6 && avg < 250) return true;
+  if (spread >= 14 && avg < 248) return true;
+  return false;
+}
+
 function isColorfulOpaquePixel(pixels: Buffer, pi: number): boolean {
   if (pixels[pi + 3]! < 20) return false;
   return !readNearWhiteRgb(pixels, pi, 236, 28);
+}
+
+function isProductAnchorPixel(pixels: Buffer, pi: number, source?: Buffer): boolean {
+  if (pixels[pi + 3]! >= 20) {
+    if (!readNearWhiteRgb(pixels, pi, 242, 30)) return true;
+    if (source && isSubstantiveSourcePixel(source, pi)) return true;
+    return false;
+  }
+  return source ? isSubstantiveSourcePixel(source, pi) : false;
+}
+
+function hasOpaqueAnchorInColumn(
+  pixels: Buffer,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  dir: -1 | 1,
+  x0: number,
+  x1: number,
+  alphaMin = 20,
+  maxStep = 220
+): boolean {
+  for (let step = 1; step <= maxStep; step++) {
+    const ny = y + dir * step;
+    if (ny < 0 || ny >= h) return false;
+    if (x < x0 || x > x1) return false;
+    if (pixels[(ny * w + x) * 4 + 3]! >= alphaMin) return true;
+  }
+  return false;
 }
 
 function hasColorfulOpaqueInColumn(
@@ -172,61 +215,35 @@ function isWhiteProductInteriorPixel(
 
   const opaque = pixels[pi + 3]! >= alphaMin;
   if (opaque) {
-    const above = hasColorfulOpaqueInColumn(
-      pixels,
-      w,
-      h,
-      x,
-      y,
-      -1,
-      footprint.x0,
-      footprint.x1
-    );
-    const below = hasColorfulOpaqueInColumn(
-      pixels,
-      w,
-      h,
-      x,
-      y,
-      1,
-      footprint.x0,
-      footprint.x1
-    );
+    const above =
+      hasColorfulOpaqueInColumn(pixels, w, h, x, y, -1, footprint.x0, footprint.x1) ||
+      hasOpaqueAnchorInColumn(pixels, w, h, x, y, -1, footprint.x0, footprint.x1, alphaMin);
+    const below =
+      hasColorfulOpaqueInColumn(pixels, w, h, x, y, 1, footprint.x0, footprint.x1) ||
+      hasOpaqueAnchorInColumn(pixels, w, h, x, y, 1, footprint.x0, footprint.x1, alphaMin);
     return above || below;
   }
 
-  const above = hasColorfulOpaqueInColumn(
-    pixels,
-    w,
-    h,
-    x,
-    y,
-    -1,
-    footprint.x0,
-    footprint.x1
-  );
-  const below = hasColorfulOpaqueInColumn(
-    pixels,
-    w,
-    h,
-    x,
-    y,
-    1,
-    footprint.x0,
-    footprint.x1
-  );
+  const above =
+    hasColorfulOpaqueInColumn(pixels, w, h, x, y, -1, footprint.x0, footprint.x1) ||
+    hasOpaqueAnchorInColumn(pixels, w, h, x, y, -1, footprint.x0, footprint.x1, alphaMin);
+  const below =
+    hasColorfulOpaqueInColumn(pixels, w, h, x, y, 1, footprint.x0, footprint.x1) ||
+    hasOpaqueAnchorInColumn(pixels, w, h, x, y, 1, footprint.x0, footprint.x1, alphaMin);
   if (above && below) return true;
 
   let leftColor = false;
   let rightColor = false;
   for (let dx = 1; dx <= 48 && x - dx >= footprint.x0; dx++) {
-    if (isColorfulOpaquePixel(pixels, (y * w + (x - dx)) * 4)) {
+    const opi = (y * w + (x - dx)) * 4;
+    if (isProductAnchorPixel(pixels, opi)) {
       leftColor = true;
       break;
     }
   }
   for (let dx = 1; dx <= 48 && x + dx <= footprint.x1; dx++) {
-    if (isColorfulOpaquePixel(pixels, (y * w + (x + dx)) * 4)) {
+    const opi = (y * w + (x + dx)) * 4;
+    if (isProductAnchorPixel(pixels, opi)) {
       rightColor = true;
       break;
     }
@@ -278,7 +295,7 @@ export async function rebuildProductAlphaByColumn(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const pi = (y * w + x) * 4;
-      if (!isColorfulOpaquePixel(pixels, pi)) continue;
+      if (!isProductAnchorPixel(pixels, pi, src)) continue;
       coreMinX = Math.min(coreMinX, x);
       coreMaxX = Math.max(coreMaxX, x);
     }
@@ -300,16 +317,11 @@ export async function rebuildProductAlphaByColumn(
   const opaqueAt = (x: number, y: number) => pixels[(y * w + x) * 4 + 3]! >= 20;
 
   for (let x = x0; x <= x1; x++) {
-    const colorfulY: number[] = [];
-    const opaqueY: number[] = [];
+    const anchorY: number[] = [];
     for (let y = 0; y < h; y++) {
       const pi = (y * w + x) * 4;
-      if (pixels[pi + 3]! < 20) continue;
-      opaqueY.push(y);
-      if (isColorfulOpaquePixel(pixels, pi)) colorfulY.push(y);
+      if (isProductAnchorPixel(pixels, pi, src)) anchorY.push(y);
     }
-
-    const anchorY = colorfulY.length ? colorfulY : opaqueY;
     if (!anchorY.length) continue;
 
     const yTop = Math.min(...anchorY);
@@ -1008,6 +1020,54 @@ export async function featherProductAlpha(input: Buffer, sigma = 0.85): Promise<
     .toBuffer();
 }
 
+/** Колонки с товаром: белый колпачок и перемычки → alpha=255 (после resize/halo). */
+export async function solidifyProductColumnStacks(input: Buffer): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const footprint = computeOpaqueFootprint(pixels, w, h);
+  if (!footprint) return input;
+
+  for (let x = footprint.x0; x <= footprint.x1; x++) {
+    const anchorY: number[] = [];
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (isProductAnchorPixel(pixels, pi)) anchorY.push(y);
+    }
+    if (!anchorY.length) continue;
+
+    const yTop = Math.min(...anchorY);
+    const yBot = Math.max(...anchorY);
+
+    for (let y = yTop; y <= yBot; y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(pixels, pi, 236, 30)) continue;
+      if (pixels[pi + 3]! >= 250) continue;
+      pixels[pi + 3] = 255;
+    }
+
+    for (let y = yTop - 1; y >= 0; y--) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(pixels, pi, 236, 30)) break;
+      if (isPaddingRow(pixels, w, y, footprint.x0, footprint.x1)) break;
+      pixels[pi + 3] = 255;
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 /** Снять 1px белого JPEG-ореола на контуре (не трогаем тело товара). */
 export async function removeBoundaryWhiteHalo(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
@@ -1056,7 +1116,11 @@ export async function removeBoundaryWhiteHalo(input: Buffer): Promise<Buffer> {
         avg >= 238 &&
         spread <= 18 &&
         r - b <= 8 &&
-        isWhiteProductInteriorPixel(src, w, h, x, y, footprint)
+        (isWhiteProductInteriorPixel(src, w, h, x, y, footprint) ||
+          (x >= footprint.x0 &&
+            x <= footprint.x1 &&
+            (hasOpaqueAnchorInColumn(src, w, h, x, y, -1, footprint.x0, footprint.x1) ||
+              hasOpaqueAnchorInColumn(src, w, h, x, y, 1, footprint.x0, footprint.x1))))
       ) {
         continue;
       }
@@ -1133,8 +1197,10 @@ export async function solidifyProductInterior(input: Buffer): Promise<Buffer> {
 
 /** Финальная зачистка PNG перед композитом на серый макет. */
 export async function finalizeProductCutout(input: Buffer): Promise<Buffer> {
-  let buf = await removeBoundaryWhiteHalo(input);
+  let buf = await solidifyProductColumnStacks(input);
+  buf = await removeBoundaryWhiteHalo(buf);
   buf = await solidifyProductInterior(buf);
+  buf = await solidifyProductColumnStacks(buf);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await stripEdgeConnectedOpaqueWhite(buf);
   return buf;
