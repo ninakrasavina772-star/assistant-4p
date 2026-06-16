@@ -3,7 +3,7 @@ import { fillTemplateRows, type FillBatchIn } from "@/lib/templateGenerator/aiFi
 
 export const maxDuration = 120;
 
-const MAX_ROWS = 2;
+const MAX_ROWS = 1;
 
 export async function POST(req: Request) {
   let body: FillBatchIn;

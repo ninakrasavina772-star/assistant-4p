@@ -38,8 +38,22 @@ import {
 
 const SK_OPENAI = "fp_template_gen_openai_key";
 const SK_OPENAI_REM = "fp_template_gen_openai_remember";
-const FILL_CHUNK = 2;
-const FILL_PARALLEL = 3;
+const FILL_CHUNK = 1;
+const FILL_PARALLEL = 1;
+const FILL_REQUEST_MS = 130_000;
+
+function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
+  if (values.length <= max) return values;
+  if (brand.trim()) return dropdownSample(values, brand).slice(0, max);
+  return values.slice(0, max);
+}
+
+function dropdownSample(values: string[], brand: string): string[] {
+  const b = brand.toLowerCase();
+  const matched = values.filter((v) => v.toLowerCase().includes(b.slice(0, 4)));
+  const head = values.slice(0, 40);
+  return [...new Set([...matched.slice(0, 40), ...head])].slice(0, 120);
+}
 
 function resolveDropdownValues(
   c: TemplateSheetScan["columns"][number],
@@ -592,79 +606,125 @@ export function TemplateGeneratorTool() {
       scan.columns.find((c) => c.header.toLowerCase().includes("ссылка на изображение"))?.header ??
       null;
 
+    const keepCell = (header: string) =>
+      selectionList.some((s) => s.header === header) ||
+      /название|бренд|артикул|изображение|sku/i.test(header);
+
     const allResults: FillRowResult[] = [];
     const chunks: FillRowInput[][] = [];
     for (let i = 0; i < contexts.length; i += FILL_CHUNK) {
       chunks.push(
-        contexts.slice(i, i + FILL_CHUNK).map((ctx) => ({
-          row: ctx.row,
-          sku: ctx.sku,
-          productName: ctx.cells["Название товара *"] ?? ctx.cells["Название товара"] ?? "",
-          brand: ctx.cells["Бренд *"] ?? ctx.cells["Бренд"] ?? "",
-          cells: ctx.cells,
-          csvData: lookupCsvRow(csvIndex, ctx.sku, csvMapResolved)
-        }))
+        contexts.slice(i, i + FILL_CHUNK).map((ctx) => {
+          const cells: Record<string, string> = {};
+          for (const [k, v] of Object.entries(ctx.cells)) {
+            if (keepCell(k) && v.trim()) cells[k] = v;
+          }
+          return {
+            row: ctx.row,
+            sku: ctx.sku,
+            productName: ctx.cells["Название товара *"] ?? ctx.cells["Название товара"] ?? "",
+            brand: ctx.cells["Бренд *"] ?? ctx.cells["Бренд"] ?? "",
+            cells,
+            csvData: lookupCsvRow(csvIndex, ctx.sku, csvMapResolved)
+          };
+        })
       );
     }
 
-    const columnMeta = scan.columns.map((c) => {
+    const columnMeta = selectionList.map((sel) => {
+      const c = scan.columns.find((x) => x.header === sel.header);
+      if (!c) return null;
       const source = dropdownSource[c.header] ?? defaultDropdownSource(c);
+      const allValues = resolveDropdownValues(c, source);
       return {
         header: c.header,
         hint: c.hint,
-        dropdownValues: resolveDropdownValues(c, source),
+        dropdownValues:
+          sel.mode === "dropdown_strict"
+            ? capDropdownForApi(allValues, "")
+            : [],
         mode: (strictDropdown[c.header] ? "dropdown_strict" : "ai") as "ai" | "dropdown_strict"
       };
-    });
+    }).filter((x): x is NonNullable<typeof x> => x != null);
 
     const fillPrompt = buildFillPromptFromChat(chatMessages);
 
     let doneRows = 0;
-    for (let i = 0; i < chunks.length; i += FILL_PARALLEL) {
-      const wave = chunks.slice(i, i + FILL_PARALLEL);
-      setProgress(`AI: ${doneRows} / ${contexts.length}…`);
-      const waveResults = await Promise.all(
-        wave.map(async (rows) => {
-          const res = await fetch("/api/template-generator/fill", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              openaiApiKey: key,
-              userPrompt: fillPrompt,
-              columns: selectionList,
-              columnMeta,
-              rows,
-              photoSettings: {
-                enabled: photoEnabled,
-                minCount: photoMin,
-                targetCount: photoTarget,
-                imageHeader
-              }
-            })
-          });
-          if (!res.ok) {
-            const j = (await res.json()) as { error?: string };
-            throw new Error(j.error ?? `HTTP ${res.status}`);
-          }
-          const j = (await res.json()) as { results: FillRowResult[] };
-          return j.results;
-        })
-      );
-      for (const batch of waveResults) {
-        allResults.push(...batch);
-        doneRows += batch.length;
-      }
-      applyFillResults(ws, scan, selectionList, allResults, DEFAULT_PHOTO_REVIEW_COLUMN);
-      setPreview([...allResults]);
-    }
+    try {
+      for (let i = 0; i < chunks.length; i += FILL_PARALLEL) {
+        const wave = chunks.slice(i, i + FILL_PARALLEL);
+        setProgress(`AI: ${doneRows} / ${contexts.length}…`);
 
-    setProgress(`Готово: ${allResults.filter((r) => r.ok).length} / ${allResults.length}`);
-    setDone(true);
-    setBusy(false);
-    setStep(3);
-    void eventReply(
-      `Заполнение завершено: успешно ${allResults.filter((r) => r.ok).length} из ${allResults.length} строк. Можно скачать файл.`
-    );
+        const waveResults = await Promise.all(
+          wave.map(async (rows) => {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), FILL_REQUEST_MS);
+            try {
+              const res = await fetch("/api/template-generator/fill", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                signal: ctrl.signal,
+                body: JSON.stringify({
+                  openaiApiKey: key,
+                  userPrompt: fillPrompt,
+                  columns: selectionList,
+                  columnMeta,
+                  rows,
+                  skipWebContext: true,
+                  photoSettings: {
+                    enabled: photoEnabled,
+                    minCount: photoMin,
+                    targetCount: photoTarget,
+                    imageHeader
+                  }
+                })
+              });
+              if (!res.ok) {
+                const j = (await res.json()) as { error?: string };
+                throw new Error(j.error ?? `HTTP ${res.status}`);
+              }
+              const j = (await res.json()) as { results: FillRowResult[] };
+              return j.results;
+            } catch (e) {
+              if (e instanceof Error && e.name === "AbortError") {
+                throw new Error("Сервер не ответил вовремя — попробуйте снова или уменьшите число столбцов");
+              }
+              throw e;
+            } finally {
+              clearTimeout(timer);
+            }
+          })
+        );
+
+        for (const batch of waveResults) {
+          allResults.push(...batch);
+          doneRows += batch.length;
+        }
+        applyFillResults(ws, scan, selectionList, allResults, DEFAULT_PHOTO_REVIEW_COLUMN);
+        setPreview([...allResults]);
+        setProgress(`AI: ${doneRows} / ${contexts.length}…`);
+      }
+
+      setProgress(`Готово: ${allResults.filter((r) => r.ok).length} / ${allResults.length}`);
+      setDone(true);
+      setStep(3);
+      void eventReply(
+        `Заполнение завершено: успешно ${allResults.filter((r) => r.ok).length} из ${allResults.length} строк. Можно скачать файл.`
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Ошибка заполнения";
+      setError(
+        doneRows > 0
+          ? `${msg}. Обработано ${doneRows} из ${contexts.length} — можно скачать частичный результат.`
+          : msg
+      );
+      if (doneRows > 0) {
+        setDone(true);
+        setStep(3);
+      }
+    } finally {
+      setBusy(false);
+    }
   }, [
     scan,
     openaiKey,
@@ -1032,6 +1092,12 @@ export function TemplateGeneratorTool() {
               {busy ? "Обработка…" : `Запустить AI для всех ${scan.dataRowCount} строк`}
             </button>
             {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
+            {busy ? (
+              <p className="text-xs text-slate-500">
+                Около 20–40 сек на строку (17 столбцов — дольше). Счётчик обновляется после каждой
+                строки.
+              </p>
+            ) : null}
           </div>
         </section>
       ) : null}

@@ -20,6 +20,8 @@ export type FillBatchIn = {
     imageHeader: string | null;
   };
   model?: string;
+  /** Не ходить на сайт бренда — быстрее и стабильнее при пакетной обработке */
+  skipWebContext?: boolean;
 };
 
 type AiFieldSpec = {
@@ -130,33 +132,45 @@ const SYSTEM = `Ты умный помощник контент-отдела м�
 {"fields":{"Заголовок столбца":"значение",...},"extra_photo_urls":["https://..."],"sources":["кратко: откуда взято"]}`;
 
 async function callOpenAi(apiKey: string, user: string, model?: string): Promise<AiJson> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: model?.trim() || "gpt-4o-mini",
-      temperature: 0.25,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: user }
-      ]
-    })
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 75_000);
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: model?.trim() || "gpt-4o-mini",
+        temperature: 0.25,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: user }
+        ]
+      })
+    });
 
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t.slice(0, 300) || `OpenAI HTTP ${res.status}`);
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t.slice(0, 300) || `OpenAI HTTP ${res.status}`);
+    }
+
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const raw = data.choices?.[0]?.message?.content ?? "{}";
+    return JSON.parse(raw) as AiJson;
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error("OpenAI: превышено время ожидания (75 с)");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const raw = data.choices?.[0]?.message?.content ?? "{}";
-  return JSON.parse(raw) as AiJson;
 }
 
 function pickProductName(row: FillRowInput): string {
@@ -182,7 +196,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
     const productName = pickProductName(row) || row.productName;
     const domain = guessBrandDomain(brand);
     let officialSnippet = "";
-    if (domain) {
+    if (domain && batch.skipWebContext !== true) {
       officialSnippet = await fetchPageTextSnippet(domain);
     }
 

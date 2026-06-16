@@ -11,7 +11,7 @@ export function guessBrandDomain(brand: string): string | null {
 export async function fetchPageTextSnippet(url: string, maxChars = 4000): Promise<string> {
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
+    const t = setTimeout(() => ctrl.abort(), 4000);
     const res = await fetch(url, {
       signal: ctrl.signal,
       headers: { "User-Agent": "Mozilla/5.0 (compatible; Assistant4P/1.0)" }
