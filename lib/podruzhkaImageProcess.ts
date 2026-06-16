@@ -73,10 +73,234 @@ export async function stripEdgeNearWhiteBackground(
     .toBuffer();
 }
 
+type OpaqueFootprint = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  x0: number;
+  x1: number;
+};
+
+function readNearWhiteRgb(
+  pixels: Buffer,
+  pi: number,
+  threshold = 236,
+  maxSpread = 28
+): boolean {
+  const r = pixels[pi]!;
+  const g = pixels[pi + 1]!;
+  const b = pixels[pi + 2]!;
+  const avg = (r + g + b) / 3;
+  const spread = Math.max(r, g, b) - Math.min(r, g, b);
+  return avg >= threshold && spread <= maxSpread;
+}
+
+function computeOpaqueFootprint(
+  pixels: Buffer,
+  w: number,
+  h: number,
+  alphaMin = 20
+): OpaqueFootprint | null {
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (pixels[(y * w + x) * 4 + 3]! < alphaMin) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX) return null;
+
+  const colW = maxX - minX + 1;
+  const padX = Math.max(4, Math.round(colW * 0.12));
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    x0: Math.max(0, minX - padX),
+    x1: Math.min(w - 1, maxX + padX)
+  };
+}
+
+function hasOpaqueInColumn(
+  pixels: Buffer,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  dir: -1 | 1,
+  footprint: OpaqueFootprint,
+  alphaMin = 20,
+  maxStep = 220
+): boolean {
+  for (let step = 1; step <= maxStep; step++) {
+    const ny = y + dir * step;
+    if (ny < 0 || ny >= h) return false;
+    if (ny < footprint.minY - 4 || ny > footprint.maxY + 4) return false;
+    if (x < footprint.x0 || x > footprint.x1) return false;
+    if (pixels[(ny * w + x) * 4 + 3]! >= alphaMin) return true;
+  }
+  return false;
+}
+
+function isWhiteProductInteriorPixel(
+  pixels: Buffer,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  footprint: OpaqueFootprint,
+  alphaMin = 20
+): boolean {
+  if (x < footprint.x0 || x > footprint.x1) return false;
+  if (y > footprint.maxY + 2) return false;
+  const pi = (y * w + x) * 4;
+  if (!readNearWhiteRgb(pixels, pi, 236, 28)) return false;
+
+  const opaque = pixels[pi + 3]! >= alphaMin;
+  if (opaque) {
+    const above = hasOpaqueInColumn(pixels, w, h, x, y, -1, footprint, alphaMin);
+    const below = hasOpaqueInColumn(pixels, w, h, x, y, 1, footprint, alphaMin);
+    return above || below;
+  }
+
+  const above = hasOpaqueInColumn(pixels, w, h, x, y, -1, footprint, alphaMin);
+  const below = hasOpaqueInColumn(pixels, w, h, x, y, 1, footprint, alphaMin);
+  if (above && below) return true;
+
+  let leftOpaque = false;
+  let rightOpaque = false;
+  for (let dx = 1; dx <= 48 && x - dx >= footprint.x0; dx++) {
+    if (pixels[(y * w + (x - dx)) * 4 + 3]! >= alphaMin) {
+      leftOpaque = true;
+      break;
+    }
+  }
+  for (let dx = 1; dx <= 48 && x + dx <= footprint.x1; dx++) {
+    if (pixels[(y * w + (x + dx)) * 4 + 3]! >= alphaMin) {
+      rightOpaque = true;
+      break;
+    }
+  }
+  return leftOpaque && rightOpaque;
+}
+
+/**
+ * После flood-fill белого фона с краёв возвращает белые детали товара (колпачки, крышки, белые панели),
+ * которые ошибочно считались фоном из-за цвета #FFF.
+ */
+export async function restoreAttachedWhiteProductRegions(
+  cutout: Buffer,
+  source: Buffer
+): Promise<Buffer> {
+  const { data, info } = await sharp(cutout)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const src = Buffer.from(await sharp(source).ensureAlpha().raw().toBuffer());
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h) return cutout;
+
+  const pixels = Buffer.from(data);
+  const footprint = computeOpaqueFootprint(pixels, w, h);
+  if (!footprint) return cutout;
+
+  const nearWhiteAt = (x: number, y: number) =>
+    readNearWhiteRgb(src, (y * w + x) * 4, 236, 28);
+
+  const restoreAt = (x: number, y: number) => {
+    const i = (y * w + x) * 4;
+    pixels[i] = src[i]!;
+    pixels[i + 1] = src[i + 1]!;
+    pixels[i + 2] = src[i + 2]!;
+    pixels[i + 3] = 255;
+  };
+
+  const opaqueAt = (x: number, y: number) => pixels[(y * w + x) * 4 + 3]! >= 20;
+
+  // Колпачок / крышка над телом товара
+  for (let y = footprint.minY - 1; y >= 0; y--) {
+    let inColumn = 0;
+    let outsideColumn = 0;
+    for (let x = 0; x < w; x++) {
+      if (!nearWhiteAt(x, y)) continue;
+      if (x >= footprint.x0 && x <= footprint.x1) inColumn++;
+      else outsideColumn++;
+    }
+    if (outsideColumn > Math.max(12, inColumn * 1.5)) break;
+    for (let x = footprint.x0; x <= footprint.x1; x++) {
+      if (!nearWhiteAt(x, y) || opaqueAt(x, y)) continue;
+      restoreAt(x, y);
+    }
+  }
+
+  // Белые «окна» внутри силуэта (коробки и т.п.)
+  for (let y = footprint.minY; y <= footprint.maxY; y++) {
+    for (let x = footprint.minX; x <= footprint.maxX; x++) {
+      if (opaqueAt(x, y) || !nearWhiteAt(x, y)) continue;
+      if (!isWhiteProductInteriorPixel(pixels, w, h, x, y, footprint)) continue;
+      restoreAt(x, y);
+    }
+  }
+
+  // Тонкая белая перемычка между колпачком и телом
+  const queue: number[] = [];
+  const seen = new Uint8Array(w * h);
+  const push = (x: number, y: number) => {
+    if (x < footprint.x0 || x > footprint.x1 || y < 0 || y >= h) return;
+    const idx = y * w + x;
+    if (seen[idx] || pixels[idx * 4 + 3]! < 20) return;
+    seen[idx] = 1;
+    queue.push(idx);
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = footprint.x0; x <= footprint.x1; x++) {
+      if (opaqueAt(x, y)) push(x, y);
+    }
+  }
+  while (queue.length) {
+    const idx = queue.pop()!;
+    const x = idx % w;
+    const y = (idx - x) / w;
+    for (const [nx, ny] of [
+      [x - 1, y],
+      [x + 1, y],
+      [x, y - 1],
+      [x, y + 1]
+    ] as const) {
+      if (nx < footprint.x0 || nx > footprint.x1 || ny < 0 || ny >= h) continue;
+      const nidx = ny * w + nx;
+      if (seen[nidx]) continue;
+      if (!nearWhiteAt(nx, ny) && pixels[nidx * 4 + 3]! < 20) continue;
+      if (nearWhiteAt(nx, ny)) restoreAt(nx, ny);
+      seen[nidx] = 1;
+      queue.push(nidx);
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 /** Ozon packshot: сначала серо-белый (#F5F5F5) с краёв, затем строгий белый. */
 async function stripProductPackshotBackground(input: Buffer): Promise<Buffer> {
   let buf = await stripEdgeNearWhiteBackground(input, 236);
   buf = await stripProductEdgeBackground(buf);
+  buf = await restoreAttachedWhiteProductRegions(buf, input);
   return buf;
 }
 
@@ -479,6 +703,8 @@ export async function removeSemiTransparentWhiteFringe(input: Buffer): Promise<B
 
   const pixels = Buffer.from(data);
 
+  const footprint = computeOpaqueFootprint(pixels, w, h);
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
@@ -492,7 +718,11 @@ export async function removeSemiTransparentWhiteFringe(input: Buffer): Promise<B
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
 
       if (a < 250 && avg >= 241 && spread <= 28) {
-        pixels[i + 3] = 0;
+        if (footprint && isWhiteProductInteriorPixel(pixels, w, h, x, y, footprint)) {
+          pixels[i + 3] = 255;
+        } else {
+          pixels[i + 3] = 0;
+        }
       }
     }
   }
@@ -692,6 +922,7 @@ export async function removeBoundaryWhiteHalo(input: Buffer): Promise<Buffer> {
 
   const alphaAt = (x: number, y: number) => src[(y * w + x) * 4 + 3]!;
   const isOpaque = (x: number, y: number) => alphaAt(x, y) >= 20;
+  const footprint = computeOpaqueFootprint(src, w, h);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -718,6 +949,15 @@ export async function removeBoundaryWhiteHalo(input: Buffer): Promise<Buffer> {
       const b = src[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      if (
+        footprint &&
+        avg >= 238 &&
+        spread <= 18 &&
+        r - b <= 8 &&
+        isWhiteProductInteriorPixel(src, w, h, x, y, footprint)
+      ) {
+        continue;
+      }
       if (avg >= 242 && spread <= 16 && r - b <= 8) {
         pixels[i + 3] = 0;
       } else if (src[i + 3]! < 255 && avg >= 238 && spread <= 18 && r - b <= 8) {
