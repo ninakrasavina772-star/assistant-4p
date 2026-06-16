@@ -468,8 +468,8 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
   const padX = Math.max(4, Math.round(productW * 0.05));
   const x0 = Math.max(0, coreMinX - padX);
   const x1 = Math.min(w - 1, coreMaxX + padX);
-  /** Реальный колпачок ~40–110 px; не тянем до верха кадра Ozon. */
-  const maxCapRise = Math.min(110, Math.max(36, Math.round(productW * 0.16)));
+  /** Маска колпачка — узкая; полный колпачок добирает reclaim ниже. */
+  const maxCapRise = Math.min(110, Math.max(40, Math.round(productW * 0.16)));
   const maxReflectionDrop = Math.min(14, Math.max(6, Math.round(productW * 0.03)));
 
   const mark = (x: number, y: number) => {
@@ -561,6 +561,72 @@ function cullWhiteOnlyOpaqueColumns(pixels: Buffer, w: number, h: number): void 
   }
 }
 
+/**
+ * Непрозрачный белый колпачок над цветным телом (колонки с достаточным телом).
+ * Нижние детали (золотая крышка) не трогаем.
+ */
+function reclaimOpaqueWhiteCapAboveBody(
+  pixels: Buffer,
+  src: Buffer,
+  whiteCapKeep: Uint8Array,
+  w: number,
+  h: number
+): void {
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  if (coreMaxX < coreMinX) return;
+
+  const padX = Math.max(3, Math.round((coreMaxX - coreMinX + 1) * 0.04));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
+  const minColoredRows = Math.max(24, Math.round(h * 0.1));
+  const productW = coreMaxX - coreMinX + 1;
+  const maxRise = Math.min(200, Math.max(80, Math.round(productW * 0.45)));
+
+  const isPureWhiteSrc = (pi: number) => {
+    const r = src[pi]!;
+    const g = src[pi + 1]!;
+    const b = src[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    return avg >= 252 && spread <= 8;
+  };
+
+  for (let x = x0; x <= x1; x++) {
+    let bodyRows = 0;
+    let minBodyY = h;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (isPureWhiteSrc(pi)) continue;
+      if (!isBodyAnchorPixel(src, pi)) continue;
+      bodyRows++;
+      minBodyY = Math.min(minBodyY, y);
+    }
+    if (bodyRows < minColoredRows) continue;
+
+    for (let y = minBodyY - 1, rise = 0; y >= 0 && rise < maxRise; y--, rise++) {
+      const idx = y * w + x;
+      const pi = idx * 4;
+      if (!readNearWhiteRgb(src, pi, 228, 40)) break;
+      pixels[pi] = src[pi]!;
+      pixels[pi + 1] = src[pi + 1]!;
+      pixels[pi + 2] = src[pi + 2]!;
+      pixels[pi + 3] = 255;
+      whiteCapKeep[idx] = 1;
+    }
+  }
+}
+
 /** Убрать белый Ozon между частями товара (не связан с цветным телом). */
 function purgeUnreachableWhiteOpaque(
   pixels: Buffer,
@@ -643,7 +709,6 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   }
 
   purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
-  purgeExteriorNearWhiteExceptCap(pixels, src, exterior, whiteCapKeep, w, h);
 
   for (let idx = 0; idx < w * h; idx++) {
     if (whiteCapKeep[idx] !== 1) continue;
@@ -656,7 +721,9 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
 
   trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
   cullWhiteOnlyOpaqueColumns(pixels, w, h);
+  reclaimOpaqueWhiteCapAboveBody(pixels, src, whiteCapKeep, w, h);
   purgeExteriorNearWhiteExceptCap(pixels, src, exterior, whiteCapKeep, w, h);
+  trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
 
   return sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
@@ -686,7 +753,8 @@ export async function binarizeProductAlpha(input: Buffer, threshold = 64): Promi
 
 /** Финал для косметики — без halo/fringe/dilate. */
 export async function finalizeCosmeticsCutout(input: Buffer): Promise<Buffer> {
-  let buf = await binarizeProductAlpha(input, 32);
+  let buf = await dilateProductAlpha(input, 1);
+  buf = await binarizeProductAlpha(buf, 32);
   return buf;
 }
 
