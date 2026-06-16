@@ -535,10 +535,6 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
       }
 
       for (const y of group) mark(x, y);
-      for (let y = yTop; y <= yBot; y++) {
-        const pi = (y * w + x) * 4;
-        if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
-      }
     }
   }
 
@@ -563,14 +559,66 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
 
 function shouldKeepCosmeticsProductPixel(
   src: Buffer,
-  isExteriorAfter: Uint8Array,
   whiteCapKeep: Uint8Array,
   idx: number
 ): boolean {
-  if (isExteriorAfter[idx]) return false;
   const pi = idx * 4;
   if (!readNearWhiteRgb(src, pi, 234, 34)) return true;
   return whiteCapKeep[idx] === 1;
+}
+
+/** Убрать белый Ozon между частями товара (не связан с цветным телом). */
+function purgeUnreachableWhiteOpaque(
+  pixels: Buffer,
+  whiteCapKeep: Uint8Array,
+  w: number,
+  h: number
+): void {
+  const n = w * h;
+  const reach = new Uint8Array(n);
+  const q: number[] = [];
+
+  const isColoredOpaque = (idx: number) => {
+    const pi = idx * 4;
+    if (pixels[pi + 3]! < 128) return false;
+    return !readNearWhiteRgb(pixels, pi, 234, 34);
+  };
+
+  for (let idx = 0; idx < n; idx++) {
+    if (!isColoredOpaque(idx)) continue;
+    reach[idx] = 1;
+    q.push(idx);
+  }
+
+  while (q.length) {
+    const idx = q.pop()!;
+    const x = idx % w;
+    const y = (idx - x) / w;
+    const neighbors = [idx - 1, idx + 1, idx - w, idx + w];
+    for (const j of neighbors) {
+      if (j < 0 || j >= n) continue;
+      if (reach[j]) continue;
+      const pi = j * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (isColoredOpaque(j)) {
+        reach[j] = 1;
+        q.push(j);
+        continue;
+      }
+      if (readNearWhiteRgb(pixels, pi, 234, 34) && whiteCapKeep[j] === 1) {
+        reach[j] = 1;
+        q.push(j);
+      }
+    }
+  }
+
+  for (let idx = 0; idx < n; idx++) {
+    const pi = idx * 4;
+    if (pixels[pi + 3]! < 128) continue;
+    if (!readNearWhiteRgb(pixels, pi, 234, 34)) continue;
+    if (reach[idx]) continue;
+    pixels[pi + 3] = 0;
+  }
 }
 
 /**
@@ -588,8 +636,6 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   if (!w || !h) return input;
 
   const src = Buffer.from(data);
-  const exteriorBefore = buildExteriorNearWhiteMask(src, w, h, 232);
-  const isExteriorAfter = reclaimProductWhiteInColumns(src, exteriorBefore, w, h);
   const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
 
   const pixels = Buffer.alloc(src.length);
@@ -598,11 +644,10 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
     pixels[pi] = src[pi]!;
     pixels[pi + 1] = src[pi + 1]!;
     pixels[pi + 2] = src[pi + 2]!;
-    pixels[pi + 3] = shouldKeepCosmeticsProductPixel(src, isExteriorAfter, whiteCapKeep, idx)
-      ? 255
-      : 0;
+    pixels[pi + 3] = shouldKeepCosmeticsProductPixel(src, whiteCapKeep, idx) ? 255 : 0;
   }
 
+  purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
   trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
 
   return sharp(pixels, {
