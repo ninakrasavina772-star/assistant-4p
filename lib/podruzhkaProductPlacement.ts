@@ -19,6 +19,15 @@ export const PODRUZHKA_TEXT_COLUMN_RIGHT = F.product.x;
 export function productVisualHeight(): number {
   return PODRUZHKA_PRODUCT_VISUAL.bottom - PODRUZHKA_PRODUCT_VISUAL.y;
 }
+export function fillProductZoneBackdrop(
+  ctx: Pick<CanvasRenderingContext2D, "fillStyle" | "fillRect">,
+  bgColor = "#F5F5F5"
+): void {
+  const z = PODRUZHKA_PRODUCT_VISUAL;
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(z.x, z.y, z.w, productVisualHeight());
+}
+
 
 export type ProductDrawPlacement = {
   drawX: number;

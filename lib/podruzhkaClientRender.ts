@@ -8,7 +8,7 @@ import {
 import { PODRUZHKA_FIGMA as F } from "@/lib/podruzhkaFigmaLayout";
 import { measureFromCanvas2D } from "@/lib/podruzhkaBrandLayout";
 import { computeHeaderStack, drawTextBlock } from "@/lib/podruzhkaHeaderLayout";
-import { PODRUZHKA_PRODUCT_VISUAL } from "@/lib/podruzhkaProductPlacement";
+import { fillProductZoneBackdrop, PODRUZHKA_PRODUCT_VISUAL } from "@/lib/podruzhkaProductPlacement";
 import {
   PODRUZHKA_COSMETICS_LAYOUT_VERSION,
   PODRUZHKA_COSMETICS_NOTE_DESC_SIZE,
@@ -141,6 +141,7 @@ export async function drawPodruzhkaCard(
   ctx.imageSmoothingQuality = "high";
 
   /* Товар под текстом — непрозрачный bbox foto не затирает надписи слева */
+  fillProductZoneBackdrop(ctx, S.colors.bg);
   ctx.drawImage(productImg, foto.drawX, foto.drawY, foto.width, foto.height);
 
   const header = computeHeaderStack(measureFromCanvas2D(ctx), {
