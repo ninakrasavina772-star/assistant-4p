@@ -319,8 +319,8 @@ function isBodyAnchorPixel(src: Buffer, pi: number): boolean {
 type ColumnSpan = { yTop: number; yBot: number };
 
 /**
- * Белые колпачки на белом Ozon: вертикальная заливка от якорей тела + общий span по ширине товара.
- * isPaddingRow не используем — на белом капе он обрывал восстановление в центре.
+ * Белые колпачки: вертикально от якорей тела, без прямоугольной заливки всего bbox
+ * (она оставляла белый фон Ozon по бокам).
  */
 function reclaimProductWhiteInColumns(
   src: Buffer,
@@ -332,19 +332,23 @@ function reclaimProductWhiteInColumns(
 
   let coreMinX = w;
   let coreMaxX = -1;
+  let globalMinAnchorY = h;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!isBodyAnchorPixel(src, (y * w + x) * 4)) continue;
       coreMinX = Math.min(coreMinX, x);
       coreMaxX = Math.max(coreMaxX, x);
+      globalMinAnchorY = Math.min(globalMinAnchorY, y);
     }
   }
   if (coreMaxX < coreMinX) return isExterior;
 
   const productW = coreMaxX - coreMinX + 1;
-  const padX = Math.max(8, Math.round(productW * 0.16));
+  const padX = Math.max(4, Math.round(productW * 0.05));
   const x0 = Math.max(0, coreMinX - padX);
   const x1 = Math.min(w - 1, coreMaxX + padX);
+  const maxCapRise = Math.round(productW * 0.88);
+  const capBridge = Math.max(20, Math.round(productW * 0.52));
   const columnSpans = new Map<number, ColumnSpan>();
 
   const markProduct = (x: number, y: number) => {
@@ -353,7 +357,8 @@ function reclaimProductWhiteInColumns(
   };
 
   const extendWhiteStack = (x: number, yTop: number, yBot: number): ColumnSpan => {
-    for (let y = yTop - 1; y >= 0; y--) {
+    const capFloorY = Math.max(0, globalMinAnchorY - maxCapRise);
+    for (let y = yTop - 1; y >= capFloorY; y--) {
       const pi = (y * w + x) * 4;
       if (!readNearWhiteRgb(src, pi, 234, 34)) break;
       markProduct(x, y);
@@ -378,29 +383,20 @@ function reclaimProductWhiteInColumns(
     for (const y of anchorY) markProduct(x, y);
   }
 
-  let gTop = h;
-  let gBot = -1;
-  for (const span of columnSpans.values()) {
-    gTop = Math.min(gTop, span.yTop);
-    gBot = Math.max(gBot, span.yBot);
-  }
-
-  if (gBot >= gTop) {
-    for (let x = x0; x <= x1; x++) {
-      for (let y = gTop; y <= gBot; y++) {
-        const pi = (y * w + x) * 4;
-        if (readNearWhiteRgb(src, pi, 234, 34)) markProduct(x, y);
-        else if (isBodyAnchorPixel(src, pi)) markProduct(x, y);
-      }
-    }
-  }
-
   for (let x = x0; x <= x1; x++) {
     if (columnSpans.has(x)) continue;
-    for (let y = 0; y < h; y++) {
+    let bestDist = capBridge + 1;
+    let bestSpan: ColumnSpan | null = null;
+    for (const [nx, span] of columnSpans) {
+      const dist = Math.abs(nx - x);
+      if (dist > capBridge || dist >= bestDist) continue;
+      bestDist = dist;
+      bestSpan = span;
+    }
+    if (!bestSpan) continue;
+    for (let y = bestSpan.yTop; y <= bestSpan.yBot; y++) {
       const pi = (y * w + x) * 4;
       if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
-      if (y < gTop || y > gBot) continue;
       markProduct(x, y);
     }
   }
@@ -413,6 +409,41 @@ function reclaimProductWhiteInColumns(
   }
 
   return isExterior;
+}
+
+/** Убрать белые поля Ozon слева/справа от силуэта (колпачок внутри ширины товара сохраняем). */
+function trimHorizontalWhiteMargins(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  let bodyLeft = w;
+  let bodyRight = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 236, 30) && !isBodyAnchorPixel(src, pi)) continue;
+      bodyLeft = Math.min(bodyLeft, x);
+      bodyRight = Math.max(bodyRight, x);
+    }
+  }
+  if (bodyRight < bodyLeft) return;
+
+  const trimPad = Math.max(3, Math.round((bodyRight - bodyLeft + 1) * 0.035));
+  const l = bodyLeft - trimPad;
+  const r = bodyRight + trimPad;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x >= l && x <= r) continue;
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (!readNearWhiteRgb(src, pi, 236, 30)) continue;
+      pixels[pi + 3] = 0;
+    }
+  }
 }
 
 /**
@@ -441,6 +472,8 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
     pixels[pi + 2] = src[pi + 2]!;
     pixels[pi + 3] = isExterior[idx] ? 0 : 255;
   }
+
+  trimHorizontalWhiteMargins(pixels, src, w, h);
 
   return sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
