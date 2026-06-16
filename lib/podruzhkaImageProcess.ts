@@ -318,7 +318,10 @@ function isBodyAnchorPixel(src: Buffer, pi: number): boolean {
 
 type ColumnSpan = { yTop: number; yBot: number };
 
-/** Вернуть белые колпачки/крышки в колонках товара — не считать их фоном. */
+/**
+ * Белые колпачки на белом Ozon: вертикальная заливка от якорей тела + общий span по ширине товара.
+ * isPaddingRow не используем — на белом капе он обрывал восстановление в центре.
+ */
 function reclaimProductWhiteInColumns(
   src: Buffer,
   exterior: Uint8Array,
@@ -338,28 +341,31 @@ function reclaimProductWhiteInColumns(
   }
   if (coreMaxX < coreMinX) return isExterior;
 
-  const padX = Math.max(6, Math.round((coreMaxX - coreMinX + 1) * 0.14));
+  const productW = coreMaxX - coreMinX + 1;
+  const padX = Math.max(8, Math.round(productW * 0.16));
   const x0 = Math.max(0, coreMinX - padX);
   const x1 = Math.min(w - 1, coreMaxX + padX);
-  const capGap = Math.max(12, Math.round((coreMaxX - coreMinX + 1) * 0.05));
   const columnSpans = new Map<number, ColumnSpan>();
 
-  const reclaimWhiteStack = (x: number, yTop: number, yBot: number) => {
+  const markProduct = (x: number, y: number) => {
+    if (x < x0 || x > x1 || y < 0 || y >= h) return;
+    isExterior[y * w + x] = 0;
+  };
+
+  const extendWhiteStack = (x: number, yTop: number, yBot: number): ColumnSpan => {
     for (let y = yTop - 1; y >= 0; y--) {
       const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 235, 32)) break;
-      if (isPaddingRow(src, w, y, x0, x1)) break;
-      isExterior[y * w + x] = 0;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+      markProduct(x, y);
       yTop = y;
     }
     for (let y = yBot + 1; y < h; y++) {
       const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 235, 32)) break;
-      if (isPaddingRow(src, w, y, x0, x1)) break;
-      isExterior[y * w + x] = 0;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+      markProduct(x, y);
       yBot = y;
     }
-    columnSpans.set(x, { yTop, yBot });
+    return { yTop, yBot };
   };
 
   for (let x = x0; x <= x1; x++) {
@@ -368,24 +374,41 @@ function reclaimProductWhiteInColumns(
       if (isBodyAnchorPixel(src, (y * w + x) * 4)) anchorY.push(y);
     }
     if (!anchorY.length) continue;
-    reclaimWhiteStack(x, Math.min(...anchorY), Math.max(...anchorY));
+    columnSpans.set(x, extendWhiteStack(x, Math.min(...anchorY), Math.max(...anchorY)));
+    for (const y of anchorY) markProduct(x, y);
+  }
+
+  let gTop = h;
+  let gBot = -1;
+  for (const span of columnSpans.values()) {
+    gTop = Math.min(gTop, span.yTop);
+    gBot = Math.max(gBot, span.yBot);
+  }
+
+  if (gBot >= gTop) {
+    for (let x = x0; x <= x1; x++) {
+      for (let y = gTop; y <= gBot; y++) {
+        const pi = (y * w + x) * 4;
+        if (readNearWhiteRgb(src, pi, 234, 34)) markProduct(x, y);
+        else if (isBodyAnchorPixel(src, pi)) markProduct(x, y);
+      }
+    }
   }
 
   for (let x = x0; x <= x1; x++) {
     if (columnSpans.has(x)) continue;
-    let bestDist = capGap + 1;
-    let bestSpan: ColumnSpan | null = null;
-    for (const [nx, span] of columnSpans) {
-      const dist = Math.abs(nx - x);
-      if (dist > capGap || dist >= bestDist) continue;
-      bestDist = dist;
-      bestSpan = span;
-    }
-    if (!bestSpan) continue;
-    for (let y = bestSpan.yTop; y <= bestSpan.yBot; y++) {
+    for (let y = 0; y < h; y++) {
       const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 235, 32)) continue;
-      isExterior[y * w + x] = 0;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
+      if (y < gTop || y > gBot) continue;
+      markProduct(x, y);
+    }
+  }
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (isBodyAnchorPixel(src, pi)) markProduct(x, y);
     }
   }
 
@@ -447,9 +470,8 @@ export async function binarizeProductAlpha(input: Buffer, threshold = 64): Promi
 
 /** Финал для косметики — без halo/fringe/dilate. */
 export async function finalizeCosmeticsCutout(input: Buffer): Promise<Buffer> {
-  let buf = await binarizeProductAlpha(input, 64);
-  buf = await stripEdgeConnectedOpaqueWhite(buf);
-  return binarizeProductAlpha(buf, 64);
+  let buf = await binarizeProductAlpha(input, 32);
+  return buf;
 }
 
 /**
