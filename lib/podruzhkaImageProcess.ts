@@ -425,14 +425,7 @@ function trimHorizontalWhiteMargins(
     for (let x = 0; x < w; x++) {
       const pi = (y * w + x) * 4;
       if (pixels[pi + 3]! < 128) continue;
-      if (readNearWhiteRgb(src, pi, 236, 30) && !isBodyAnchorPixel(src, pi)) {
-        const idx = y * w + x;
-        if (whiteCapKeep?.[idx]) {
-          bodyLeft = Math.min(bodyLeft, x);
-          bodyRight = Math.max(bodyRight, x);
-        }
-        continue;
-      }
+      if (readNearWhiteRgb(src, pi, 236, 30)) continue;
       bodyLeft = Math.min(bodyLeft, x);
       bodyRight = Math.max(bodyRight, x);
     }
@@ -462,13 +455,11 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
 
   let coreMinX = w;
   let coreMaxX = -1;
-  let globalMinAnchorY = h;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!isBodyAnchorPixel(src, (y * w + x) * 4)) continue;
       coreMinX = Math.min(coreMinX, x);
       coreMaxX = Math.max(coreMaxX, x);
-      globalMinAnchorY = Math.min(globalMinAnchorY, y);
     }
   }
   if (coreMaxX < coreMinX) return keep;
@@ -477,8 +468,8 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
   const padX = Math.max(4, Math.round(productW * 0.05));
   const x0 = Math.max(0, coreMinX - padX);
   const x1 = Math.min(w - 1, coreMaxX + padX);
-  const maxCapRise = Math.round(productW * 0.88);
-  const capFloorY = Math.max(0, globalMinAnchorY - maxCapRise);
+  /** Реальный колпачок ~40–110 px; не тянем до верха кадра Ozon. */
+  const maxCapRise = Math.min(110, Math.max(36, Math.round(productW * 0.16)));
   const maxReflectionDrop = Math.min(14, Math.max(6, Math.round(productW * 0.03)));
 
   const mark = (x: number, y: number) => {
@@ -495,32 +486,23 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
 
     const topY = Math.min(...anchorY);
     const botY = Math.max(...anchorY);
+    const capFloorY = Math.max(0, topY - maxCapRise);
+    /** Отдельная нижняя деталь (золотая крышка) — не тянем белый Ozon над ней. */
+    const skipUpwardCap =
+      botY > Math.round(h * 0.62) && topY > Math.round(h * 0.42);
 
-    for (let y = topY - 1; y >= capFloorY; y--) {
-      const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 228, 40)) break;
-      mark(x, y);
+    if (!skipUpwardCap) {
+      for (let y = topY - 1; y >= capFloorY; y--) {
+        const pi = (y * w + x) * 4;
+        if (!readNearWhiteRgb(src, pi, 228, 40)) break;
+        mark(x, y);
+      }
     }
 
     for (let y = botY + 1; y <= Math.min(h - 1, botY + maxReflectionDrop); y++) {
       const pi = (y * w + x) * 4;
       if (!readNearWhiteRgb(src, pi, 234, 34)) break;
       mark(x, y);
-    }
-  }
-
-  for (let y = capFloorY; y < globalMinAnchorY; y++) {
-    let rowLeft = w;
-    let rowRight = -1;
-    for (let x = x0; x <= x1; x++) {
-      if (!keep[y * w + x]) continue;
-      rowLeft = Math.min(rowLeft, x);
-      rowRight = Math.max(rowRight, x);
-    }
-    if (rowRight < rowLeft) continue;
-    for (let x = rowLeft; x <= rowRight; x++) {
-      const pi = (y * w + x) * 4;
-      if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
     }
   }
 
@@ -533,8 +515,50 @@ function shouldKeepCosmeticsProductPixel(
   idx: number
 ): boolean {
   const pi = idx * 4;
-  if (!readNearWhiteRgb(src, pi, 234, 34)) return isBodyAnchorPixel(src, pi);
-  return whiteCapKeep[idx] === 1;
+  if (whiteCapKeep[idx] === 1) return true;
+  return isBodyAnchorPixel(src, pi);
+}
+
+/** Белый фон Ozon, связанный с краями кадра — прозрачный; колпачки из whiteCapKeep сохраняем. */
+function purgeExteriorNearWhiteExceptCap(
+  pixels: Buffer,
+  src: Buffer,
+  exterior: Uint8Array,
+  whiteCapKeep: Uint8Array,
+  w: number,
+  h: number
+): void {
+  for (let idx = 0; idx < w * h; idx++) {
+    if (whiteCapKeep[idx] === 1) continue;
+    if (!exterior[idx]) continue;
+    const pi = idx * 4;
+    if (pixels[pi + 3]! < 128) continue;
+    if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
+    pixels[pi + 3] = 0;
+  }
+}
+
+/** Колонки без единого цветного пикселя — чистый белый Ozon (промежуток между частями). */
+function cullWhiteOnlyOpaqueColumns(pixels: Buffer, w: number, h: number): void {
+  for (let x = 0; x < w; x++) {
+    let hasColor = false;
+    let hasOpaque = false;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      hasOpaque = true;
+      if (!readNearWhiteRgb(pixels, pi, 234, 34)) {
+        hasColor = true;
+        break;
+      }
+    }
+    if (!hasOpaque || hasColor) continue;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(pixels, pi, 234, 34)) pixels[pi + 3] = 0;
+    }
+  }
 }
 
 /** Убрать белый Ozon между частями товара (не связан с цветным телом). */
@@ -607,6 +631,7 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
 
   const src = Buffer.from(data);
   const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
+  const exterior = buildExteriorNearWhiteMask(src, w, h, 232);
 
   const pixels = Buffer.alloc(src.length);
   for (let idx = 0; idx < w * h; idx++) {
@@ -618,6 +643,7 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   }
 
   purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
+  purgeExteriorNearWhiteExceptCap(pixels, src, exterior, whiteCapKeep, w, h);
 
   for (let idx = 0; idx < w * h; idx++) {
     if (whiteCapKeep[idx] !== 1) continue;
@@ -629,6 +655,8 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   }
 
   trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
+  cullWhiteOnlyOpaqueColumns(pixels, w, h);
+  purgeExteriorNearWhiteExceptCap(pixels, src, exterior, whiteCapKeep, w, h);
 
   return sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
