@@ -772,7 +772,12 @@ export async function solidifyProductInterior(input: Buffer): Promise<Buffer> {
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      if (avg >= 248 && spread <= 12) continue;
+      const neutral = r - b <= 12;
+      // Светлый полупрозрачный ореол (белый Ozon / серая петля макета) — непрозрачный, иначе просвечивает фон
+      if (neutral && avg >= 228 && spread <= 20) {
+        pixels[i + 3] = 255;
+        continue;
+      }
       pixels[i + 3] = 255;
     }
   }

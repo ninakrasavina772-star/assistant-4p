@@ -31,8 +31,6 @@ import {
 } from "@/lib/podruzhkaBrandLayout";
 import { computeTextFlowLayout, type TextFlowLayout } from "@/lib/podruzhkaTextFlow";
 import { drawNoteBlocks, layoutNoteBlocks } from "@/lib/podruzhkaNotesLayout";
-import { fillProductZoneBackdrop } from "@/lib/podruzhkaProductPlacement";
-
 const { w: W, h: H } = PODRUZHKA_SIZE;
 const C = S.colors;
 
@@ -449,7 +447,6 @@ async function drawProductPlacementAsync(
   const w = placement.fit.width;
   const h = placement.fit.height;
 
-  fillProductZoneBackdrop(ctx, S.colors.bg);
   ctx.drawImage(prodImg, drawX, drawY, w, h);
 }
 
