@@ -416,7 +416,8 @@ function trimHorizontalWhiteMargins(
   pixels: Buffer,
   src: Buffer,
   w: number,
-  h: number
+  h: number,
+  whiteCapKeep?: Uint8Array
 ): void {
   let bodyLeft = w;
   let bodyRight = -1;
@@ -424,7 +425,14 @@ function trimHorizontalWhiteMargins(
     for (let x = 0; x < w; x++) {
       const pi = (y * w + x) * 4;
       if (pixels[pi + 3]! < 128) continue;
-      if (readNearWhiteRgb(src, pi, 236, 30) && !isBodyAnchorPixel(src, pi)) continue;
+      if (readNearWhiteRgb(src, pi, 236, 30) && !isBodyAnchorPixel(src, pi)) {
+        const idx = y * w + x;
+        if (whiteCapKeep?.[idx]) {
+          bodyLeft = Math.min(bodyLeft, x);
+          bodyRight = Math.max(bodyRight, x);
+        }
+        continue;
+      }
       bodyLeft = Math.min(bodyLeft, x);
       bodyRight = Math.max(bodyRight, x);
     }
@@ -438,7 +446,9 @@ function trimHorizontalWhiteMargins(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (x >= l && x <= r) continue;
-      const pi = (y * w + x) * 4;
+      const idx = y * w + x;
+      if (whiteCapKeep?.[idx]) continue;
+      const pi = idx * 4;
       if (pixels[pi + 3]! < 128) continue;
       if (!readNearWhiteRgb(src, pi, 236, 30)) continue;
       pixels[pi + 3] = 0;
@@ -446,28 +456,98 @@ function trimHorizontalWhiteMargins(
   }
 }
 
-function isReclaimedWhiteCap(
-  src: Buffer,
-  exteriorBefore: Uint8Array,
-  isExteriorAfter: Uint8Array,
-  idx: number
-): boolean {
-  if (isExteriorAfter[idx]) return false;
-  const pi = idx * 4;
-  if (!readNearWhiteRgb(src, pi, 234, 34)) return false;
-  return exteriorBefore[idx] === 1;
+/** Белый колпачок: только вертикальный стек над/под якорями тела в колонке (без горизонтального bridge). */
+function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8Array {
+  const keep = new Uint8Array(w * h);
+
+  let coreMinX = w;
+  let coreMaxX = -1;
+  let globalMinAnchorY = h;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isBodyAnchorPixel(src, (y * w + x) * 4)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+      globalMinAnchorY = Math.min(globalMinAnchorY, y);
+    }
+  }
+  if (coreMaxX < coreMinX) return keep;
+
+  const productW = coreMaxX - coreMinX + 1;
+  const padX = Math.max(4, Math.round(productW * 0.05));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
+  const maxCapRise = Math.round(productW * 0.88);
+  const capFloorY = Math.max(0, globalMinAnchorY - maxCapRise);
+
+  const mark = (x: number, y: number) => {
+    if (x < x0 || x > x1 || y < 0 || y >= h) return;
+    keep[y * w + x] = 1;
+  };
+
+  for (let x = x0; x <= x1; x++) {
+    const anchorY: number[] = [];
+    for (let y = 0; y < h; y++) {
+      if (isBodyAnchorPixel(src, (y * w + x) * 4)) anchorY.push(y);
+    }
+    if (!anchorY.length) continue;
+
+    let yTop = Math.min(...anchorY);
+    let yBot = Math.max(...anchorY);
+
+    for (let y = yTop - 1; y >= capFloorY; y--) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+      mark(x, y);
+      yTop = y;
+    }
+    for (let y = yBot + 1; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) break;
+      mark(x, y);
+      yBot = y;
+    }
+
+    for (const y of anchorY) mark(x, y);
+    for (let y = yTop; y <= yBot; y++) {
+      const pi = (y * w + x) * 4;
+      if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
+    }
+  }
+
+  // Горизонтальный bridge только в зоне колпачка (не на всю высоту товара)
+  let capSourceMinX = w;
+  let capSourceMaxX = -1;
+  for (let y = capFloorY; y < globalMinAnchorY; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
+      capSourceMinX = Math.min(capSourceMinX, x);
+      capSourceMaxX = Math.max(capSourceMaxX, x);
+    }
+  }
+  if (capSourceMaxX >= capSourceMinX) {
+    for (let y = capFloorY; y < globalMinAnchorY; y++) {
+      for (let x = capSourceMinX; x <= capSourceMaxX; x++) {
+        const pi = (y * w + x) * 4;
+        if (readNearWhiteRgb(src, pi, 234, 34)) mark(x, y);
+      }
+    }
+  }
+
+  return keep;
 }
 
 function shouldKeepCosmeticsProductPixel(
   src: Buffer,
-  exteriorBefore: Uint8Array,
   isExteriorAfter: Uint8Array,
+  whiteCapKeep: Uint8Array,
   idx: number
 ): boolean {
   if (isExteriorAfter[idx]) return false;
   const pi = idx * 4;
   if (!readNearWhiteRgb(src, pi, 234, 34)) return true;
-  return isReclaimedWhiteCap(src, exteriorBefore, isExteriorAfter, idx);
+  return whiteCapKeep[idx] === 1;
 }
 
 /**
@@ -487,6 +567,7 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   const src = Buffer.from(data);
   const exteriorBefore = buildExteriorNearWhiteMask(src, w, h, 232);
   const isExteriorAfter = reclaimProductWhiteInColumns(src, exteriorBefore, w, h);
+  const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
 
   const pixels = Buffer.alloc(src.length);
   for (let idx = 0; idx < w * h; idx++) {
@@ -494,12 +575,12 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
     pixels[pi] = src[pi]!;
     pixels[pi + 1] = src[pi + 1]!;
     pixels[pi + 2] = src[pi + 2]!;
-    pixels[pi + 3] = shouldKeepCosmeticsProductPixel(src, exteriorBefore, isExteriorAfter, idx)
+    pixels[pi + 3] = shouldKeepCosmeticsProductPixel(src, isExteriorAfter, whiteCapKeep, idx)
       ? 255
       : 0;
   }
 
-  trimHorizontalWhiteMargins(pixels, src, w, h);
+  trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
 
   return sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
