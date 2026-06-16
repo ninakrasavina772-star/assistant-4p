@@ -446,6 +446,30 @@ function trimHorizontalWhiteMargins(
   }
 }
 
+function isReclaimedWhiteCap(
+  src: Buffer,
+  exteriorBefore: Uint8Array,
+  isExteriorAfter: Uint8Array,
+  idx: number
+): boolean {
+  if (isExteriorAfter[idx]) return false;
+  const pi = idx * 4;
+  if (!readNearWhiteRgb(src, pi, 234, 34)) return false;
+  return exteriorBefore[idx] === 1;
+}
+
+function shouldKeepCosmeticsProductPixel(
+  src: Buffer,
+  exteriorBefore: Uint8Array,
+  isExteriorAfter: Uint8Array,
+  idx: number
+): boolean {
+  if (isExteriorAfter[idx]) return false;
+  const pi = idx * 4;
+  if (!readNearWhiteRgb(src, pi, 234, 34)) return true;
+  return isReclaimedWhiteCap(src, exteriorBefore, isExteriorAfter, idx);
+}
+
 /**
  * Косметика на белом Ozon: маска из исходника — белые колпачки остаются непрозрачными,
  * без dilate/halo (нет «мазни» и дыр в белом).
@@ -461,8 +485,8 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
   if (!w || !h) return input;
 
   const src = Buffer.from(data);
-  const exterior = buildExteriorNearWhiteMask(src, w, h);
-  const isExterior = reclaimProductWhiteInColumns(src, exterior, w, h);
+  const exteriorBefore = buildExteriorNearWhiteMask(src, w, h, 232);
+  const isExteriorAfter = reclaimProductWhiteInColumns(src, exteriorBefore, w, h);
 
   const pixels = Buffer.alloc(src.length);
   for (let idx = 0; idx < w * h; idx++) {
@@ -470,7 +494,9 @@ export async function extractCosmeticsPackshotFromWhite(input: Buffer): Promise<
     pixels[pi] = src[pi]!;
     pixels[pi + 1] = src[pi + 1]!;
     pixels[pi + 2] = src[pi + 2]!;
-    pixels[pi + 3] = isExterior[idx] ? 0 : 255;
+    pixels[pi + 3] = shouldKeepCosmeticsProductPixel(src, exteriorBefore, isExteriorAfter, idx)
+      ? 255
+      : 0;
   }
 
   trimHorizontalWhiteMargins(pixels, src, w, h);
