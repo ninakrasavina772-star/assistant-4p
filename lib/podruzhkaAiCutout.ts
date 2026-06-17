@@ -1,5 +1,4 @@
 import { createHash } from "crypto";
-import { rmbg } from "rmbg";
 import {
   buildYandexPublicUrl,
   getOzonStorageBackend,
@@ -42,6 +41,7 @@ async function fetchCachedCutout(publicUrl: string): Promise<Buffer | null> {
 }
 
 async function runLocalAiCutout(input: Buffer): Promise<Buffer> {
+  const { rmbg } = await import("rmbg");
   const out = await rmbg(input);
   const buf = Buffer.isBuffer(out) ? out : Buffer.from(out);
   if (buf.length < 4096) {
