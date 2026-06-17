@@ -1,12 +1,12 @@
 /** Вёрстка косметики — v5: новый template-base (петля) */
-export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v30";
+export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v31";
 
 /**
- * raw — foto с Ozon как есть (апскейл + вписать в зону), без cut-out.
- * cutout — удаление белого фона (экспериментально, для duo часто ломается).
+ * edge — снять только белый фон от краёв (как у парфюма), без «умной» маски.
+ * raw — foto как на Ozon; cutout — полный pipeline (нестабилен на duo).
  */
-export const PODRUZHKA_COSMETICS_FOTO_MODE = "raw" as const;
-export type PodruzhkaCosmeticsFotoMode = "raw" | "cutout";
+export const PODRUZHKA_COSMETICS_FOTO_MODE = "edge" as const;
+export type PodruzhkaCosmeticsFotoMode = "raw" | "edge" | "cutout";
 
 /** Серые описания benefit: +2px к парфюму (20 → 22) */
 export const PODRUZHKA_COSMETICS_NOTE_DESC_SIZE = 22;

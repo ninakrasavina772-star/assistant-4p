@@ -13,7 +13,8 @@ const PRODUCT_UPSCALE_SHARPEN = { sigma: 0.38, m1: 0.42, m2: 0.16 } as const;
  */
 export async function stripEdgeNearWhiteBackground(
   input: Buffer,
-  threshold = 242
+  threshold = 242,
+  opts?: { skipTopEdge?: boolean }
 ): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -44,7 +45,7 @@ export async function stripEdgeNearWhiteBackground(
   };
 
   for (let x = 0; x < w; x++) {
-    tryPush(x);
+    if (!opts?.skipTopEdge) tryPush(x);
     tryPush((h - 1) * w + x);
   }
   for (let y = 0; y < h; y++) {
@@ -558,6 +559,62 @@ function cullWhiteOnlyOpaqueColumns(pixels: Buffer, w: number, h: number): void 
       const pi = (y * w + x) * 4;
       if (pixels[pi + 3]! < 128) continue;
       if (readNearWhiteRgb(pixels, pi, 234, 34)) pixels[pi + 3] = 0;
+    }
+  }
+}
+
+/** Восстановить белый колпачок только там, где strip сделал прозрачным. */
+function restoreStrippedWhiteCaps(pixels: Buffer, src: Buffer, w: number, h: number): void {
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  if (coreMaxX < coreMinX) return;
+
+  const padX = Math.max(3, Math.round((coreMaxX - coreMinX + 1) * 0.04));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
+  const minColoredRows = Math.max(24, Math.round(h * 0.08));
+  const productW = coreMaxX - coreMinX + 1;
+  const maxRise = Math.min(200, Math.max(80, Math.round(productW * 0.45)));
+
+  const isPureWhiteSrc = (pi: number) => {
+    const r = src[pi]!;
+    const g = src[pi + 1]!;
+    const b = src[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    return avg >= 252 && spread <= 8;
+  };
+
+  for (let x = x0; x <= x1; x++) {
+    let bodyRows = 0;
+    let minBodyY = h;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (isPureWhiteSrc(pi)) continue;
+      if (!isBodyAnchorPixel(src, pi)) continue;
+      bodyRows++;
+      minBodyY = Math.min(minBodyY, y);
+    }
+    if (bodyRows < minColoredRows) continue;
+
+    for (let y = minBodyY - 1, rise = 0; y >= 0 && rise < maxRise; y--, rise++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 228, 40)) break;
+      if (pixels[pi + 3]! >= 128) continue;
+      pixels[pi] = src[pi]!;
+      pixels[pi + 1] = src[pi + 1]!;
+      pixels[pi + 2] = src[pi + 2]!;
+      pixels[pi + 3] = 255;
     }
   }
 }
@@ -1771,6 +1828,17 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Косметика: апскейл + strip только белого от краёв кадра (без маски колпачков).
+ */
+export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promise<Buffer> {
+  let buf = await enhanceSourceForProcessing(input);
+  buf = await stripEdgeNearWhiteBackground(buf, 242, { skipTopEdge: true });
+  buf = await trimTransparentSafe(buf);
+  buf = await cropToVisibleProduct(buf, 4, 0.016);
+  return finalizeCosmeticsCutout(buf);
+}
+
+/**
  * Косметика: только апскейл исходника — foto вставляется в шаблон как на Ozon.
  */
 export async function preprocessCosmeticsProductBufferRaw(input: Buffer): Promise<Buffer> {
@@ -1868,7 +1936,9 @@ export async function prepareProductImage(
     profile === "cosmetics"
       ? PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
         ? await preprocessCosmeticsProductBufferRaw(input)
-        : await preprocessCosmeticsProductBuffer(input)
+        : PODRUZHKA_COSMETICS_FOTO_MODE === "edge"
+          ? await preprocessCosmeticsProductBufferEdge(input)
+          : await preprocessCosmeticsProductBuffer(input)
       : await preprocessProductBuffer(input);
   const meta = await sharp(buffer).metadata();
   const srcW = meta.width ?? 1;

@@ -259,16 +259,22 @@ async function resolveCosmeticsUniformPlacement(
   cardH: number
 ): Promise<AdaptiveProductResult> {
   const isNarrow = prepared.aspect < 0.55;
+  const fotoMode = PODRUZHKA_COSMETICS_FOTO_MODE;
 
   const fit = await fitProductPng(prepared.buffer, zoneW, zoneH, {
     cardW,
     cardH,
     referenceBoxOnly: true,
     preparedInput: prepared.buffer,
-    fitMode: isNarrow ? "cover-height" : "contain",
-    scaleMultiplier: PODRUZHKA_COSMETICS_PRODUCT_SCALE,
-    referenceBoxMinHeightFill: PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL,
-    referenceBoxMinWidthFill: isNarrow ? 0 : PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL,
+    fitMode: "contain",
+    scaleMultiplier:
+      isNarrow && fotoMode !== "raw"
+        ? PODRUZHKA_COSMETICS_PRODUCT_SCALE * 1.14
+        : PODRUZHKA_COSMETICS_PRODUCT_SCALE,
+    referenceBoxMinHeightFill: isNarrow
+      ? 0.9
+      : PODRUZHKA_COSMETICS_TARGET_ZONE_HEIGHT_FILL,
+    referenceBoxMinWidthFill: isNarrow ? PODRUZHKA_COSMETICS_TARGET_ZONE_WIDTH_FILL : 0,
     referenceBoxMinCardHeightFill: 0.52,
     renderProfile: "cosmetics"
   });
@@ -307,9 +313,11 @@ async function resolveCosmeticsUniformPlacement(
     drawX,
     drawY,
     strategyId:
-      PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
+      fotoMode === "raw"
         ? `cosmetics-raw-v1${isNarrow ? "-narrow" : ""}`
-        : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
+        : fotoMode === "edge"
+          ? `cosmetics-edge-v1${isNarrow ? "-narrow" : ""}`
+          : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
     visualScore: 100
   };
 }
