@@ -260,7 +260,7 @@ async function resolveCosmeticsUniformPlacement(
 ): Promise<AdaptiveProductResult> {
   const isNarrow = prepared.aspect < 0.55;
   const fotoMode = PODRUZHKA_COSMETICS_FOTO_MODE;
-  const useCutoutPlacement = fotoMode === "edge" || fotoMode === "removebg";
+  const useCutoutPlacement = fotoMode === "edge" || fotoMode === "ai";
   const cosmeticsTopMargin = useCutoutPlacement ? 12 : 0;
   const fitMaxH =
     useCutoutPlacement ? Math.max(1, zoneH - cosmeticsTopMargin - 8) : zoneH;
@@ -325,8 +325,8 @@ async function resolveCosmeticsUniformPlacement(
     strategyId:
       fotoMode === "raw"
         ? `cosmetics-raw-v1${isNarrow ? "-narrow" : ""}`
-        : fotoMode === "removebg"
-          ? `cosmetics-removebg-v1${isNarrow ? "-narrow" : ""}`
+        : fotoMode === "ai"
+          ? `cosmetics-ai-v1${isNarrow ? "-narrow" : ""}`
           : fotoMode === "edge"
             ? `cosmetics-edge-v3${isNarrow ? "-narrow" : ""}`
             : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,

@@ -2,7 +2,7 @@ import sharp from "sharp";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 import { PODRUZHKA_COSMETICS_FOTO_MODE } from "@/lib/podruzhkaCosmeticsLayout";
-import { fetchRemoveBgCutout, removeBgConfigured } from "@/lib/podruzhkaRemoveBg";
+import { fetchAiCutout } from "@/lib/podruzhkaAiCutout";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
 const PRODUCT_SOURCE_MIN_LONG_EDGE = 1400;
@@ -2128,25 +2128,21 @@ export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promi
 }
 
 /**
- * Косметика: remove.bg (кэш в Yandex) → обрезка → PNG.
- * Без ключа или при ошибке API — fallback на edge.
+ * Косметика: локальная AI-модель (rmbg) + кэш в Yandex. При ошибке — edge.
  */
-export async function preprocessCosmeticsProductBufferRemoveBg(
+export async function preprocessCosmeticsProductBufferAi(
   input: Buffer,
   sourceUrl: string
 ): Promise<Buffer> {
-  if (!removeBgConfigured()) {
-    return preprocessCosmeticsProductBufferEdge(input);
-  }
   if (!sourceUrl.trim()) {
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
   let buf = await enhanceSourceForProcessing(input);
   try {
-    buf = await fetchRemoveBgCutout(sourceUrl, buf);
+    buf = await fetchAiCutout(sourceUrl, buf);
   } catch (e) {
-    console.warn("remove.bg failed, fallback to edge:", e);
+    console.warn("ai cutout failed, fallback to edge:", e);
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
@@ -2254,8 +2250,8 @@ export async function prepareProductImage(
     profile === "cosmetics"
       ? PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
         ? await preprocessCosmeticsProductBufferRaw(input)
-        : PODRUZHKA_COSMETICS_FOTO_MODE === "removebg"
-          ? await preprocessCosmeticsProductBufferRemoveBg(input, opts?.sourceUrl ?? "")
+        : PODRUZHKA_COSMETICS_FOTO_MODE === "ai"
+          ? await preprocessCosmeticsProductBufferAi(input, opts?.sourceUrl ?? "")
           : PODRUZHKA_COSMETICS_FOTO_MODE === "edge"
             ? await preprocessCosmeticsProductBufferEdge(input)
             : await preprocessCosmeticsProductBuffer(input)

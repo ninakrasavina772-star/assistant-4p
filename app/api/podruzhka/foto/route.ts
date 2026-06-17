@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { resolveAdaptiveProductPlacement } from "@/lib/podruzhkaProductAdaptive";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function GET(req: Request) {
   const url = new URL(req.url).searchParams.get("url")?.trim() ?? "";
