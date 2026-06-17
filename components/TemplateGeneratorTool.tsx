@@ -12,7 +12,7 @@ import {
   parseCsvText,
   type CsvTable
 } from "@/lib/templateGenerator/csvIndex";
-import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
+import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN, isCoreContentColumn } from "@/lib/templateGenerator/presets";
 import { collectRowContexts, loadListSheetValues, scanTemplateSheet, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
 import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import {
@@ -134,7 +134,7 @@ export function TemplateGeneratorTool() {
   const [strictDropdown, setStrictDropdown] = useState<Record<string, boolean>>({});
   const [dropdownSource, setDropdownSource] = useState<Record<string, DropdownSource>>({});
 
-  const [photoEnabled, setPhotoEnabled] = useState(true);
+  const [photoEnabled, setPhotoEnabled] = useState(false);
   const [photoMin, setPhotoMin] = useState(7);
   const [photoTarget, setPhotoTarget] = useState(8);
 
@@ -308,7 +308,7 @@ export function TemplateGeneratorTool() {
     const ds: Record<string, DropdownSource> = {};
     for (const c of s.columns) {
       if (c.readonly) continue;
-      en[c.header] = c.contentDefault;
+      en[c.header] = isCoreContentColumn(c.header);
       const listVals = resolveDropdownValues(c, "list_sheet");
       const tplVals = resolveDropdownValues(c, "template_validation");
       const hasList = listVals.length > 0;
@@ -608,7 +608,9 @@ export function TemplateGeneratorTool() {
 
     const keepCell = (header: string) =>
       selectionList.some((s) => s.header === header) ||
-      /название|бренд|артикул|изображение|sku/i.test(header);
+      /название|бренд|артикул|изображение|sku|описание|тип|пол|семейство|нот|объем|объём|линейка|год|тестер/i.test(
+        header
+      );
 
     const allResults: FillRowResult[] = [];
     const chunks: FillRowInput[][] = [];
@@ -670,7 +672,8 @@ export function TemplateGeneratorTool() {
                   columns: selectionList,
                   columnMeta,
                   rows,
-                  skipWebContext: true,
+                  skipWebContext: false,
+                  contentFocus: true,
                   photoSettings: {
                     enabled: photoEnabled,
                     minCount: photoMin,
@@ -962,8 +965,8 @@ export function TemplateGeneratorTool() {
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-700">
               Вкладка: <strong>{sheetName}</strong> · отмечено для генерации:{" "}
-              <strong>{enabledColCount}</strong> столбцов. Снимите галочки с полей, которые не
-              нужно менять.
+              <strong>{enabledColCount}</strong> столбцов. По умолчанию — контентные поля
+              (описание, тип, ноты, семейство…). Снимите галочки с полей, которые не нужно менять.
             </p>
             <div className="max-h-80 overflow-auto rounded border border-slate-200">
               <table className="w-full text-left text-xs">
@@ -1044,15 +1047,19 @@ export function TemplateGeneratorTool() {
             </div>
 
             <fieldset className="rounded-lg border border-slate-200 p-3 text-sm">
-              <legend className="px-1 font-semibold">Доп. фото</legend>
+              <legend className="px-1 font-semibold">Доп. фото (из шаблона)</legend>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   checked={photoEnabled}
                   onChange={(e) => setPhotoEnabled(e.target.checked)}
                 />
-                Искать доп. фото, если мало
+                Собрать ссылки из колонки «Ссылка на изображение» в «Доп. фото (проверка)»
               </label>
+              <p className="mt-2 text-xs text-slate-500">
+                AI не ищет картинки в интернете — только копирует уже имеющиеся URL из шаблона или CSV-фида.
+                Фейковые ссылки (example.com) отфильтровываются.
+              </p>
               <div className="mt-2 flex flex-wrap gap-4">
                 <label>
                   Минимум фото

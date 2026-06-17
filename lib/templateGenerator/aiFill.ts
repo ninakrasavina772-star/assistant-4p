@@ -1,5 +1,6 @@
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
-import { countRowPhotos, parseImageUrls } from "@/lib/templateGenerator/photos";
+import { collectReviewPhotosFromImageCell } from "@/lib/templateGenerator/photos";
+import { isCoreContentColumn } from "@/lib/templateGenerator/presets";
 import type { ColumnSelection, FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
 
 export type FillBatchIn = {
@@ -20,8 +21,10 @@ export type FillBatchIn = {
     imageHeader: string | null;
   };
   model?: string;
-  /** Не ходить на сайт бренда — быстрее и стабильнее при пакетной обработке */
+  /** Не ходить на сайт бренда — быстрее, но хуже для нот/описания */
   skipWebContext?: boolean;
+  /** Приоритет контентных полей: не просить AI искать фото в интернете */
+  contentFocus?: boolean;
 };
 
 type AiFieldSpec = {
@@ -72,8 +75,15 @@ function buildUserMessage(
   fields: AiFieldSpec[],
   userPrompt: string,
   officialSnippet: string,
-  photoNeed: number
+  opts: { contentFocus: boolean; onlyHeaders?: string[] }
 ): string {
+  const activeFields = opts.onlyHeaders?.length
+    ? fields.filter((f) => opts.onlyHeaders!.includes(f.header))
+    : fields;
+
+  const core = activeFields.filter((f) => isCoreContentColumn(f.header));
+  const other = activeFields.filter((f) => !isCoreContentColumn(f.header));
+
   const lines = [
     `Артикул SKU: ${row.sku}`,
     `Название: ${row.productName}`,
@@ -95,41 +105,51 @@ function buildUserMessage(
     lines.push("Задание от контент-менеджера:", userPrompt.trim(), "");
   }
 
-  lines.push("Заполни поля (JSON fields):");
-  for (const f of fields) {
-    if (f.mode === "dropdown_strict" && f.allowed?.length) {
-      const sample = dropdownSample(f.allowed, row.brand);
-      lines.push(
-        `- ${f.header}: ТОЛЬКО одно значение из списка (${f.allowed.length} вариантов, фрагмент): ${JSON.stringify(sample)}`
-      );
-    } else {
-      lines.push(`- ${f.header}: ${f.hint || "свободный текст"}`);
-    }
+  if (opts.contentFocus && !opts.onlyHeaders?.length) {
+    lines.push(
+      "ОБЯЗАТЕЛЬНО заполни все контентные поля ниже (не оставляй пустыми, если данные можно вывести из названия, CSV или сайта бренда):"
+    );
   }
 
-  if (photoNeed > 0) {
-    lines.push(
-      "",
-      `Нужно ещё ${photoNeed} прямых URL изображений товара (https, packshot на белом/прозрачном фоне).`,
-      "Верни их в extra_photo_urls — только реальные прямые ссылки на jpg/png/webp."
-    );
+  const renderFields = (list: AiFieldSpec[], title: string) => {
+    if (!list.length) return;
+    lines.push(title);
+    for (const f of list) {
+      if (f.mode === "dropdown_strict" && f.allowed?.length) {
+        const sample = dropdownSample(f.allowed, row.brand);
+        lines.push(
+          `- ${f.header}: ТОЛЬКО одно значение из списка (${f.allowed.length} вариантов, фрагмент): ${JSON.stringify(sample)}`
+        );
+      } else {
+        lines.push(`- ${f.header}: ${f.hint || "свободный текст"}`);
+      }
+    }
+    lines.push("");
+  };
+
+  if (opts.contentFocus && core.length) {
+    renderFields(core, "Контентные поля (приоритет):");
+    renderFields(other, "Прочие поля:");
+  } else {
+    renderFields(activeFields, "Заполни поля (JSON fields):");
   }
 
   return lines.join("\n");
 }
 
-const SYSTEM = `Ты умный помощник контент-отдела маркетплейса. Заполняешь характеристики товаров для Excel-шаблона Ozon по заданию контент-менеджера.
+const SYSTEM = `Ты умный помощник контент-отдела маркетплейса. Заполняешь КОНТЕНТНЫЕ характеристики товаров для Excel-шаблона Ozon.
 
-Правила достоверности:
-1. Приоритет — официальный сайт бренда/производителя (домен бренда, например chanel.com). Если фрагмент передан — считай его источником истины.
-2. Если на официальном сайте данных нет — ищи в CSV и других источниках; для спорных фактов нужно совпадение 2–3 независимых логических выводов (не выдумывай).
+Правила:
+1. Приоритет — официальный сайт бренда (если фрагмент передан), затем CSV, затем логический вывод из названия товара.
+2. Контентные поля (название, описание, тип, пол, семейство, ноты, объём) — заполняй по возможности полностью. Не оставляй пустыми ноты и семейство, если аромат узнаваем по названию.
 3. Не выдумывай штрихкоды, артикулы, цены, вес, габариты.
-4. dropdown_strict — значение СТРОГО из переданного списка (ближайшее допустимое). Если нет подходящего — оставь поле пустым.
-5. Описание товара — до 6000 символов, без КАПСА целиком, без сравнения с конкурентами.
-6. Ноты парфюма — на русском, без выдуманных терминов.
+4. dropdown_strict — значение СТРОГО из переданного списка. Если нет точного — выбери ближайшее по смыслу из списка.
+5. Описание — до 6000 символов, информативное, без КАПСА целиком.
+6. Ноты парфюма — на русском, конкретные (цитрус, жасмин, амбра…), не выдумывай несуществующие термины.
+7. НЕ придумывай URL изображений — поле extra_photo_urls всегда оставляй пустым массивом [].
 
 Ответ — JSON:
-{"fields":{"Заголовок столбца":"значение",...},"extra_photo_urls":["https://..."],"sources":["кратко: откуда взято"]}`;
+{"fields":{"Заголовок столбца":"значение",...},"extra_photo_urls":[],"sources":["кратко: откуда взято"]}`;
 
 async function callOpenAi(apiKey: string, user: string, model?: string): Promise<AiJson> {
   const ctrl = new AbortController();
@@ -187,60 +207,85 @@ function pickBrand(row: FillRowInput): string {
   return row.cells["Бренд *"] ?? row.cells["Бренд"] ?? row.brand ?? "";
 }
 
+function parseAiFields(json: AiJson, fields: AiFieldSpec[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const f of fields) {
+    const v = String(json.fields?.[f.header] ?? "").trim();
+    if (!v) continue;
+    if (f.mode === "dropdown_strict" && f.allowed?.length) {
+      const exact = f.allowed.find((a) => a.toLowerCase() === v.toLowerCase());
+      if (exact) values[f.header] = exact;
+      else {
+        const partial = f.allowed.find(
+          (a) => a.toLowerCase().includes(v.toLowerCase()) || v.toLowerCase().includes(a.toLowerCase())
+        );
+        if (partial) values[f.header] = partial;
+      }
+    } else {
+      values[f.header] = v;
+    }
+  }
+  return values;
+}
+
+function missingCoreHeaders(fields: AiFieldSpec[], values: Record<string, string>): string[] {
+  return fields
+    .filter((f) => isCoreContentColumn(f.header) && !values[f.header]?.trim())
+    .map((f) => f.header);
+}
+
+function imageCellText(row: FillRowInput, imageHeader: string | null): string {
+  if (imageHeader && row.cells[imageHeader]) return row.cells[imageHeader]!;
+  return row.cells["Ссылка на изображение *"] ?? row.cells["Ссылка на изображение"] ?? "";
+}
+
 export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResult[]> {
   const fields = buildFieldSpecs(batch.columns, batch.columnMeta);
+  const contentFocus = batch.contentFocus !== false;
   const out: FillRowResult[] = [];
 
   for (const row of batch.rows) {
     const brand = pickBrand(row);
-    const productName = pickProductName(row) || row.productName;
     const domain = guessBrandDomain(brand);
     let officialSnippet = "";
     if (domain && batch.skipWebContext !== true) {
       officialSnippet = await fetchPageTextSnippet(domain);
     }
 
-    const existingPhotos = batch.photoSettings.imageHeader
-      ? countRowPhotos(row.cells, batch.photoSettings.imageHeader)
-      : parseImageUrls(row.cells["Ссылка на изображение *"] ?? row.cells["Ссылка на изображение"] ?? "").length;
-
-    const photoNeed =
-      batch.photoSettings.enabled && existingPhotos < batch.photoSettings.minCount
-        ? Math.max(0, batch.photoSettings.targetCount - existingPhotos)
-        : 0;
+    const extraPhotos = batch.photoSettings.enabled
+      ? collectReviewPhotosFromImageCell(imageCellText(row, batch.photoSettings.imageHeader), {
+          minCount: batch.photoSettings.minCount,
+          targetCount: batch.photoSettings.targetCount
+        })
+      : [];
 
     try {
-      const user = buildUserMessage(row, fields, batch.userPrompt, officialSnippet, photoNeed);
+      const user = buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
+        contentFocus
+      });
       const json = await callOpenAi(batch.openaiApiKey, user, batch.model);
-      const values: Record<string, string> = {};
-      for (const f of fields) {
-        const v = String(json.fields?.[f.header] ?? "").trim();
-        if (!v) continue;
-        if (f.mode === "dropdown_strict" && f.allowed?.length) {
-          const exact = f.allowed.find((a) => a.toLowerCase() === v.toLowerCase());
-          if (exact) values[f.header] = exact;
-          else {
-            const partial = f.allowed.find(
-              (a) => a.toLowerCase().includes(v.toLowerCase()) || v.toLowerCase().includes(a.toLowerCase())
-            );
-            if (partial) values[f.header] = partial;
-          }
-        } else {
-          values[f.header] = v;
-        }
-      }
+      const values = parseAiFields(json, fields);
+      const sources = [...(json.sources ?? [])];
 
-      const extraPhotos = (json.extra_photo_urls ?? [])
-        .map((u) => String(u).trim())
-        .filter((u) => /^https?:\/\//i.test(u))
-        .slice(0, photoNeed || 8);
+      const missing = contentFocus ? missingCoreHeaders(fields, values) : [];
+      if (missing.length > 0) {
+        const retryUser =
+          buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
+            contentFocus: true,
+            onlyHeaders: missing
+          }) +
+          "\n\nЭти поля остались пустыми после первого прохода — заполни их обязательно на основе названия, CSV и сайта бренда.";
+        const json2 = await callOpenAi(batch.openaiApiKey, retryUser, batch.model);
+        Object.assign(values, parseAiFields(json2, fields));
+        sources.push(...(json2.sources ?? []));
+      }
 
       out.push({
         row: row.row,
         ok: true,
         values,
         extraPhotos,
-        sources: json.sources ?? []
+        sources
       });
     } catch (e) {
       out.push({

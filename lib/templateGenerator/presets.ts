@@ -80,6 +80,32 @@ export function isContentDefaultColumn(header: string): boolean {
   return CONTENT_DEFAULT_HEADERS.has(normHeader(header));
 }
 
+/** Ключевые контентные поля карточки (описание, ноты, тип…) — приоритет при генерации */
+const CORE_CONTENT_PATTERNS: RegExp[] = [
+  /^название товара/,
+  /^описание товара/,
+  /^тип$/,
+  /^бренд/,
+  /^пол$/,
+  /^семейство$/,
+  /^верхние ноты/,
+  /^средние ноты/,
+  /^базовые ноты/,
+  /^ноты$/,
+  /^объем флакона/,
+  /^объём флакона/,
+  /^линейка$/,
+  /^год$/,
+  /^тестер$/,
+  /^дополнительная информация$/,
+  /^прочие характеристики$/
+];
+
+export function isCoreContentColumn(header: string): boolean {
+  const h = normHeader(header);
+  return CORE_CONTENT_PATTERNS.some((re) => re.test(h));
+}
+
 export function isSkuHeader(header: string): boolean {
   const h = normHeader(header);
   return SKU_HEADERS.some((x) => h === x || h.includes("артикул товара"));

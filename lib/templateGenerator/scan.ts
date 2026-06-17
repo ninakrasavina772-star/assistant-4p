@@ -1,7 +1,7 @@
 import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
 import {
-  isContentDefaultColumn,
+  isCoreContentColumn,
   isImageHeader,
   isReadonlyColumn,
   isSkuHeader,
@@ -142,7 +142,7 @@ export function scanTemplateSheet(
       header,
       hint,
       readonly,
-      contentDefault: isContentDefaultColumn(header) && !readonly,
+      contentDefault: isCoreContentColumn(header) && !readonly,
       listSheetName: listName,
       dropdownValues,
       templateValidationValues: []
