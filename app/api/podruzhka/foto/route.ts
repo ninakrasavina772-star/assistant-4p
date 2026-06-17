@@ -22,7 +22,7 @@ export async function GET(req: Request) {
     );
   }
 
-  const placement = await resolveAdaptiveProductPlacement(fetched.buf, safeProfile);
+  const placement = await resolveAdaptiveProductPlacement(fetched.buf, safeProfile, url);
 
   return new NextResponse(new Uint8Array(placement.fit.buffer), {
     headers: {

@@ -260,9 +260,10 @@ async function resolveCosmeticsUniformPlacement(
 ): Promise<AdaptiveProductResult> {
   const isNarrow = prepared.aspect < 0.55;
   const fotoMode = PODRUZHKA_COSMETICS_FOTO_MODE;
-  const cosmeticsTopMargin = fotoMode === "edge" ? 12 : 0;
+  const useCutoutPlacement = fotoMode === "edge" || fotoMode === "removebg";
+  const cosmeticsTopMargin = useCutoutPlacement ? 12 : 0;
   const fitMaxH =
-    fotoMode === "edge" ? Math.max(1, zoneH - cosmeticsTopMargin - 8) : zoneH;
+    useCutoutPlacement ? Math.max(1, zoneH - cosmeticsTopMargin - 8) : zoneH;
 
   const fit = await fitProductPng(prepared.buffer, zoneW, fitMaxH, {
     cardW,
@@ -324,9 +325,11 @@ async function resolveCosmeticsUniformPlacement(
     strategyId:
       fotoMode === "raw"
         ? `cosmetics-raw-v1${isNarrow ? "-narrow" : ""}`
-        : fotoMode === "edge"
-          ? `cosmetics-edge-v3${isNarrow ? "-narrow" : ""}`
-          : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
+        : fotoMode === "removebg"
+          ? `cosmetics-removebg-v1${isNarrow ? "-narrow" : ""}`
+          : fotoMode === "edge"
+            ? `cosmetics-edge-v3${isNarrow ? "-narrow" : ""}`
+            : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
     visualScore: 100
   };
 }
@@ -334,9 +337,10 @@ async function resolveCosmeticsUniformPlacement(
 /** Подбирает масштаб и позицию foto под конкретный исходник. */
 export async function resolveAdaptiveProductPlacement(
   input: Buffer,
-  profile: PodruzhkaRenderProfile = "perfume"
+  profile: PodruzhkaRenderProfile = "perfume",
+  sourceUrl?: string
 ): Promise<AdaptiveProductResult> {
-  const prepared = await prepareProductImage(input, profile);
+  const prepared = await prepareProductImage(input, profile, { sourceUrl });
   const zoneW = PODRUZHKA_PRODUCT_VISUAL.w;
   const zoneH = productVisualHeight();
   const cardW = R.size.w;

@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 import { PODRUZHKA_COSMETICS_FOTO_MODE } from "@/lib/podruzhkaCosmeticsLayout";
+import { fetchRemoveBgCutout, removeBgConfigured } from "@/lib/podruzhkaRemoveBg";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
 const PRODUCT_SOURCE_MIN_LONG_EDGE = 1400;
@@ -2127,6 +2128,34 @@ export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promi
 }
 
 /**
+ * Косметика: remove.bg (кэш в Yandex) → обрезка → PNG.
+ * Без ключа или при ошибке API — fallback на edge.
+ */
+export async function preprocessCosmeticsProductBufferRemoveBg(
+  input: Buffer,
+  sourceUrl: string
+): Promise<Buffer> {
+  if (!removeBgConfigured()) {
+    return preprocessCosmeticsProductBufferEdge(input);
+  }
+  if (!sourceUrl.trim()) {
+    return preprocessCosmeticsProductBufferEdge(input);
+  }
+
+  let buf = await enhanceSourceForProcessing(input);
+  try {
+    buf = await fetchRemoveBgCutout(sourceUrl, buf);
+  } catch (e) {
+    console.warn("remove.bg failed, fallback to edge:", e);
+    return preprocessCosmeticsProductBufferEdge(input);
+  }
+
+  buf = await trimTransparentSafe(buf);
+  buf = await cropToVisibleProduct(buf, 8, 0.02, 6);
+  return finalizeCosmeticsCutout(buf);
+}
+
+/**
  * Косметика: только апскейл исходника — foto вставляется в шаблон как на Ozon.
  */
 export async function preprocessCosmeticsProductBufferRaw(input: Buffer): Promise<Buffer> {
@@ -2218,15 +2247,18 @@ export async function measureVerticalPadding(
 /** Единая предобработка foto с Ozon перед fit/подбором. */
 export async function prepareProductImage(
   input: Buffer,
-  profile: PodruzhkaRenderProfile = "perfume"
+  profile: PodruzhkaRenderProfile = "perfume",
+  opts?: { sourceUrl?: string }
 ): Promise<PreparedProductImage> {
   const buffer =
     profile === "cosmetics"
       ? PODRUZHKA_COSMETICS_FOTO_MODE === "raw"
         ? await preprocessCosmeticsProductBufferRaw(input)
-        : PODRUZHKA_COSMETICS_FOTO_MODE === "edge"
-          ? await preprocessCosmeticsProductBufferEdge(input)
-          : await preprocessCosmeticsProductBuffer(input)
+        : PODRUZHKA_COSMETICS_FOTO_MODE === "removebg"
+          ? await preprocessCosmeticsProductBufferRemoveBg(input, opts?.sourceUrl ?? "")
+          : PODRUZHKA_COSMETICS_FOTO_MODE === "edge"
+            ? await preprocessCosmeticsProductBufferEdge(input)
+            : await preprocessCosmeticsProductBuffer(input)
       : await preprocessProductBuffer(input);
   const meta = await sharp(buffer).metadata();
   const srcW = meta.width ?? 1;

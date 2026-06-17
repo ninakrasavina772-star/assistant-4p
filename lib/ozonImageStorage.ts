@@ -95,6 +95,30 @@ export async function uploadOzonImage(buf: Buffer, fileName: string): Promise<st
   );
 }
 
+/** Загрузка по фиксированному ключу (кэш cut-out и т.п.). */
+export async function uploadOzonImageAtKey(
+  buf: Buffer,
+  objectKey: string,
+  contentType = "image/png"
+): Promise<string> {
+  if (getOzonStorageBackend() !== "yandex") {
+    throw new Error("uploadOzonImageAtKey: нужен Yandex Object Storage");
+  }
+  const key = objectKey.replace(/^\/+/, "");
+  const client = yandexClient();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: process.env.YANDEX_S3_BUCKET!.trim(),
+      Key: key,
+      Body: buf,
+      ContentType: contentType,
+      ACL: "public-read",
+      CacheControl: "public, max-age=31536000, immutable"
+    })
+  );
+  return buildYandexPublicUrl(key);
+}
+
 export function storageBackendLabel(): string {
   const b = getOzonStorageBackend();
   if (b === "yandex") return "Yandex Object Storage";
