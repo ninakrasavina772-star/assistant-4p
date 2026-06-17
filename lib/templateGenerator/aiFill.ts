@@ -1,3 +1,4 @@
+import { prefillFromCsvData } from "@/lib/templateGenerator/csvPrefill";
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
 import { collectReviewPhotosFromImageCell } from "@/lib/templateGenerator/photos";
 import type { ColumnSelection, FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
@@ -74,7 +75,11 @@ function buildUserMessage(
   fields: AiFieldSpec[],
   userPrompt: string,
   officialSnippet: string,
-  opts: { contentFocus: boolean; onlyHeaders?: string[] }
+  opts: {
+    contentFocus: boolean;
+    onlyHeaders?: string[];
+    prefilled?: Record<string, string>;
+  }
 ): string {
   const activeFields = opts.onlyHeaders?.length
     ? fields.filter((f) => opts.onlyHeaders!.includes(f.header))
@@ -92,6 +97,11 @@ function buildUserMessage(
     JSON.stringify(row.csvData, null, 0),
     ""
   ];
+
+  if (opts.prefilled && Object.keys(opts.prefilled).length) {
+    lines.push("Уже заполнено из CSV/шаблона (не меняй без необходимости):");
+    lines.push(JSON.stringify(opts.prefilled, null, 0), "");
+  }
 
   if (officialSnippet) {
     lines.push("Фрагмент официального сайта бренда:", officialSnippet.slice(0, 3500), "");
@@ -228,18 +238,28 @@ function imageCellText(row: FillRowInput, imageHeader: string | null): string {
   return row.cells["Ссылка на изображение *"] ?? row.cells["Ссылка на изображение"] ?? "";
 }
 
+async function getBrandSnippet(
+  domain: string | null,
+  skipWeb: boolean,
+  cache: Map<string, string>
+): Promise<string> {
+  if (!domain || skipWeb) return "";
+  const hit = cache.get(domain);
+  if (hit !== undefined) return hit;
+  const snippet = await fetchPageTextSnippet(domain);
+  cache.set(domain, snippet);
+  return snippet;
+}
+
 export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResult[]> {
   const fields = buildFieldSpecs(batch.columns, batch.columnMeta);
   const contentFocus = batch.contentFocus !== false;
   const out: FillRowResult[] = [];
+  const brandSnippetCache = new Map<string, string>();
 
   for (const row of batch.rows) {
     const brand = pickBrand(row);
     const domain = guessBrandDomain(brand);
-    let officialSnippet = "";
-    if (domain && batch.skipWebContext !== true) {
-      officialSnippet = await fetchPageTextSnippet(domain);
-    }
 
     const extraPhotos = batch.photoSettings.enabled
       ? collectReviewPhotosFromImageCell(imageCellText(row, batch.photoSettings.imageHeader), {
@@ -249,24 +269,64 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       : [];
 
     try {
+      const csvPrefill = prefillFromCsvData(row.csvData, fields, row.cells);
+      const values: Record<string, string> = { ...csvPrefill.values };
+      const sources = [...csvPrefill.sources];
+
+      let missing = missingSelectedHeaders(fields, values).slice(0, 14);
+
+      if (missing.length === 0) {
+        out.push({
+          row: row.row,
+          ok: true,
+          values,
+          extraPhotos,
+          sources
+        });
+        continue;
+      }
+
+      const officialSnippet = await getBrandSnippet(
+        domain,
+        batch.skipWebContext === true,
+        brandSnippetCache
+      );
+      if (officialSnippet) sources.push("сайт бренда");
+
       const user = buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
-        contentFocus
+        contentFocus,
+        onlyHeaders: missing,
+        prefilled: values
       });
       const json = await callOpenAi(batch.openaiApiKey, user, batch.model);
-      const values = parseAiFields(json, fields);
-      const sources = [...(json.sources ?? [])];
+      Object.assign(values, parseAiFields(json, fields));
+      sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
-      const missing = contentFocus ? missingSelectedHeaders(fields, values).slice(0, 14) : [];
+      missing = contentFocus ? missingSelectedHeaders(fields, values).slice(0, 14) : [];
       if (missing.length > 0) {
         const retryUser =
           buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
             contentFocus: true,
-            onlyHeaders: missing
+            onlyHeaders: missing,
+            prefilled: values
           }) +
-          "\n\nЭти поля остались пустыми после первого прохода — заполни их обязательно на основе названия, CSV и сайта бренда.";
+          "\n\nЭти поля остались пустыми — заполни их обязательно на основе названия, CSV и сайта бренда. Не оставляй пустыми.";
         const json2 = await callOpenAi(batch.openaiApiKey, retryUser, batch.model);
         Object.assign(values, parseAiFields(json2, fields));
-        sources.push(...(json2.sources ?? []));
+        sources.push(...(json2.sources ?? []).map((s) => `AI retry: ${s}`));
+      }
+
+      const stillMissing = missingSelectedHeaders(fields, values);
+      if (stillMissing.length > 0) {
+        out.push({
+          row: row.row,
+          ok: false,
+          values,
+          extraPhotos,
+          sources,
+          error: `Не заполнены: ${stillMissing.join(", ")}`
+        });
+        continue;
       }
 
       out.push({

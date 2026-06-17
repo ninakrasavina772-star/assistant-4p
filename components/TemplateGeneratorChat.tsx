@@ -82,7 +82,8 @@ export function TemplateGeneratorChat({
       <div className="border-b border-slate-100 bg-gradient-to-r from-amber-50/80 to-white px-4 py-2.5">
         <p className="text-sm font-semibold text-slate-800">Ассистент</p>
         <p className="text-xs text-slate-500">
-          Помнит диалог в этой сессии (пока открыта вкладка и тот же API key)
+          Консультирует до запуска: столбцы, стиль, фид. Ваши сообщения станут заданием для AI при
+          заполнении.
         </p>
       </div>
 
@@ -131,7 +132,7 @@ export function TemplateGeneratorChat({
         <textarea
           className={`${homeInput} min-h-[44px] flex-1 resize-y`}
           rows={2}
-          placeholder="Напишите ассистенту: что заполнять, стиль описания, что проверить…"
+          placeholder="Например: заполни только ноты, стиль сдержанный, без воды…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {

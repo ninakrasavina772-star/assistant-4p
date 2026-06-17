@@ -15,7 +15,8 @@ export function applyFillResults(
   let filled = 0;
 
   for (const res of results) {
-    if (!res.ok) continue;
+    const hasValues = res.ok || Object.keys(res.values).length > 0;
+    if (!hasValues) continue;
     for (const [header, value] of Object.entries(res.values)) {
       const col = colByHeader.get(header);
       if (!col || !value) continue;

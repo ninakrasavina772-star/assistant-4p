@@ -12,6 +12,12 @@ import {
   parseCsvText,
   type CsvTable
 } from "@/lib/templateGenerator/csvIndex";
+import {
+  collectTemplateSkus,
+  countFillModes,
+  enhanceCsvColumnMap,
+  summarizeCsvCoverage
+} from "@/lib/templateGenerator/csvPrefill";
 import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
 import {
   clearColumnPrefs,
@@ -45,9 +51,11 @@ import {
 
 const SK_OPENAI = "fp_template_gen_openai_key";
 const SK_OPENAI_REM = "fp_template_gen_openai_remember";
+const SK_FEED_ENABLED = "fp_template_gen_feed_enabled";
 const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
 const FILL_REQUEST_MS = 130_000;
+const FILL_BATCH_SIZE_DEFAULT = 50;
 
 function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
   if (values.length <= max) return values;
@@ -112,6 +120,12 @@ function downloadBlob(blob: Blob, name: string) {
   URL.revokeObjectURL(a.href);
 }
 
+function filledDownloadName(fileName: string, part?: number): string {
+  const base = fileName.replace(/\.xlsx?$/i, "") || "template";
+  if (part && part > 0) return `${base}-filled-part${String(part).padStart(2, "0")}.xlsx`;
+  return `${base}-filled.xlsx`;
+}
+
 export function TemplateGeneratorTool() {
   const tplRef = useRef<HTMLInputElement>(null);
   const csvRef = useRef<HTMLInputElement>(null);
@@ -128,6 +142,7 @@ export function TemplateGeneratorTool() {
   const [csvMapLabel, setCsvMapLabel] = useState("");
   const [csvUrl, setCsvUrl] = useState("");
   const [csvLoading, setCsvLoading] = useState(false);
+  const [feedEnabled, setFeedEnabled] = useState(false);
   const [tplLoading, setTplLoading] = useState(false);
 
   const listValuesRef = useRef<Map<string, string[]>>(new Map());
@@ -150,6 +165,10 @@ export function TemplateGeneratorTool() {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<FillRowResult[]>([]);
   const [done, setDone] = useState(false);
+  const [fillBatchSize, setFillBatchSize] = useState(FILL_BATCH_SIZE_DEFAULT);
+  const [fillRowOffset, setFillRowOffset] = useState(0);
+  const [batchesCompleted, setBatchesCompleted] = useState(0);
+  const [batchNotice, setBatchNotice] = useState("");
   const [productSamples, setProductSamples] = useState<TemplateProductSample[] | undefined>();
   const [uniqueBrands, setUniqueBrands] = useState<string[] | undefined>();
 
@@ -163,7 +182,12 @@ export function TemplateGeneratorTool() {
       const k = sessionStorage.getItem(SK_OPENAI);
       if (k) setOpenaiKey(k);
     }
+    setFeedEnabled(sessionStorage.getItem(SK_FEED_ENABLED) === "1");
   }, []);
+
+  useEffect(() => {
+    sessionStorage.setItem(SK_FEED_ENABLED, feedEnabled ? "1" : "0");
+  }, [feedEnabled]);
 
   useEffect(() => {
     const k = openaiKey.trim();
@@ -209,9 +233,10 @@ export function TemplateGeneratorTool() {
       templateFile: fileName || undefined,
       sheetName: sheetName || undefined,
       rowCount: scan?.dataRowCount,
-      csvLabel: csvMapLabel || undefined,
-      csvRowCount: csvTable?.rows.length,
-      skuColumn: csvMap?.skuColumn,
+      feedEnabled,
+      csvLabel: feedEnabled ? csvMapLabel || undefined : undefined,
+      csvRowCount: feedEnabled ? csvTable?.rows.length : undefined,
+      skuColumn: feedEnabled ? csvMap?.skuColumn : undefined,
       selectedColumns: selected,
       enabledColCount: selected.length,
       photoEnabled,
@@ -220,9 +245,10 @@ export function TemplateGeneratorTool() {
       columns,
       productSamples: hasWb ? productSamples : undefined,
       uniqueBrands: hasWb ? uniqueBrands : undefined,
-      csvHeaders: csvTable?.headers,
-      csvSampleRows: csvTable ? buildCsvSampleRows(csvTable, csvMap, 3) : undefined,
-      csvMappedColumns: csvMap?.columns
+      csvHeaders: feedEnabled ? csvTable?.headers : undefined,
+      csvSampleRows:
+        feedEnabled && csvTable ? buildCsvSampleRows(csvTable, csvMap, 3) : undefined,
+      csvMappedColumns: feedEnabled ? csvMap?.columns : undefined
     };
   }, [
     fileName,
@@ -232,6 +258,7 @@ export function TemplateGeneratorTool() {
     productSamples,
     uniqueBrands,
     enabledCols,
+    feedEnabled,
     csvMapLabel,
     csvTable,
     csvMap,
@@ -390,6 +417,10 @@ export function TemplateGeneratorTool() {
         const j = (await res.json()) as { map?: CsvColumnMap };
         if (j.map) map = j.map;
       }
+      if (scan) {
+        const headers = scan.columns.map((c) => c.header);
+        map = enhanceCsvColumnMap(table, headers, map);
+      }
       setCsvMap(map);
       setCsvMapLabel(
         `${label} · ${table.rows.length} строк · SKU: ${map.skuColumn || "?"}`
@@ -512,6 +543,9 @@ export function TemplateGeneratorTool() {
       setError("");
       setDone(false);
       setPreview([]);
+      setFillRowOffset(0);
+      setBatchesCompleted(0);
+      setBatchNotice("");
       setTplLoading(true);
       try {
         if (!/\.xlsx?$/i.test(file.name)) {
@@ -625,6 +659,10 @@ export function TemplateGeneratorTool() {
       setError("Выберите хотя бы один столбец");
       return;
     }
+    if (feedEnabled && !csvTable) {
+      setError("Включён CSV-фид, но файл не загружен — загрузите фид или снимите галочку «Использовать фид»");
+      return;
+    }
 
     if (rememberKey) {
       sessionStorage.setItem(SK_OPENAI, key);
@@ -633,17 +671,46 @@ export function TemplateGeneratorTool() {
 
     setBusy(true);
     setError("");
-    setDone(false);
-    setPreview([]);
+    setBatchNotice("");
 
     const ws = wb.getWorksheet(scan.sheetName)!;
-    const contexts = collectRowContexts(ws, scan);
-    const csvMapResolved =
-      csvMap ??
-      (csvTable
-        ? mergeCsvMapHeuristic(csvTable, scan.columns.map((c) => c.header))
-        : { skuColumn: "", columns: {} });
-    const csvIndex = csvTable ? buildCsvIndex(csvTable, csvMapResolved) : new Map();
+    const allContexts = collectRowContexts(ws, scan);
+    const totalRows = allContexts.length;
+    if (fillRowOffset >= totalRows) {
+      setError("Все строки уже обработаны — загрузите шаблон заново или скачайте файл.");
+      setBusy(false);
+      return;
+    }
+
+    const batchSize = Math.max(1, Math.min(fillBatchSize, 200));
+    const batchStart = fillRowOffset;
+    const contexts = allContexts.slice(batchStart, batchStart + batchSize);
+    const batchEnd = batchStart + contexts.length;
+    const batchLabel = `строки ${batchStart + 1}–${batchEnd} из ${totalRows}`;
+
+    setDone(false);
+    setPreview([]);
+    const csvMapResolved = feedEnabled
+      ? enhanceCsvColumnMap(
+          csvTable ?? { headers: [], rows: [] },
+          scan.columns.map((c) => c.header),
+          csvMap ??
+            (csvTable
+              ? mergeCsvMapHeuristic(csvTable, scan.columns.map((c) => c.header))
+              : { skuColumn: "", columns: {} })
+        )
+      : { skuColumn: "", columns: {} };
+    const templateSkuSet = collectTemplateSkus(allContexts.map((c) => c.sku));
+    const csvIndex =
+      feedEnabled && csvTable ? buildCsvIndex(csvTable, csvMapResolved) : new Map();
+    if (feedEnabled && csvTable && templateSkuSet.size) {
+      const feedHits = summarizeCsvCoverage(csvTable, csvMapResolved, templateSkuSet).found;
+      setProgress(
+        `Фид: ${feedHits} из ${templateSkuSet.size} артикулов шаблона — сначала CSV, затем AI для пробелов…`
+      );
+    } else if (!feedEnabled) {
+      setProgress("Без фида — заполнение через AI (название, бренд, сайт производителя)…");
+    }
 
     const imageHeader =
       scan.columns.find((c) => c.header.toLowerCase().includes("ссылка на изображение"))?.header ??
@@ -670,7 +737,10 @@ export function TemplateGeneratorTool() {
             productName: ctx.cells["Название товара *"] ?? ctx.cells["Название товара"] ?? "",
             brand: ctx.cells["Бренд *"] ?? ctx.cells["Бренд"] ?? "",
             cells,
-            csvData: lookupCsvRow(csvIndex, ctx.sku, csvMapResolved)
+            csvData:
+              feedEnabled && csvTable
+                ? lookupCsvRow(csvIndex, ctx.sku, csvMapResolved)
+                : {},
           };
         })
       );
@@ -698,7 +768,7 @@ export function TemplateGeneratorTool() {
     try {
       for (let i = 0; i < chunks.length; i += FILL_PARALLEL) {
         const wave = chunks.slice(i, i + FILL_PARALLEL);
-        setProgress(`AI: ${doneRows} / ${contexts.length}…`);
+        setProgress(`AI: ${doneRows} / ${contexts.length} (${batchLabel})…`);
 
         const waveResults = await Promise.all(
           wave.map(async (rows) => {
@@ -748,25 +818,58 @@ export function TemplateGeneratorTool() {
         }
         applyFillResults(ws, scan, selectionList, allResults, DEFAULT_PHOTO_REVIEW_COLUMN);
         setPreview([...allResults]);
-        setProgress(`AI: ${doneRows} / ${contexts.length}…`);
+        setProgress(`AI: ${doneRows} / ${contexts.length} (${batchLabel})…`);
       }
 
-      setProgress(`Готово: ${allResults.filter((r) => r.ok).length} / ${allResults.length}`);
-      setDone(true);
-      setStep(3);
-      void eventReply(
-        `Заполнение завершено: успешно ${allResults.filter((r) => r.ok).length} из ${allResults.length} строк. Можно скачать файл.`
-      );
+      const batchNum = batchesCompleted + 1;
+      const blob = await writeWorkbookToBlob(wb);
+      downloadBlob(blob, filledDownloadName(fileName, batchNum));
+
+      const modes = countFillModes(allResults);
+      const modeLine =
+        feedEnabled && csvTable && allResults.length
+          ? ` CSV: ${modes.csvOnly} строк · смешанно: ${modes.mixed} · только AI: ${modes.aiOnly}.`
+          : "";
+
+      const newOffset = batchEnd;
+      setFillRowOffset(newOffset);
+      setBatchesCompleted(batchNum);
+      const okCount = allResults.filter((r) => r.ok).length;
+      const remaining = totalRows - newOffset;
+
+      if (remaining <= 0) {
+        setProgress(`Готово: ${okCount} / ${allResults.length} в последней партии, всего ${totalRows} строк`);
+        setDone(true);
+        setStep(3);
+        void eventReply(
+          `Все ${totalRows} строк обработаны (${batchNum} партий). Файл part${String(batchNum).padStart(2, "0")} скачан.`
+        );
+      } else {
+        setProgress(`Партия ${batchNum}: ${contexts.length} строк. Осталось ${remaining}.`);
+        setBatchNotice(
+          `Партия ${batchNum} готова (${batchLabel}) — файл part${String(batchNum).padStart(2, "0")} скачан.` +
+            ` Осталось ${remaining} строк.${modeLine} Нажмите «Следующие» для продолжения.`
+        );
+        void eventReply(
+          `Партия ${batchNum}: ${okCount} из ${allResults.length} строк (${batchLabel}). Скачайте уже есть — можно запускать следующую партию.`
+        );
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Ошибка заполнения";
       setError(
         doneRows > 0
-          ? `${msg}. Обработано ${doneRows} из ${contexts.length} — можно скачать частичный результат.`
+          ? `${msg}. Обработано ${doneRows} из ${contexts.length} в этой партии — можно скачать частичный результат.`
           : msg
       );
       if (doneRows > 0) {
-        setDone(true);
-        setStep(3);
+        const batchNum = batchesCompleted + 1;
+        const blob = await writeWorkbookToBlob(wb);
+        downloadBlob(blob, filledDownloadName(fileName, batchNum));
+        setBatchesCompleted(batchNum);
+        setFillRowOffset(batchStart + doneRows);
+        setBatchNotice(
+          `Ошибка в партии, но ${doneRows} строк записаны — скачан part${String(batchNum).padStart(2, "0")}. Можно продолжить с оставшихся.`
+        );
       }
     } finally {
       setBusy(false);
@@ -785,21 +888,55 @@ export function TemplateGeneratorTool() {
     photoMin,
     photoTarget,
     strictDropdown,
-    dropdownSource
+    dropdownSource,
+    fillRowOffset,
+    fillBatchSize,
+    batchesCompleted,
+    fileName,
+    feedEnabled
   ]);
 
-  const download = useCallback(async () => {
-    const wb = wbRef.current;
-    if (!wb) return;
-    const blob = await writeWorkbookToBlob(wb);
-    const base = fileName.replace(/\.xlsx?$/i, "") || "template";
-    downloadBlob(blob, `${base}-filled.xlsx`);
-  }, [fileName]);
+  const download = useCallback(
+    async (part?: number) => {
+      const wb = wbRef.current;
+      if (!wb) return;
+      const blob = await writeWorkbookToBlob(wb);
+      downloadBlob(blob, filledDownloadName(fileName, part));
+    },
+    [fileName]
+  );
 
   const enabledColCount = useMemo(
     () => Object.values(enabledCols).filter(Boolean).length,
     [enabledCols]
   );
+
+  const fillStats = useMemo(() => {
+    const total = scan?.dataRowCount ?? 0;
+    const remaining = Math.max(0, total - fillRowOffset);
+    const nextBatch = Math.min(Math.max(1, fillBatchSize), remaining || fillBatchSize);
+    const rangeFrom = fillRowOffset + 1;
+    const rangeTo = fillRowOffset + nextBatch;
+    const allDone = total > 0 && fillRowOffset >= total;
+    return { total, remaining, nextBatch, rangeFrom, rangeTo, allDone };
+  }, [scan?.dataRowCount, fillRowOffset, fillBatchSize]);
+
+  const csvCoverage = useMemo(() => {
+    if (!feedEnabled || !csvTable || !scan || !hasWb) return null;
+    const wb = wbRef.current;
+    if (!wb) return null;
+    const ws = wb.getWorksheet(scan.sheetName);
+    if (!ws) return null;
+    const contexts = collectRowContexts(ws, scan);
+    const skus = collectTemplateSkus(contexts.map((c) => c.sku));
+    const baseMap =
+      csvMap ?? mergeCsvMapHeuristic(csvTable, scan.columns.map((c) => c.header));
+    const map = enhanceCsvColumnMap(csvTable, scan.columns.map((c) => c.header), baseMap);
+    return {
+      ...summarizeCsvCoverage(csvTable, map, skus),
+      feedRows: csvTable.rows.length
+    };
+  }, [feedEnabled, csvTable, scan, csvMap, hasWb, sheetName]);
 
   const scrollToStep = (n: Step) => {
     setStep(n);
@@ -907,14 +1044,31 @@ export function TemplateGeneratorTool() {
             ) : null}
 
             <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-sm font-semibold text-slate-800">CSV-фид — необязательно</p>
-              <p className="text-xs text-slate-600">
-                Только если нужны доп. данные из вашего фида. Без CSV ассистент заполнит поля из
-                интернета и шаблона. Матчинг по «Артикул товара (SKU)».
-                Большие фиды 4Partners (~80+ МБ) — откройте ссылку в браузере, сохраните файл и
-                загрузите кнопкой «Загрузить файл».
-              </p>
-              <input
+              <label className="flex items-start gap-2 text-sm font-semibold text-slate-800">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={feedEnabled}
+                  onChange={(e) => setFeedEnabled(e.target.checked)}
+                />
+                <span>
+                  Использовать CSV-фид при заполнении
+                  <span className="mt-0.5 block text-xs font-normal text-slate-600">
+                    Включите, если в фиде 4Partners есть ноты, описания и т.д. — сначала подставим
+                    их по артикулу вариации, остальное добьёт AI. Выключите, чтобы заполнять только
+                    через AI без фида.
+                  </span>
+                </span>
+              </label>
+
+              {feedEnabled ? (
+                <>
+                  <p className="text-xs text-slate-600">
+                    Матчинг по «Артикул товара (SKU)». Из большого фида (10 000+ вариаций) берём
+                    только строки, чьи артикулы есть в вашем шаблоне.
+                    Большие файлы (~80+ МБ) — скачайте в браузере и загрузите кнопкой ниже.
+                  </p>
+                  <input
                 ref={csvRef}
                 type="file"
                 accept=".csv,.txt"
@@ -958,11 +1112,28 @@ export function TemplateGeneratorTool() {
               {csvMapLabel ? (
                 <p className="text-sm text-green-800">✓ CSV: {csvMapLabel}</p>
               ) : null}
+              {csvCoverage && scan ? (
+                <p className="text-sm text-slate-700">
+                  По артикулу вариации в фиде: <strong>{csvCoverage.found}</strong> из{" "}
+                  {csvCoverage.total} строк шаблона (всего {csvCoverage.feedRows.toLocaleString()}{" "}
+                  вариаций в CSV).
+                  {csvCoverage.missing > 0
+                    ? ` Для ${csvCoverage.missing} позиций недостающие поля добьёт AI.`
+                    : " Все артикулы шаблона есть в фиде."}
+                </p>
+              ) : null}
               {!scan && csvTable ? (
                 <p className="text-xs text-amber-800">
                   CSV загружен. Загрузите шаблон Excel — сопоставим колонки автоматически.
                 </p>
               ) : null}
+                </>
+              ) : (
+                <p className="text-xs text-slate-600">
+                  Фид выключен — при запуске AI будет использовать название, бренд и сайт
+                  производителя. CSV можно не загружать.
+                </p>
+              )}
             </div>
 
             <label className="block text-sm">
@@ -1008,7 +1179,11 @@ export function TemplateGeneratorTool() {
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-700">
               Вкладка: <strong>{sheetName}</strong> · отмечено: <strong>{enabledColCount}</strong>{" "}
-              столбцов.
+              столбцов · фид:{" "}
+              <strong>
+                {feedEnabled ? (csvTable ? "включён" : "включён, не загружен") : "выключен"}
+              </strong>
+              .
               {columnPrefsRestored ? (
                 <span className="text-green-700"> Загружен сохранённый выбор для этого шаблона.</span>
               ) : (
@@ -1164,20 +1339,75 @@ export function TemplateGeneratorTool() {
               </p>
             </fieldset>
 
+            <fieldset className="rounded-lg border border-slate-200 p-3 text-sm">
+              <legend className="px-1 font-semibold">Партиями</legend>
+              <p className="text-xs text-slate-500">
+                Обрабатываем файл частями: после каждой партии Excel скачивается автоматически, затем
+                нажмите кнопку для следующих строк.
+                {feedEnabled
+                  ? " Сначала данные подставляются из CSV по артикулу вариации; AI заполняет только то, чего нет в фиде."
+                  : " Фид выключен — все выбранные поля заполняет AI."}{" "}
+                Вкладку можно закрыть между партиями — прогресс сохраняется, пока не обновите
+                страницу.
+              </p>
+              <div className="mt-2 flex flex-wrap items-end gap-4">
+                <label>
+                  Строк за запуск
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    className={`${homeInput} ml-2 w-20`}
+                    value={fillBatchSize}
+                    disabled={busy}
+                    onChange={(e) => setFillBatchSize(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
+                  />
+                </label>
+                {fillRowOffset > 0 ? (
+                  <p className="text-xs text-slate-600">
+                    Уже обработано: <strong>{fillRowOffset}</strong> из {fillStats.total}
+                    {batchesCompleted > 0 ? ` · партий: ${batchesCompleted}` : null}
+                  </p>
+                ) : null}
+              </div>
+            </fieldset>
+
             <button
               type="button"
               className={`${homeBtnPrimary} w-full max-w-md py-3 text-base`}
-              disabled={busy}
+              disabled={busy || fillStats.allDone}
               onClick={() => void runFill()}
             >
-              {busy ? "Обработка…" : `Запустить AI для всех ${scan.dataRowCount} строк`}
+              {busy
+                ? "Обработка…"
+                : fillStats.allDone
+                  ? "Все строки обработаны"
+                  : fillRowOffset > 0
+                    ? `Следующие ${fillStats.nextBatch} (${fillStats.rangeFrom}–${fillStats.rangeTo} из ${fillStats.total})`
+                    : `Запустить AI (${fillStats.rangeFrom}–${fillStats.rangeTo} из ${fillStats.total})`}
             </button>
+            {batchNotice ? (
+              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                {batchNotice}
+              </p>
+            ) : null}
             {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
             {busy ? (
               <p className="text-xs text-slate-500">
-                Около 20–40 сек на строку (17 столбцов — дольше). Счётчик обновляется после каждой
-                строки.
+                Около 20–40 сек на строку. Счётчик обновляется после каждой строки. Партия из{" "}
+                {fillStats.nextBatch} строк ≈ {Math.round((fillStats.nextBatch * 30) / 60)}–
+                {Math.round((fillStats.nextBatch * 40) / 60)} мин.
               </p>
+            ) : null}
+            {fillRowOffset > 0 && !fillStats.allDone && !busy ? (
+              <button
+                type="button"
+                className="text-sm text-slate-600 underline"
+                onClick={() => void download(batchesCompleted || undefined)}
+              >
+                Скачать текущий файл ещё раз
+                {batchesCompleted > 0 ? ` (part${String(batchesCompleted).padStart(2, "0")})` : ""}
+              </button>
             ) : null}
           </div>
         </section>
@@ -1190,10 +1420,17 @@ export function TemplateGeneratorTool() {
           </div>
           <div className={`${homeCardBody} space-y-3`}>
             <p className="text-sm">
-              Обработано строк: {preview.length}, успешно: {preview.filter((r) => r.ok).length}
+              Обработано строк: {fillRowOffset || preview.length} из {scan?.dataRowCount ?? preview.length},
+              в последней партии успешно: {preview.filter((r) => r.ok).length}
+              {batchesCompleted > 0 ? ` · скачано партий: ${batchesCompleted}` : null}
             </p>
-            <button type="button" className={homeBtnPrimary} onClick={() => void download()}>
+            <button
+              type="button"
+              className={homeBtnPrimary}
+              onClick={() => void download(batchesCompleted || undefined)}
+            >
               Скачать заполненный .xlsx
+              {batchesCompleted > 0 ? ` (part${String(batchesCompleted).padStart(2, "0")})` : ""}
             </button>
             <div className="max-h-48 overflow-auto text-xs text-slate-600">
               {preview.slice(0, 15).map((r) => (
