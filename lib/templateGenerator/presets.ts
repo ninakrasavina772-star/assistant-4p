@@ -137,4 +137,7 @@ export const DEFAULT_PHOTO_REVIEW_COLUMN = "Доп. фото (проверка)"
 
 export const LIST_VALUES_SHEET = "Список значений";
 
-export const OZON_DATA_SHEET = "Данные о товарах";
+export const DEFAULT_PRODUCT_DATA_SHEET = "Данные о товарах";
+
+/** @deprecated используйте DEFAULT_PRODUCT_DATA_SHEET — лист по умолчанию в шаблонах Ozon/Яндекс и др. */
+export const OZON_DATA_SHEET = DEFAULT_PRODUCT_DATA_SHEET;

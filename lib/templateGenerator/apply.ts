@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { cellPlainValue } from "@/lib/ozonImageExcel";
 import type { ColumnSelection, FillRowResult, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import { ensurePhotoReviewColumn, formatPhotoReviewValue } from "@/lib/templateGenerator/photos";
 import { DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
@@ -8,7 +9,8 @@ export function applyFillResults(
   scan: TemplateSheetScan,
   selection: ColumnSelection[],
   results: FillRowResult[],
-  photoReviewHeader: string = DEFAULT_PHOTO_REVIEW_COLUMN
+  photoReviewHeader: string = DEFAULT_PHOTO_REVIEW_COLUMN,
+  overwriteFilled = false
 ): number {
   const colByHeader = new Map(selection.map((s) => [s.header, s.col]));
   let photoCol: number | null = null;
@@ -20,6 +22,10 @@ export function applyFillResults(
     for (const [header, value] of Object.entries(res.values)) {
       const col = colByHeader.get(header);
       if (!col || !value) continue;
+      if (!overwriteFilled) {
+        const existing = cellPlainValue(ws.getCell(res.row, col).value).trim();
+        if (existing) continue;
+      }
       ws.getCell(res.row, col).value = value;
       filled++;
     }

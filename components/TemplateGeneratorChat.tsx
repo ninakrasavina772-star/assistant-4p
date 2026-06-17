@@ -12,6 +12,26 @@ type Props = {
   onError?: (message: string) => void;
 };
 
+type SpeechRecognitionCtor = new () => {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((ev: { results: { [i: number]: { [j: number]: { transcript: string } } } }) => void) | null;
+  onerror: ((ev: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognition(): SpeechRecognitionCtor | null {
+  if (typeof window === "undefined") return null;
+  const w = window as Window & {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
 export function TemplateGeneratorChat({
   apiKey,
   messages,
@@ -21,8 +41,15 @@ export function TemplateGeneratorChat({
 }: Props) {
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<InstanceType<SpeechRecognitionCtor> | null>(null);
+
+  useEffect(() => {
+    setVoiceSupported(Boolean(getSpeechRecognition()));
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -77,13 +104,57 @@ export function TemplateGeneratorChat({
     [apiKey, context, messages, onError, onMessagesChange, thinking]
   );
 
+  const toggleVoice = useCallback(() => {
+    const Ctor = getSpeechRecognition();
+    if (!Ctor) {
+      onError?.("Голосовой ввод не поддерживается в этом браузере (попробуйте Chrome)");
+      return;
+    }
+
+    if (listening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const rec = new Ctor();
+    recognitionRef.current = rec;
+    rec.lang = "ru-RU";
+    rec.continuous = false;
+    rec.interimResults = true;
+
+    rec.onresult = (ev) => {
+      const results = ev.results as unknown as Array<{ 0: { transcript: string } }>;
+      let text = "";
+      for (let i = 0; i < results.length; i++) {
+        text += results[i]?.[0]?.transcript ?? "";
+      }
+      setDraft((prev) => (prev ? `${prev} ${text}` : text).trim());
+    };
+
+    rec.onerror = (ev) => {
+      if (ev.error !== "aborted") {
+        onError?.(`Голосовой ввод: ${ev.error ?? "ошибка"}`);
+      }
+      setListening(false);
+    };
+
+    rec.onend = () => setListening(false);
+
+    try {
+      rec.start();
+      setListening(true);
+    } catch {
+      onError?.("Не удалось запустить микрофон — разрешите доступ в браузере");
+      setListening(false);
+    }
+  }, [listening, onError]);
+
   return (
     <div className="flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 bg-gradient-to-r from-amber-50/80 to-white px-4 py-2.5">
         <p className="text-sm font-semibold text-slate-800">Ассистент</p>
         <p className="text-xs text-slate-500">
-          Консультирует до запуска: столбцы, стиль, фид. Ваши сообщения станут заданием для AI при
-          заполнении.
+          Правила для AI, сопоставление полей, стиль текстов. Можно писать или диктовать 🎤
         </p>
       </div>
 
@@ -132,7 +203,7 @@ export function TemplateGeneratorChat({
         <textarea
           className={`${homeInput} min-h-[44px] flex-1 resize-y`}
           rows={2}
-          placeholder="Например: заполни только ноты, стиль сдержанный, без воды…"
+          placeholder="Правила: название на русском, только ноты, стиль описания…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -143,6 +214,21 @@ export function TemplateGeneratorChat({
           }}
           disabled={thinking}
         />
+        {voiceSupported ? (
+          <button
+            type="button"
+            title="Голосовой ввод"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+              listening
+                ? "border-red-300 bg-red-50 text-red-700"
+                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+            disabled={thinking}
+            onClick={toggleVoice}
+          >
+            {listening ? "⏹ Стоп" : "🎤"}
+          </button>
+        ) : null}
         <button
           type="submit"
           className={homeBtnPrimary}

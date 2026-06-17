@@ -67,3 +67,6 @@ export type CsvColumnMap = {
   skuColumn: string;
   columns: Record<string, string>;
 };
+
+/** Дополнить пустые поля в уже частично заполненном шаблоне */
+export type TemplateWorkMode = "supplement" | "from_scratch";

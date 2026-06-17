@@ -1,7 +1,8 @@
 import { prefillFromCsvData } from "@/lib/templateGenerator/csvPrefill";
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
 import { collectReviewPhotosFromImageCell } from "@/lib/templateGenerator/photos";
-import type { ColumnSelection, FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
+import type { ColumnSelection, FillRowInput, FillRowResult, TemplateWorkMode } from "@/lib/templateGenerator/types";
+import { rowNeedsAiForHeaders } from "@/lib/templateGenerator/workMode";
 
 export type FillBatchIn = {
   openaiApiKey: string;
@@ -25,6 +26,9 @@ export type FillBatchIn = {
   skipWebContext?: boolean;
   /** Приоритет контентных полей: не просить AI искать фото в интернете */
   contentFocus?: boolean;
+  workMode?: TemplateWorkMode;
+  /** Перезаписывать уже заполненные ячейки (режим «дополнить») */
+  overwriteFilled?: boolean;
 };
 
 type AiFieldSpec = {
@@ -138,7 +142,7 @@ function buildUserMessage(
   return lines.join("\n");
 }
 
-const SYSTEM = `Ты умный помощник контент-отдела маркетплейса. Заполняешь КОНТЕНТНЫЕ характеристики товаров для Excel-шаблона Ozon.
+const SYSTEM = `Ты умный помощник контент-отдела маркетплейса. Заполняешь КОНТЕНТНЫЕ характеристики товаров для Excel-шаблона витрины (Ozon, Яндекс Маркет и др.).
 
 Правила:
 1. Приоритет — официальный сайт бренда (если фрагмент передан), затем CSV, затем логический вывод из названия товара.
@@ -254,6 +258,8 @@ async function getBrandSnippet(
 export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResult[]> {
   const fields = buildFieldSpecs(batch.columns, batch.columnMeta);
   const contentFocus = batch.contentFocus !== false;
+  const workMode = batch.workMode ?? "supplement";
+  const keepTemplateFilled = workMode === "supplement" && batch.overwriteFilled !== true;
   const out: FillRowResult[] = [];
   const brandSnippetCache = new Map<string, string>();
 
@@ -269,11 +275,21 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       : [];
 
     try {
-      const csvPrefill = prefillFromCsvData(row.csvData, fields, row.cells);
+      const csvPrefill = prefillFromCsvData(row.csvData, fields, row.cells, {
+        keepTemplateFilled
+      });
       const values: Record<string, string> = { ...csvPrefill.values };
       const sources = [...csvPrefill.sources];
 
-      let missing = missingSelectedHeaders(fields, values).slice(0, 14);
+      const aiHeaders = rowNeedsAiForHeaders(
+        row.cells,
+        fields.map((f) => f.header),
+        workMode === "from_scratch" || batch.overwriteFilled === true
+      );
+      let missing = fields
+        .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
+        .map((f) => f.header)
+        .slice(0, 14);
 
       if (missing.length === 0) {
         out.push({
@@ -302,7 +318,10 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       Object.assign(values, parseAiFields(json, fields));
       sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
-      missing = contentFocus ? missingSelectedHeaders(fields, values).slice(0, 14) : [];
+      missing = fields
+        .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
+        .map((f) => f.header)
+        .slice(0, 14);
       if (missing.length > 0) {
         const retryUser =
           buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
@@ -316,7 +335,9 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         sources.push(...(json2.sources ?? []).map((s) => `AI retry: ${s}`));
       }
 
-      const stillMissing = missingSelectedHeaders(fields, values);
+      const stillMissing = fields
+        .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
+        .map((f) => f.header);
       if (stillMissing.length > 0) {
         out.push({
           row: row.row,
@@ -359,7 +380,7 @@ export async function mapCsvColumnsWithAi(
   model?: string
 ): Promise<{ skuColumn: string; columns: Record<string, string> }> {
   const user = [
-    "Сопоставь колонки CSV с колонками шаблона Ozon.",
+    "Сопоставь колонки CSV с колонками шаблона витрины.",
     "SKU для матчинга — артикул вариации товара (Артикул товара SKU).",
     `CSV headers: ${JSON.stringify(csvHeaders)}`,
     `Template headers: ${JSON.stringify(templateHeaders)}`,

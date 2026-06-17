@@ -18,7 +18,7 @@ import {
   enhanceCsvColumnMap,
   summarizeCsvCoverage
 } from "@/lib/templateGenerator/csvPrefill";
-import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
+import { DEFAULT_PRODUCT_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
 import {
   clearColumnPrefs,
   loadColumnPrefs,
@@ -27,7 +27,8 @@ import {
   templateColumnKey
 } from "@/lib/templateGenerator/columnSelection";
 import { collectRowContexts, loadListSheetValues, scanTemplateSheet, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
-import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan } from "@/lib/templateGenerator/types";
+import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan, TemplateWorkMode } from "@/lib/templateGenerator/types";
+import { filterRowsForFill } from "@/lib/templateGenerator/workMode";
 import {
   buildCsvSampleRows,
   buildFillPromptFromChat,
@@ -38,6 +39,10 @@ import {
   type TemplateChatContext,
   type TemplateProductSample
 } from "@/lib/templateGenerator/chat";
+import {
+  buildExampleReferenceText,
+  loadExampleTemplateSamples
+} from "@/lib/templateGenerator/exampleTemplate";
 import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
 import {
@@ -52,6 +57,8 @@ import {
 const SK_OPENAI = "fp_template_gen_openai_key";
 const SK_OPENAI_REM = "fp_template_gen_openai_remember";
 const SK_FEED_ENABLED = "fp_template_gen_feed_enabled";
+const SK_WORK_MODE = "fp_template_gen_work_mode";
+const SK_OVERWRITE_FILLED = "fp_template_gen_overwrite_filled";
 const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
 const FILL_REQUEST_MS = 130_000;
@@ -128,6 +135,7 @@ function filledDownloadName(fileName: string, part?: number): string {
 
 export function TemplateGeneratorTool() {
   const tplRef = useRef<HTMLInputElement>(null);
+  const exampleRef = useRef<HTMLInputElement>(null);
   const csvRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>(1);
@@ -143,6 +151,8 @@ export function TemplateGeneratorTool() {
   const [csvUrl, setCsvUrl] = useState("");
   const [csvLoading, setCsvLoading] = useState(false);
   const [feedEnabled, setFeedEnabled] = useState(false);
+  const [workMode, setWorkMode] = useState<TemplateWorkMode>("supplement");
+  const [overwriteFilled, setOverwriteFilled] = useState(false);
   const [tplLoading, setTplLoading] = useState(false);
 
   const listValuesRef = useRef<Map<string, string[]>>(new Map());
@@ -171,6 +181,10 @@ export function TemplateGeneratorTool() {
   const [batchNotice, setBatchNotice] = useState("");
   const [productSamples, setProductSamples] = useState<TemplateProductSample[] | undefined>();
   const [uniqueBrands, setUniqueBrands] = useState<string[] | undefined>();
+  const [exampleFileName, setExampleFileName] = useState("");
+  const [exampleSheet, setExampleSheet] = useState("");
+  const [exampleSamples, setExampleSamples] = useState<TemplateProductSample[]>([]);
+  const [exampleLoading, setExampleLoading] = useState(false);
 
   const step2Ref = useRef<HTMLElement>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
@@ -183,7 +197,22 @@ export function TemplateGeneratorTool() {
       if (k) setOpenaiKey(k);
     }
     setFeedEnabled(sessionStorage.getItem(SK_FEED_ENABLED) === "1");
+    const wm = sessionStorage.getItem(SK_WORK_MODE);
+    if (wm === "from_scratch" || wm === "supplement") setWorkMode(wm);
+    setOverwriteFilled(sessionStorage.getItem(SK_OVERWRITE_FILLED) === "1");
   }, []);
+
+  useEffect(() => {
+    sessionStorage.setItem(SK_WORK_MODE, workMode);
+  }, [workMode]);
+
+  useEffect(() => {
+    sessionStorage.setItem(SK_OVERWRITE_FILLED, overwriteFilled ? "1" : "0");
+  }, [overwriteFilled]);
+
+  useEffect(() => {
+    if (workMode === "from_scratch") setFeedEnabled(true);
+  }, [workMode]);
 
   useEffect(() => {
     sessionStorage.setItem(SK_FEED_ENABLED, feedEnabled ? "1" : "0");
@@ -234,6 +263,8 @@ export function TemplateGeneratorTool() {
       sheetName: sheetName || undefined,
       rowCount: scan?.dataRowCount,
       feedEnabled,
+      workMode,
+      overwriteFilled,
       csvLabel: feedEnabled ? csvMapLabel || undefined : undefined,
       csvRowCount: feedEnabled ? csvTable?.rows.length : undefined,
       skuColumn: feedEnabled ? csvMap?.skuColumn : undefined,
@@ -248,7 +279,11 @@ export function TemplateGeneratorTool() {
       csvHeaders: feedEnabled ? csvTable?.headers : undefined,
       csvSampleRows:
         feedEnabled && csvTable ? buildCsvSampleRows(csvTable, csvMap, 3) : undefined,
-      csvMappedColumns: feedEnabled ? csvMap?.columns : undefined
+      csvMappedColumns: feedEnabled ? csvMap?.columns : undefined,
+      exampleFile: exampleFileName || undefined,
+      exampleSheet: exampleSheet || undefined,
+      exampleRowCount: exampleSamples.length || undefined,
+      exampleSamples: exampleSamples.length ? exampleSamples : undefined
     };
   }, [
     fileName,
@@ -259,12 +294,17 @@ export function TemplateGeneratorTool() {
     uniqueBrands,
     enabledCols,
     feedEnabled,
+    workMode,
+    overwriteFilled,
     csvMapLabel,
     csvTable,
     csvMap,
     photoEnabled,
     photoMin,
-    photoTarget
+    photoTarget,
+    exampleFileName,
+    exampleSheet,
+    exampleSamples
   ]);
 
   useEffect(() => {
@@ -561,13 +601,15 @@ export function TemplateGeneratorTool() {
         const scanned = scanTemplateWorkbook(workbook, listValidations);
         const names = Object.keys(scanned.scans);
         const preferred =
-          scanned.scans[OZON_DATA_SHEET] ? OZON_DATA_SHEET : names.sort(
+          scanned.scans[DEFAULT_PRODUCT_DATA_SHEET]
+            ? DEFAULT_PRODUCT_DATA_SHEET
+            : names.sort(
             (a, b) => (scanned.scans[b]?.dataRowCount ?? 0) - (scanned.scans[a]?.dataRowCount ?? 0)
           )[0];
 
         if (!preferred) {
           setError(
-            "Не нашли вкладку с товарами (ожидаем «Данные о товарах» или столбцы «Название товара», «Артикул»). Проверьте, что это шаблон Ozon."
+            "Не нашли вкладку с товарами (ожидаем лист с колонками «Название товара», «Артикул» или «Данные о товарах»). Проверьте формат шаблона витрины."
           );
           return;
         }
@@ -619,6 +661,51 @@ export function TemplateGeneratorTool() {
     [initColumns, eventReply]
   );
 
+  const onExampleFile = useCallback(
+    async (file: File) => {
+      setError("");
+      setExampleLoading(true);
+      try {
+        if (!/\.xlsx?$/i.test(file.name)) {
+          throw new Error("Образец — файл Excel (.xlsx)");
+        }
+        if (!scan) {
+          throw new Error("Сначала загрузите основной шаблон");
+        }
+        const buf = await file.arrayBuffer();
+        const { samples, sheetName: exSheet, rowCount } = await loadExampleTemplateSamples(
+          buf,
+          sheetName
+        );
+        if (!samples.length) {
+          throw new Error("В образце не нашли заполненных строк товаров");
+        }
+        setExampleFileName(file.name);
+        setExampleSheet(exSheet);
+        setExampleSamples(samples);
+        void eventReply(
+          `Загрузила образец «${file.name}»: ${rowCount} строк с данными, вкладка «${exSheet}». AI будет ориентироваться на стиль заполнения.`
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка чтения образца");
+      } finally {
+        setExampleLoading(false);
+      }
+    },
+    [scan, sheetName, eventReply]
+  );
+
+  const reviewBeforeFill = useCallback(() => {
+    if (!openaiKey.trim()) {
+      setError("Введите OpenAI API key для проверки сопоставления");
+      return;
+    }
+    void eventReply(
+      "Проверь сопоставление: шаблон, фид (если включён), эталон (если загружен) и отмеченные столбцы. " +
+        "Какие поля непонятны или не сопоставились? Задай уточняющие вопросы перед запуском AI."
+    );
+  }, [eventReply, openaiKey]);
+
   const onSheetChange = useCallback(
     (name: string) => {
       const wb = wbRef.current;
@@ -659,6 +746,10 @@ export function TemplateGeneratorTool() {
       setError("Выберите хотя бы один столбец");
       return;
     }
+    if (workMode === "from_scratch" && (!feedEnabled || !csvTable)) {
+      setError("Режим «С нуля» требует включённый и загруженный CSV-фид");
+      return;
+    }
     if (feedEnabled && !csvTable) {
       setError("Включён CSV-фид, но файл не загружен — загрузите фид или снимите галочку «Использовать фид»");
       return;
@@ -675,21 +766,7 @@ export function TemplateGeneratorTool() {
 
     const ws = wb.getWorksheet(scan.sheetName)!;
     const allContexts = collectRowContexts(ws, scan);
-    const totalRows = allContexts.length;
-    if (fillRowOffset >= totalRows) {
-      setError("Все строки уже обработаны — загрузите шаблон заново или скачайте файл.");
-      setBusy(false);
-      return;
-    }
-
-    const batchSize = Math.max(1, Math.min(fillBatchSize, 200));
-    const batchStart = fillRowOffset;
-    const contexts = allContexts.slice(batchStart, batchStart + batchSize);
-    const batchEnd = batchStart + contexts.length;
-    const batchLabel = `строки ${batchStart + 1}–${batchEnd} из ${totalRows}`;
-
-    setDone(false);
-    setPreview([]);
+    const selectedHeaders = selectionList.map((s) => s.header);
     const csvMapResolved = feedEnabled
       ? enhanceCsvColumnMap(
           csvTable ?? { headers: [], rows: [] },
@@ -700,13 +777,46 @@ export function TemplateGeneratorTool() {
               : { skuColumn: "", columns: {} })
         )
       : { skuColumn: "", columns: {} };
-    const templateSkuSet = collectTemplateSkus(allContexts.map((c) => c.sku));
     const csvIndex =
       feedEnabled && csvTable ? buildCsvIndex(csvTable, csvMapResolved) : new Map();
+    const feedSkuSet = feedEnabled && csvTable ? new Set(csvIndex.keys()) : null;
+
+    const fillableContexts = filterRowsForFill(allContexts, {
+      workMode,
+      selectedHeaders,
+      feedSkuSet,
+      overwriteFilled
+    });
+
+    const totalRows = fillableContexts.length;
+    if (totalRows === 0) {
+      setError(
+        workMode === "supplement"
+          ? "Нет строк с пустыми выбранными полями — всё уже заполнено или снимите галочки."
+          : "Нет строк шаблона с артикулами из фида — проверьте сопоставление SKU."
+      );
+      setBusy(false);
+      return;
+    }
+    if (fillRowOffset >= totalRows) {
+      setError("Все строки уже обработаны — загрузите шаблон заново или скачайте файл.");
+      setBusy(false);
+      return;
+    }
+
+    const batchSize = Math.max(1, Math.min(fillBatchSize, 200));
+    const batchStart = fillRowOffset;
+    const contexts = fillableContexts.slice(batchStart, batchStart + batchSize);
+    const batchEnd = batchStart + contexts.length;
+    const batchLabel = `строки ${batchStart + 1}–${batchEnd} из ${totalRows}`;
+
+    setDone(false);
+    setPreview([]);
+    const templateSkuSet = collectTemplateSkus(allContexts.map((c) => c.sku));
     if (feedEnabled && csvTable && templateSkuSet.size) {
       const feedHits = summarizeCsvCoverage(csvTable, csvMapResolved, templateSkuSet).found;
       setProgress(
-        `Фид: ${feedHits} из ${templateSkuSet.size} артикулов шаблона — сначала CSV, затем AI для пробелов…`
+        `Фид: ${feedHits} из ${templateSkuSet.size} артикулов · режим «${workMode === "from_scratch" ? "с нуля" : "дополнить"}»…`
       );
     } else if (!feedEnabled) {
       setProgress("Без фида — заполнение через AI (название, бренд, сайт производителя)…");
@@ -762,7 +872,9 @@ export function TemplateGeneratorTool() {
       };
     }).filter((x): x is NonNullable<typeof x> => x != null);
 
-    const fillPrompt = buildFillPromptFromChat(chatMessages);
+    const exampleRefText = buildExampleReferenceText(exampleSamples);
+    const fillPrompt = buildFillPromptFromChat(chatMessages, exampleRefText);
+    const applyOverwrite = workMode === "from_scratch" || overwriteFilled;
 
     let doneRows = 0;
     try {
@@ -787,6 +899,8 @@ export function TemplateGeneratorTool() {
                   rows,
                   skipWebContext: false,
                   contentFocus: true,
+                  workMode,
+                  overwriteFilled: applyOverwrite,
                   photoSettings: {
                     enabled: photoEnabled,
                     minCount: photoMin,
@@ -816,7 +930,14 @@ export function TemplateGeneratorTool() {
           allResults.push(...batch);
           doneRows += batch.length;
         }
-        applyFillResults(ws, scan, selectionList, allResults, DEFAULT_PHOTO_REVIEW_COLUMN);
+        applyFillResults(
+          ws,
+          scan,
+          selectionList,
+          allResults,
+          DEFAULT_PHOTO_REVIEW_COLUMN,
+          applyOverwrite
+        );
         setPreview([...allResults]);
         setProgress(`AI: ${doneRows} / ${contexts.length} (${batchLabel})…`);
       }
@@ -893,7 +1014,10 @@ export function TemplateGeneratorTool() {
     fillBatchSize,
     batchesCompleted,
     fileName,
-    feedEnabled
+    feedEnabled,
+    workMode,
+    overwriteFilled,
+    exampleSamples
   ]);
 
   const download = useCallback(
@@ -1043,6 +1167,106 @@ export function TemplateGeneratorTool() {
               </p>
             ) : null}
 
+            {scan ? (
+              <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-sm font-semibold text-slate-800">Режим работы</p>
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="workMode"
+                    className="mt-1"
+                    checked={workMode === "supplement"}
+                    onChange={() => {
+                      setWorkMode("supplement");
+                      setFillRowOffset(0);
+                      setBatchesCompleted(0);
+                    }}
+                  />
+                  <span>
+                    <strong>Дополнить</strong> — для рейтинга: заполняем только пустые выбранные поля.
+                    Уже заполненное не трогаем.
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="workMode"
+                    className="mt-1"
+                    checked={workMode === "from_scratch"}
+                    onChange={() => {
+                      setWorkMode("from_scratch");
+                      setFillRowOffset(0);
+                      setBatchesCompleted(0);
+                    }}
+                  />
+                  <span>
+                    <strong>С нуля</strong> — шаблон витрины + фид: сопоставление колонок, заполнение
+                    товаров из фида (нужен включённый CSV).
+                  </span>
+                </label>
+                {workMode === "supplement" ? (
+                  <label className="ml-6 flex items-center gap-2 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={overwriteFilled}
+                      onChange={(e) => setOverwriteFilled(e.target.checked)}
+                    />
+                    Перезаписывать уже заполненные ячейки (обычно не нужно)
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+
+            {scan ? (
+              <div className="space-y-2 rounded-lg border border-dashed border-amber-300 bg-amber-50/50 p-3">
+                <p className="text-sm font-semibold text-slate-800">Образец заполнения (необязательно)</p>
+                <p className="text-xs text-slate-600">
+                  Загрузите Excel с 5–20 хорошо заполненными строками — ассистент и AI скопируют стиль,
+                  формат и полноту полей.
+                </p>
+                <input
+                  ref={exampleRef}
+                  type="file"
+                  accept=".xlsx"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void onExampleFile(f);
+                    e.target.value = "";
+                  }}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold"
+                    disabled={exampleLoading}
+                    onClick={() => exampleRef.current?.click()}
+                  >
+                    {exampleLoading ? "Читаем образец…" : "Загрузить образец"}
+                  </button>
+                  {exampleFileName ? (
+                    <button
+                      type="button"
+                      className="text-sm text-slate-500 underline"
+                      onClick={() => {
+                        setExampleFileName("");
+                        setExampleSheet("");
+                        setExampleSamples([]);
+                      }}
+                    >
+                      Сбросить образец
+                    </button>
+                  ) : null}
+                </div>
+                {exampleFileName ? (
+                  <p className="text-sm text-green-800">
+                    ✓ Образец: {exampleFileName} · {exampleSamples.length} строк · вкладка «
+                    {exampleSheet}»
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
               <label className="flex items-start gap-2 text-sm font-semibold text-slate-800">
                 <input
@@ -1164,6 +1388,16 @@ export function TemplateGeneratorTool() {
             />
 
             {scan ? (
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+                onClick={reviewBeforeFill}
+              >
+                Проверить сопоставление — задать вопросы ассистенту
+              </button>
+            ) : null}
+
+            {scan ? (
               <button type="button" className={homeBtnPrimary} onClick={() => scrollToStep(2)}>
                 Далее → выбор столбцов и запуск ({enabledColCount} отмечено)
               </button>
@@ -1178,8 +1412,9 @@ export function TemplateGeneratorTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-700">
-              Вкладка: <strong>{sheetName}</strong> · отмечено: <strong>{enabledColCount}</strong>{" "}
-              столбцов · фид:{" "}
+              Вкладка: <strong>{sheetName}</strong> · режим:{" "}
+              <strong>{workMode === "supplement" ? "дополнить" : "с нуля"}</strong> · отмечено:{" "}
+              <strong>{enabledColCount}</strong> столбцов · фид:{" "}
               <strong>
                 {feedEnabled ? (csvTable ? "включён" : "включён, не загружен") : "выключен"}
               </strong>
@@ -1219,7 +1454,7 @@ export function TemplateGeneratorTool() {
                   <tr>
                     <th className="p-2">Заполнять</th>
                     <th className="p-2">Столбец</th>
-                    <th className="p-2">Подсказка Ozon</th>
+                    <th className="p-2">Подсказка площадки</th>
                     <th className="p-2">Строго из списка</th>
                     <th className="p-2">Источник списка</th>
                   </tr>

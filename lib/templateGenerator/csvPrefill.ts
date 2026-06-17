@@ -18,7 +18,7 @@ export type CsvPrefillOutcome = {
   csvHeaders: string[];
 };
 
-/** Синонимы колонок фида 4Partners → заголовок шаблона Ozon (нормализованный) */
+/** Синонимы колонок фида → заголовок шаблона витрины (нормализованный) */
 const CSV_SYNONYM_PATTERNS: { template: string; patterns: RegExp[] }[] = [
   {
     template: "верхние ноты",
@@ -150,15 +150,17 @@ function parseNotesFromBlob(
 export function prefillFromCsvData(
   csvData: Record<string, string>,
   fields: CsvFieldSpec[],
-  templateCells: Record<string, string>
+  templateCells: Record<string, string>,
+  opts?: { keepTemplateFilled?: boolean }
 ): CsvPrefillOutcome {
+  const keepTemplate = opts?.keepTemplateFilled !== false;
   const values: Record<string, string> = {};
   const sources: string[] = [];
   const csvHeaders: string[] = [];
 
   for (const field of fields) {
     const existing = templateCells[field.header]?.trim();
-    if (existing) {
+    if (existing && keepTemplate) {
       values[field.header] = existing;
       sources.push(`${field.header}: шаблон`);
       continue;
