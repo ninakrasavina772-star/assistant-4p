@@ -12,7 +12,14 @@ import {
   parseCsvText,
   type CsvTable
 } from "@/lib/templateGenerator/csvIndex";
-import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN, isCoreContentColumn } from "@/lib/templateGenerator/presets";
+import { OZON_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
+import {
+  clearColumnPrefs,
+  loadColumnPrefs,
+  mergePrefsWithColumns,
+  saveColumnPrefs,
+  templateColumnKey
+} from "@/lib/templateGenerator/columnSelection";
 import { collectRowContexts, loadListSheetValues, scanTemplateSheet, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
 import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import {
@@ -148,6 +155,8 @@ export function TemplateGeneratorTool() {
 
   const step2Ref = useRef<HTMLElement>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
+  const columnPrefsKeyRef = useRef("");
+  const [columnPrefsRestored, setColumnPrefsRestored] = useState(false);
 
   useEffect(() => {
     if (sessionStorage.getItem(SK_OPENAI_REM) !== "0") {
@@ -302,24 +311,63 @@ export function TemplateGeneratorTool() {
     [openaiKey]
   );
 
-  const initColumns = useCallback((s: TemplateSheetScan) => {
-    const en: Record<string, boolean> = {};
-    const st: Record<string, boolean> = {};
-    const ds: Record<string, DropdownSource> = {};
-    for (const c of s.columns) {
-      if (c.readonly) continue;
-      en[c.header] = isCoreContentColumn(c.header);
+  const initColumns = useCallback((s: TemplateSheetScan, sheet: string) => {
+    const editable = s.columns.filter((c) => !c.readonly);
+    const headers = editable.map((c) => c.header);
+
+    const defaults = {
+      enabled: {} as Record<string, boolean>,
+      strict: {} as Record<string, boolean>,
+      dropdownSource: {} as Record<string, DropdownSource>
+    };
+    for (const c of editable) {
       const listVals = resolveDropdownValues(c, "list_sheet");
       const tplVals = resolveDropdownValues(c, "template_validation");
-      const hasList = listVals.length > 0;
-      const hasTpl = tplVals.length > 0;
-      st[c.header] = hasList || hasTpl;
-      ds[c.header] = defaultDropdownSource(c);
+      defaults.strict[c.header] = listVals.length > 0 || tplVals.length > 0;
+      defaults.dropdownSource[c.header] = defaultDropdownSource(c);
     }
-    setEnabledCols(en);
-    setStrictDropdown(st);
-    setDropdownSource(ds);
+
+    const key = templateColumnKey(sheet, headers);
+    columnPrefsKeyRef.current = key;
+    const saved = loadColumnPrefs(key);
+    const merged = mergePrefsWithColumns(headers, saved, defaults);
+
+    setEnabledCols(merged.enabled);
+    setStrictDropdown(merged.strict);
+    setDropdownSource(merged.dropdownSource);
+    setColumnPrefsRestored(merged.restored);
   }, []);
+
+  useEffect(() => {
+    const key = columnPrefsKeyRef.current;
+    if (!key || !scan) return;
+    saveColumnPrefs(key, {
+      enabled: enabledCols,
+      strict: strictDropdown,
+      dropdownSource
+    });
+  }, [enabledCols, strictDropdown, dropdownSource, scan]);
+
+  const setAllColumns = useCallback(
+    (on: boolean) => {
+      if (!scan) return;
+      setEnabledCols((prev) => {
+        const next = { ...prev };
+        for (const c of scan.columns) {
+          if (!c.readonly) next[c.header] = on;
+        }
+        return next;
+      });
+    },
+    [scan]
+  );
+
+  const resetColumnPrefs = useCallback(() => {
+    const key = columnPrefsKeyRef.current;
+    if (key) clearColumnPrefs(key);
+    if (scan) initColumns(scan, sheetName);
+    setColumnPrefsRestored(false);
+  }, [scan, sheetName, initColumns]);
 
   const applyCsvTable = useCallback(
     async (table: CsvTable, label: string) => {
@@ -497,14 +545,11 @@ export function TemplateGeneratorTool() {
         setFileName(file.name);
         setSheetName(preferred);
         setScan(sheetScan);
-        initColumns(sheetScan);
+        initColumns(sheetScan, preferred);
         setStep(2);
         requestAnimationFrame(() => {
           step2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
-        const defaultCols = sheetScan.columns.filter(
-          (c) => !c.readonly && c.contentDefault
-        ).length;
         const { samples, brands } = buildProductSamples(workbook, sheetScan);
         setProductSamples(samples);
         setUniqueBrands(brands);
@@ -513,21 +558,19 @@ export function TemplateGeneratorTool() {
           templateFile: file.name,
           sheetName: preferred,
           rowCount: sheetScan.dataRowCount,
-          enabledColCount: defaultCols,
+          enabledColCount: 0,
           columns: sheetScan.columns.map((c) => ({
             header: c.header,
             hint: c.hint,
-            enabled: c.contentDefault && !c.readonly,
+            enabled: false,
             readonly: c.readonly
           })),
           productSamples: samples,
           uniqueBrands: brands,
-          selectedColumns: sheetScan.columns
-            .filter((c) => !c.readonly && c.contentDefault)
-            .map((c) => c.header)
+          selectedColumns: []
         };
         void eventReply(
-          `Загрузила шаблон Excel «${file.name}»: вкладка «${preferred}», ${sheetScan.dataRowCount} товаров, по умолчанию отмечено ${defaultCols} столбцов.`
+          `Загрузила шаблон Excel «${file.name}»: вкладка «${preferred}», ${sheetScan.dataRowCount} товаров. Отметьте галочками нужные столбцы и нажмите «Запустить AI».`
         );
       } catch (e) {
         setError(
@@ -550,7 +593,7 @@ export function TemplateGeneratorTool() {
       if (!s) return;
       setSheetName(name);
       setScan(s);
-      initColumns(s);
+      initColumns(s, name);
       const { samples, brands } = buildProductSamples(wb, s);
       setProductSamples(samples);
       setUniqueBrands(brands);
@@ -964,16 +1007,44 @@ export function TemplateGeneratorTool() {
           </div>
           <div className={`${homeCardBody} space-y-4`}>
             <p className="text-sm text-slate-700">
-              Вкладка: <strong>{sheetName}</strong> · отмечено для генерации:{" "}
-              <strong>{enabledColCount}</strong> столбцов. По умолчанию — контентные поля
-              (описание, тип, ноты, семейство…). Снимите галочки с полей, которые не нужно менять.
+              Вкладка: <strong>{sheetName}</strong> · отмечено: <strong>{enabledColCount}</strong>{" "}
+              столбцов.
+              {columnPrefsRestored ? (
+                <span className="text-green-700"> Загружен сохранённый выбор для этого шаблона.</span>
+              ) : (
+                <span> Отметьте галочками нужные характеристики — выбор сохранится для этой вкладки.</span>
+              )}
             </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium hover:bg-slate-50"
+                onClick={() => setAllColumns(true)}
+              >
+                Выбрать все
+              </button>
+              <button
+                type="button"
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium hover:bg-slate-50"
+                onClick={() => setAllColumns(false)}
+              >
+                Снять все
+              </button>
+              <button
+                type="button"
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium hover:bg-slate-50"
+                onClick={resetColumnPrefs}
+              >
+                Сбросить сохранённый выбор
+              </button>
+            </div>
             <div className="max-h-80 overflow-auto rounded border border-slate-200">
               <table className="w-full text-left text-xs">
                 <thead className="sticky top-0 bg-slate-100">
                   <tr>
                     <th className="p-2">Заполнять</th>
                     <th className="p-2">Столбец</th>
+                    <th className="p-2">Подсказка Ozon</th>
                     <th className="p-2">Строго из списка</th>
                     <th className="p-2">Источник списка</th>
                   </tr>
@@ -998,6 +1069,9 @@ export function TemplateGeneratorTool() {
                           />
                         </td>
                         <td className="p-2 font-medium">{c.header}</td>
+                        <td className="max-w-[14rem] p-2 text-slate-500" title={c.hint}>
+                          {c.hint ? `${c.hint.slice(0, 72)}${c.hint.length > 72 ? "…" : ""}` : "—"}
+                        </td>
                         <td className="p-2">
                           {listN > 0 || tplN > 0 ? (
                             <input

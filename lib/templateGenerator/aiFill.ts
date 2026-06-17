@@ -1,6 +1,5 @@
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
 import { collectReviewPhotosFromImageCell } from "@/lib/templateGenerator/photos";
-import { isCoreContentColumn } from "@/lib/templateGenerator/presets";
 import type { ColumnSelection, FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
 
 export type FillBatchIn = {
@@ -81,9 +80,6 @@ function buildUserMessage(
     ? fields.filter((f) => opts.onlyHeaders!.includes(f.header))
     : fields;
 
-  const core = activeFields.filter((f) => isCoreContentColumn(f.header));
-  const other = activeFields.filter((f) => !isCoreContentColumn(f.header));
-
   const lines = [
     `Артикул SKU: ${row.sku}`,
     `Название: ${row.productName}`,
@@ -107,7 +103,7 @@ function buildUserMessage(
 
   if (opts.contentFocus && !opts.onlyHeaders?.length) {
     lines.push(
-      "ОБЯЗАТЕЛЬНО заполни все контентные поля ниже (не оставляй пустыми, если данные можно вывести из названия, CSV или сайта бренда):"
+      "Заполни ВСЕ поля ниже — пользователь отметил их для генерации. Не оставляй пустыми, если данные можно вывести из названия, CSV или сайта бренда:"
     );
   }
 
@@ -127,12 +123,7 @@ function buildUserMessage(
     lines.push("");
   };
 
-  if (opts.contentFocus && core.length) {
-    renderFields(core, "Контентные поля (приоритет):");
-    renderFields(other, "Прочие поля:");
-  } else {
-    renderFields(activeFields, "Заполни поля (JSON fields):");
-  }
+  renderFields(activeFields, "Поля для заполнения (выбраны пользователем):");
 
   return lines.join("\n");
 }
@@ -228,10 +219,8 @@ function parseAiFields(json: AiJson, fields: AiFieldSpec[]): Record<string, stri
   return values;
 }
 
-function missingCoreHeaders(fields: AiFieldSpec[], values: Record<string, string>): string[] {
-  return fields
-    .filter((f) => isCoreContentColumn(f.header) && !values[f.header]?.trim())
-    .map((f) => f.header);
+function missingSelectedHeaders(fields: AiFieldSpec[], values: Record<string, string>): string[] {
+  return fields.filter((f) => !values[f.header]?.trim()).map((f) => f.header);
 }
 
 function imageCellText(row: FillRowInput, imageHeader: string | null): string {
@@ -267,7 +256,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       const values = parseAiFields(json, fields);
       const sources = [...(json.sources ?? [])];
 
-      const missing = contentFocus ? missingCoreHeaders(fields, values) : [];
+      const missing = contentFocus ? missingSelectedHeaders(fields, values).slice(0, 14) : [];
       if (missing.length > 0) {
         const retryUser =
           buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
