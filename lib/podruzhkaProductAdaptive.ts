@@ -260,8 +260,11 @@ async function resolveCosmeticsUniformPlacement(
 ): Promise<AdaptiveProductResult> {
   const isNarrow = prepared.aspect < 0.55;
   const fotoMode = PODRUZHKA_COSMETICS_FOTO_MODE;
+  const cosmeticsTopMargin = fotoMode === "edge" ? 12 : 0;
+  const fitMaxH =
+    fotoMode === "edge" ? Math.max(1, zoneH - cosmeticsTopMargin - 8) : zoneH;
 
-  const fit = await fitProductPng(prepared.buffer, zoneW, zoneH, {
+  const fit = await fitProductPng(prepared.buffer, zoneW, fitMaxH, {
     cardW,
     cardH,
     referenceBoxOnly: true,
@@ -287,7 +290,7 @@ async function resolveCosmeticsUniformPlacement(
   const scaleUp = Math.min(
     targetH / height,
     targetW / width,
-    zoneH / height,
+    Math.max(1, zoneH - cosmeticsTopMargin) / height,
     zoneW / width
   );
   if (scaleUp > 1.01) {
@@ -300,8 +303,14 @@ async function resolveCosmeticsUniformPlacement(
   const zoneTop = PODRUZHKA_PRODUCT_VISUAL.y;
   const zoneBottom = PODRUZHKA_PRODUCT_VISUAL.bottom;
   const idealY =
-    zoneTop + zoneH * PODRUZHKA_COSMETICS_VERTICAL_CENTER_BIAS - height / 2;
-  const rawY = Math.max(zoneTop, Math.min(zoneBottom - height, Math.round(idealY)));
+    zoneTop +
+    cosmeticsTopMargin +
+    (zoneH - cosmeticsTopMargin) * PODRUZHKA_COSMETICS_VERTICAL_CENTER_BIAS -
+    height / 2;
+  const rawY = Math.max(
+    zoneTop + cosmeticsTopMargin,
+    Math.min(zoneBottom - height, Math.round(idealY))
+  );
   const { drawX, drawY } = clampProductDrawPlacement(cappedFit, rawX, rawY, 0);
 
   if (!isValidPlacement(drawX, drawY, cappedFit)) {
@@ -316,7 +325,7 @@ async function resolveCosmeticsUniformPlacement(
       fotoMode === "raw"
         ? `cosmetics-raw-v1${isNarrow ? "-narrow" : ""}`
         : fotoMode === "edge"
-          ? `cosmetics-edge-v1${isNarrow ? "-narrow" : ""}`
+          ? `cosmetics-edge-v3${isNarrow ? "-narrow" : ""}`
           : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,
     visualScore: 100
   };

@@ -619,6 +619,270 @@ function restoreStrippedWhiteCaps(pixels: Buffer, src: Buffer, w: number, h: num
   }
 }
 
+/** Восстановить отдельные белые части (колпачок рядом со stick) в расширенном bbox кластера. */
+function restoreNearbyWhiteSatellites(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  const visited = new Uint8Array(w * h);
+  const isSeed = (idx: number): boolean => {
+    const pi = idx * 4;
+    if (pixels[pi + 3]! < 128) return false;
+    return !readNearWhiteRgb(src, pi, 234, 34);
+  };
+
+  for (let idx = 0; idx < w * h; idx++) {
+    if (visited[idx] || !isSeed(idx)) continue;
+
+    let minX = w;
+    let maxX = -1;
+    let minY = h;
+    let maxY = -1;
+    const queue = [idx];
+    visited[idx] = 1;
+
+    while (queue.length) {
+      const cur = queue.pop()!;
+      const x = cur % w;
+      const y = (cur - x) / w;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+
+      if (x > 0) {
+        const n = cur - 1;
+        if (!visited[n] && isSeed(n)) {
+          visited[n] = 1;
+          queue.push(n);
+        }
+      }
+      if (x < w - 1) {
+        const n = cur + 1;
+        if (!visited[n] && isSeed(n)) {
+          visited[n] = 1;
+          queue.push(n);
+        }
+      }
+      if (y > 0) {
+        const n = cur - w;
+        if (!visited[n] && isSeed(n)) {
+          visited[n] = 1;
+          queue.push(n);
+        }
+      }
+      if (y < h - 1) {
+        const n = cur + w;
+        if (!visited[n] && isSeed(n)) {
+          visited[n] = 1;
+          queue.push(n);
+        }
+      }
+    }
+
+    const productW = maxX - minX + 1;
+    const productH = maxY - minY + 1;
+    const padX = Math.max(14, Math.round(productW * 0.22));
+    const padY = Math.max(10, Math.round(productH * 0.1));
+    const x0 = Math.max(0, minX - padX);
+    const x1 = Math.min(w - 1, maxX + padX);
+    const y0 = Math.max(0, minY - padY);
+    const y1 = Math.min(h - 1, maxY + padY);
+
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const pi = (y * w + x) * 4;
+        if (pixels[pi + 3]! >= 128) continue;
+        if (!readNearWhiteRgb(src, pi, 228, 42)) continue;
+        pixels[pi] = src[pi]!;
+        pixels[pi + 1] = src[pi + 1]!;
+        pixels[pi + 2] = src[pi + 2]!;
+        pixels[pi + 3] = 255;
+      }
+    }
+  }
+}
+
+/** Колонки только с белым (отдельный колпачок) — без полос Ozon сверху/снизу. */
+function clampWhiteOnlyColumnsToOpaqueSpan(
+  pixels: Buffer,
+  w: number,
+  h: number
+): void {
+  for (let x = 0; x < w; x++) {
+    let hasColor = false;
+    let minY = h;
+    let maxY = -1;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      const avg = (pixels[pi]! + pixels[pi + 1]! + pixels[pi + 2]!) / 3;
+      if (avg < 236) hasColor = true;
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+    if (hasColor || maxY < minY) continue;
+
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (y >= minY && y <= maxY) continue;
+      pixels[pi + 3] = 0;
+    }
+  }
+}
+
+/** Полосы чистого белого Ozon над силуэтом (остаток после skipTopEdge / duo). */
+function clearFullWidthTopWhiteBands(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  let minColoredY = h;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 236, 30)) continue;
+      minColoredY = Math.min(minColoredY, y);
+    }
+  }
+  if (minColoredY >= h) return;
+
+  const capRise = Math.min(160, Math.max(72, Math.round(w * 0.14)));
+  const clearUntil = Math.max(0, minColoredY - capRise);
+
+  for (let y = 0; y < clearUntil; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (!readNearWhiteRgb(pixels, pi, 234, 34)) continue;
+      pixels[pi + 3] = 0;
+    }
+  }
+}
+
+/** В каждой колонке оставляем белый только над/под цветным телом (без полос Ozon сверху/снизу). */
+function clampColumnWhiteToProductSpan(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  const productW = coreMaxX >= coreMinX ? coreMaxX - coreMinX + 1 : w;
+  const maxCapRise = Math.min(118, Math.max(52, Math.round(productW * 0.17)));
+  const maxReflection = Math.min(42, Math.max(14, Math.round(productW * 0.08)));
+
+  for (let x = 0; x < w; x++) {
+    let minColorY = h;
+    let maxColorY = -1;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      minColorY = Math.min(minColorY, y);
+      maxColorY = Math.max(maxColorY, y);
+    }
+    if (maxColorY < minColorY) continue;
+
+    const keepTop = Math.max(0, minColorY - maxCapRise);
+    const keepBot = Math.min(h - 1, maxColorY + maxReflection);
+
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
+      if (y >= keepTop && y <= keepBot) continue;
+      pixels[pi + 3] = 0;
+    }
+  }
+}
+
+function finalizeEdgeCosmeticsPixels(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  restoreStrippedWhiteCaps(pixels, src, w, h);
+  purgeUnconnectedExteriorWhite(pixels, src, w, h);
+  clampColumnWhiteToProductSpan(pixels, src, w, h);
+  restoreNearbyWhiteSatellites(pixels, src, w, h);
+  clampColumnWhiteToProductSpan(pixels, src, w, h);
+  clampWhiteOnlyColumnsToOpaqueSpan(pixels, w, h);
+  cullWhiteOnlyOpaqueColumns(pixels, w, h);
+  trimHorizontalWhiteMargins(pixels, src, w, h);
+  trimHorizontalWhiteMargins(pixels, src, w, h);
+}
+
+/** Убрать белый прямоугольник Ozon в центре — всё, что не связано с цветным телом через белые детали товара. */
+function purgeUnconnectedExteriorWhite(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  const product = new Uint8Array(w * h);
+  const queue: number[] = [];
+
+  const isOpaque = (idx: number): boolean => pixels[idx * 4 + 3]! >= 128;
+  const isBridgeWhite = (idx: number): boolean => {
+    const pi = idx * 4;
+    return readNearWhiteRgb(src, pi, 228, 42);
+  };
+  const isColoredOpaque = (idx: number): boolean => {
+    if (!isOpaque(idx)) return false;
+    return !readNearWhiteRgb(src, idx * 4, 234, 34);
+  };
+
+  for (let idx = 0; idx < w * h; idx++) {
+    if (!isColoredOpaque(idx)) continue;
+    product[idx] = 1;
+    queue.push(idx);
+  }
+
+  while (queue.length) {
+    const idx = queue.pop()!;
+    const x = idx % w;
+    const y = (idx - x) / w;
+    const neighbors = [
+      x > 0 ? idx - 1 : -1,
+      x < w - 1 ? idx + 1 : -1,
+      y > 0 ? idx - w : -1,
+      y < h - 1 ? idx + w : -1
+    ];
+    for (const n of neighbors) {
+      if (n < 0 || product[n]) continue;
+      if (!isOpaque(n)) continue;
+      if (!isBridgeWhite(n) && !isColoredOpaque(n)) continue;
+      product[n] = 1;
+      queue.push(n);
+    }
+  }
+
+  for (let idx = 0; idx < w * h; idx++) {
+    if (product[idx]) continue;
+    const pi = idx * 4;
+    if (pixels[pi + 3]! < 128) continue;
+    if (!readNearWhiteRgb(src, pi, 234, 34)) continue;
+    pixels[pi + 3] = 0;
+  }
+}
+
 /**
  * Непрозрачный белый колпачок над цветным телом (колонки с достаточным телом).
  * Нижние детали (золотая крышка) не трогаем.
@@ -1061,7 +1325,8 @@ export async function stripNearWhiteBackground(
 export async function cropToVisibleProduct(
   input: Buffer,
   alphaThreshold = 14,
-  padRatio = 0.015
+  padRatio = 0.015,
+  extraTopPad = 0
 ): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -1093,7 +1358,7 @@ export async function cropToVisibleProduct(
   const padX = Math.max(3, Math.round((maxX - minX + 1) * padRatio));
   const padY = Math.max(3, Math.round((maxY - minY + 1) * padRatio));
   const left = Math.max(0, minX - padX);
-  const top = Math.max(0, minY - padY);
+  const top = Math.max(0, minY - padY - extraTopPad);
   const width = Math.min(w - left, maxX - minX + 1 + padX * 2);
   const height = Math.min(h - top, maxY - minY + 1 + padY * 2);
 
@@ -1828,13 +2093,36 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
 }
 
 /**
- * Косметика: апскейл + strip только белого от краёв кадра (без маски колпачков).
+ * Косметика: апскейл + strip белого/серого Ozon от всех краёв, затем восстановление колпачков.
  */
 export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
-  buf = await stripEdgeNearWhiteBackground(buf, 242, { skipTopEdge: true });
+  const { data: srcData, info } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const src = Buffer.from(srcData);
+  const w = info.width;
+  const h = info.height;
+
+  buf = await stripEdgeNearWhiteBackground(buf, 240);
+
+  const { data: cutData } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const pixels = Buffer.from(cutData);
+  if (w && h && src.length === pixels.length) {
+    finalizeEdgeCosmeticsPixels(pixels, src, w, h);
+    buf = await sharp(pixels, {
+      raw: { width: w, height: h, channels: 4 }
+    })
+      .png()
+      .toBuffer();
+  }
+
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 4, 0.016);
+  buf = await cropToVisibleProduct(buf, 8, 0.024, 8);
   return finalizeCosmeticsCutout(buf);
 }
 
