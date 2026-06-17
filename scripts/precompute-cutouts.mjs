@@ -1,11 +1,12 @@
 /**
- * Один раз прогнать все уникальные foto из Excel — сохранить cut-out в Yandex-кэш.
- * Нужны YANDEX_S3_* в .env.local. Без лимитов, без API-ключей.
+ * Один раз: снять фон со всех уникальных foto из Excel и залить в Yandex-кэш.
+ * Запуск на компьютере (не на Vercel). Нужны YANDEX_S3_* в .env.local.
  *
- * npx tsx scripts/precompute-cutouts.mjs "путь/к/файлу.xlsx"
+ * npm run cutouts -- "путь/к/файлу.xlsx"
  */
 import XLSX from "xlsx";
-import { fetchAiCutout } from "../lib/podruzhkaAiCutout.ts";
+import { rmbg } from "rmbg";
+import { saveCutoutToCache } from "../lib/podruzhkaAiCutout.ts";
 import { preferOzonFullSizeUrl } from "../lib/podruzhkaImageFetch.ts";
 
 const excelPath =
@@ -22,14 +23,15 @@ for (let i = 1; i < rows.length; i++) {
   if (u.startsWith("http")) urls.add(preferOzonFullSizeUrl(u));
 }
 
-console.log("unique foto:", urls.size);
+console.log("Уникальных foto:", urls.size);
 let ok = 0;
 for (const url of urls) {
   const t0 = Date.now();
   const res = await fetch(url);
   const buf = Buffer.from(await res.arrayBuffer());
-  await fetchAiCutout(url, buf);
+  const cut = Buffer.from(await rmbg(buf));
+  const saved = await saveCutoutToCache(url, cut);
   ok++;
-  console.log(ok, "/", urls.size, `${Date.now() - t0}ms`, url.slice(-40));
+  console.log(ok, "/", urls.size, `${Date.now() - t0}ms`, saved ?? "(кэш не записан)", url.slice(-48));
 }
-console.log("done", ok);
+console.log("Готово:", ok);

@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { PODRUZHKA_REFERENCE as R } from "@/lib/podruzhkaReferenceSpec";
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 import { PODRUZHKA_COSMETICS_FOTO_MODE } from "@/lib/podruzhkaCosmeticsLayout";
+import { fetchAiCutout } from "@/lib/podruzhkaAiCutout";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
 const PRODUCT_SOURCE_MIN_LONG_EDGE = 1400;
@@ -2139,8 +2140,7 @@ export async function preprocessCosmeticsProductBufferAi(
 
   let buf = await enhanceSourceForProcessing(input);
   try {
-    const { fetchAiCutout } = await import("@/lib/podruzhkaAiCutout");
-    buf = await fetchAiCutout(sourceUrl, buf);
+    buf = await fetchAiCutout(sourceUrl);
   } catch (e) {
     console.warn("ai cutout failed, fallback to edge:", e);
     return preprocessCosmeticsProductBufferEdge(input);

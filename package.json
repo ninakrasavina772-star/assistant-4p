@@ -7,6 +7,7 @@
     "build": "node scripts/copy-podruzhka-fonts.mjs && next build",
     "start": "next start",
     "lint": "next lint",
+    "cutouts": "npx tsx scripts/precompute-cutouts.mjs",
     "postinstall": "node scripts/copy-podruzhka-fonts.mjs"
   },
   "dependencies": {
@@ -22,7 +23,6 @@
     "next-auth": "^4.24.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "rmbg": "^0.1.0",
     "sharp": "^0.33.5",
     "xlsx": "^0.18.5"
   },
@@ -33,6 +33,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.1.11",
     "postcss": "^8",
+    "rmbg": "^0.1.0",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
   }

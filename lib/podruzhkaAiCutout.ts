@@ -40,36 +40,23 @@ async function fetchCachedCutout(publicUrl: string): Promise<Buffer | null> {
   }
 }
 
-async function runLocalAiCutout(input: Buffer): Promise<Buffer> {
-  const { rmbg } = await import("rmbg");
-  const out = await rmbg(input);
-  const buf = Buffer.isBuffer(out) ? out : Buffer.from(out);
-  if (buf.length < 4096) {
-    throw new Error("ai cutout: пустой результат");
-  }
-  return buf;
+/** Сохранить готовый cut-out в Yandex (скрипт precompute-cutouts). */
+export async function saveCutoutToCache(sourceUrl: string, png: Buffer): Promise<string | null> {
+  if (getOzonStorageBackend() !== "yandex") return null;
+  const key = cosmeticsCutoutCacheKey(sourceUrl);
+  return uploadOzonImageAtKey(png, key, "image/png");
 }
 
 /**
- * PNG без фона — локальная модель (rmbg), без API-ключей.
- * Результат кэшируется в Yandex S3: каждый URL Ozon обрабатывается один раз.
+ * На Vercel — только чтение кэша из Yandex (без тяжёлой AI-модели).
+ * Если кэша нет — бросает AI_CUTOUT_CACHE_MISS → fallback на edge.
  */
-export async function fetchAiCutout(sourceUrl: string, input: Buffer): Promise<Buffer> {
+export async function fetchAiCutout(sourceUrl: string): Promise<Buffer> {
   const cachedUrl = cosmeticsCutoutPublicUrl(sourceUrl);
-  if (cachedUrl) {
-    const cached = await fetchCachedCutout(cachedUrl);
-    if (cached) return cached;
+  if (!cachedUrl) {
+    throw new Error("AI_CUTOUT_CACHE_MISS");
   }
-
-  const cutout = await runLocalAiCutout(input);
-
-  if (cachedUrl) {
-    try {
-      await uploadOzonImageAtKey(cutout, cosmeticsCutoutCacheKey(sourceUrl), "image/png");
-    } catch (e) {
-      console.warn("cutout cache upload failed", e);
-    }
-  }
-
-  return cutout;
+  const cached = await fetchCachedCutout(cachedUrl);
+  if (cached) return cached;
+  throw new Error("AI_CUTOUT_CACHE_MISS");
 }
