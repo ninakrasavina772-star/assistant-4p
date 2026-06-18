@@ -21,17 +21,25 @@ import { LETUAL_API_CHUNK, LETUAL_BATCH_MAX } from "@/lib/letualMainPhotoConstan
 
 const SK_OPENAI = "fp_letual_openai_key";
 const SK_OPENAI_REM = "fp_letual_openai_remember";
+const SK_METABASE = "fp_letual_metabase_key";
+const SK_METABASE_REM = "fp_letual_metabase_remember";
 
 type Tab = "variations" | "urls";
 
 async function processChunk(
   mode: Tab,
   items: number[] | string[],
-  openaiKey: string
+  openaiKey: string,
+  metabaseKey: string
 ): Promise<LetualResultRow[]> {
   const body =
     mode === "variations"
-      ? { mode: "variation", variationIds: items, openaiApiKey: openaiKey }
+      ? {
+          mode: "variation",
+          variationIds: items,
+          openaiApiKey: openaiKey,
+          metabaseApiKey: metabaseKey
+        }
       : { mode: "url", urls: items, openaiApiKey: openaiKey };
 
   const res = await fetch("/api/letual/process", {
@@ -51,7 +59,9 @@ export function LetualMainPhotoTool() {
   const [variationIds, setVariationIds] = useState<number[]>([]);
   const [urlList, setUrlList] = useState<string[]>([]);
   const [openaiKey, setOpenaiKey] = useState("");
+  const [metabaseKey, setMetabaseKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
+  const [rememberMetabaseKey, setRememberMetabaseKey] = useState(true);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +70,7 @@ export function LetualMainPhotoTool() {
   const [status, setStatus] = useState<{
     storage: boolean;
     metabase: boolean;
+    metabaseViaUi: boolean;
     serpapi: boolean;
   } | null>(null);
 
@@ -68,6 +79,10 @@ export function LetualMainPhotoTool() {
     if (sessionStorage.getItem(SK_OPENAI_REM) !== "0") {
       const k = sessionStorage.getItem(SK_OPENAI);
       if (k) setOpenaiKey(k);
+    }
+    if (sessionStorage.getItem(SK_METABASE_REM) !== "0") {
+      const k = sessionStorage.getItem(SK_METABASE);
+      if (k) setMetabaseKey(k);
     }
   }, []);
 
@@ -84,22 +99,38 @@ export function LetualMainPhotoTool() {
   }, [openaiKey, rememberKey]);
 
   useEffect(() => {
+    if (typeof sessionStorage === "undefined") return;
+    if (!rememberMetabaseKey) {
+      sessionStorage.setItem(SK_METABASE_REM, "0");
+      sessionStorage.removeItem(SK_METABASE);
+      return;
+    }
+    const t = metabaseKey.trim();
+    if (t) sessionStorage.setItem(SK_METABASE, t);
+    sessionStorage.setItem(SK_METABASE_REM, "1");
+  }, [metabaseKey, rememberMetabaseKey]);
+
+  useEffect(() => {
     void fetch("/api/letual/status")
       .then((r) => r.json())
       .then(
         (d: {
           configured?: boolean;
           metabase?: boolean;
+          metabaseViaUi?: boolean;
           serpapi?: boolean;
         }) => {
           setStatus({
             storage: Boolean(d.configured),
             metabase: Boolean(d.metabase),
+            metabaseViaUi: Boolean(d.metabaseViaUi),
             serpapi: Boolean(d.serpapi)
           });
         }
       )
-      .catch(() => setStatus({ storage: false, metabase: false, serpapi: false }));
+      .catch(() =>
+        setStatus({ storage: false, metabase: false, metabaseViaUi: true, serpapi: false })
+      );
   }, []);
 
   const pendingCount = tab === "variations" ? variationIds.length : urlList.length;
@@ -137,8 +168,13 @@ export function LetualMainPhotoTool() {
   const run = useCallback(async () => {
     syncFromText();
     const key = openaiKey.trim();
+    const mbKey = metabaseKey.trim();
     if (!key && tab === "variations") {
       setError("Укажите OpenAI API key для отбора фото из БД");
+      return;
+    }
+    if (!mbKey && tab === "variations" && status && !status.metabase) {
+      setError("Укажите Metabase API key (X-API-KEY из metabase.4stand.com)");
       return;
     }
 
@@ -162,7 +198,7 @@ export function LetualMainPhotoTool() {
       for (let i = 0; i < items.length; i += LETUAL_API_CHUNK) {
         const chunk = items.slice(i, i + LETUAL_API_CHUNK);
         setProgress(`Обработка ${i + 1}–${i + chunk.length} из ${items.length}…`);
-        const part = await processChunk(tab, chunk, key);
+        const part = await processChunk(tab, chunk, key, mbKey);
         all.push(...part);
         setResults([...all]);
       }
@@ -185,7 +221,7 @@ export function LetualMainPhotoTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [openaiKey, syncFromText, tab, text]);
+  }, [metabaseKey, openaiKey, status, syncFromText, tab, text]);
 
   return (
     <div className="space-y-6">
@@ -199,8 +235,16 @@ export function LetualMainPhotoTool() {
           </p>
           <p>
             Metabase (фото из БД):{" "}
-            <strong className={status.metabase ? "text-emerald-700" : "text-amber-700"}>
-              {status.metabase ? "OK" : "нужны METABASE_* на сервере"}
+            <strong
+              className={
+                status.metabase || status.metabaseViaUi ? "text-emerald-700" : "text-amber-700"
+              }
+            >
+              {status.metabase
+                ? "OK (на сервере)"
+                : status.metabaseViaUi
+                  ? "укажите API key ниже"
+                  : "нужен METABASE_API_KEY"}
             </strong>
           </p>
           <p>
@@ -278,7 +322,26 @@ export function LetualMainPhotoTool() {
           />
 
           {tab === "variations" ? (
-            <div className="space-y-2">
+            <div className="space-y-4">
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-slate-700">Metabase API key</span>
+                <input
+                  type="password"
+                  className={homeInput}
+                  value={metabaseKey}
+                  onChange={(e) => setMetabaseKey(e.target.value)}
+                  placeholder="mb_… (из metabase.4stand.com → Admin → API keys)"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={rememberMetabaseKey}
+                  onChange={(e) => setRememberMetabaseKey(e.target.checked)}
+                />
+                Запомнить Metabase key в этой вкладке
+              </label>
               <label className="block text-sm">
                 <span className="mb-1 block font-medium text-slate-700">OpenAI API key</span>
                 <input
@@ -296,7 +359,7 @@ export function LetualMainPhotoTool() {
                   checked={rememberKey}
                   onChange={(e) => setRememberKey(e.target.checked)}
                 />
-                Запомнить в этой вкладке
+                Запомнить OpenAI key в этой вкладке
               </label>
             </div>
           ) : null}

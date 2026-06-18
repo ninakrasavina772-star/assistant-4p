@@ -50,12 +50,13 @@ export async function processLetualByUrl(
 
 export async function processLetualByVariationId(
   variationId: number,
-  openaiApiKey?: string
+  openaiApiKey?: string,
+  metabaseApiKey?: string
 ): Promise<LetualResultRow> {
   const key = resolveOpenAiKey(openaiApiKey);
 
   try {
-    const rows = await fetchLetualVariations([variationId]);
+    const rows = await fetchLetualVariations([variationId], metabaseApiKey);
     const row = rows[0];
     if (!row) {
       return {

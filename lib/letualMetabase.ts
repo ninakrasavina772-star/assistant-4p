@@ -1,3 +1,11 @@
+import {
+  DEFAULT_METABASE_DB_ID,
+  DEFAULT_METABASE_URL,
+  metabaseIsConfigured,
+  resolveMetabaseCredentials,
+  type MetabaseCredentials
+} from "@/lib/letualMetabaseConfig";
+
 export type LetualVariationRow = {
   variationId: number;
   ean: string | null;
@@ -6,33 +14,20 @@ export type LetualVariationRow = {
   imageUrls: string[];
 };
 
-function metabaseConfigured(): boolean {
-  return Boolean(
-    process.env.METABASE_URL?.trim() &&
-      process.env.METABASE_API_KEY?.trim() &&
-      process.env.METABASE_DB_ID?.trim()
-  );
-}
-
-function metabaseDbId(): number {
-  return Number(process.env.METABASE_DB_ID?.trim() || "2");
-}
-
-async function metabaseQuery<T = Record<string, unknown>>(sql: string): Promise<T[]> {
-  if (!metabaseConfigured()) {
-    throw new Error("Metabase не настроен: METABASE_URL, METABASE_API_KEY, METABASE_DB_ID");
-  }
-  const base = process.env.METABASE_URL!.trim().replace(/\/+$/, "");
-  const res = await fetch(`${base}/api/dataset`, {
+async function metabaseQuery<T = Record<string, unknown>>(
+  sql: string,
+  creds: MetabaseCredentials
+): Promise<T[]> {
+  const res = await fetch(`${creds.url}/api/dataset`, {
     method: "POST",
     headers: {
-      "X-API-KEY": process.env.METABASE_API_KEY!.trim(),
+      "X-API-KEY": creds.apiKey,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
       type: "native",
       native: { query: sql },
-      database: metabaseDbId()
+      database: creds.databaseId
     }),
     signal: AbortSignal.timeout(90_000)
   });
@@ -62,7 +57,17 @@ function parseImageUrls(raw: unknown): string[] {
   return [...new Set(s.split(/\s+/).filter((u) => /^https?:\/\//i.test(u)))];
 }
 
-export async function fetchLetualVariations(ids: number[]): Promise<LetualVariationRow[]> {
+export async function fetchLetualVariations(
+  ids: number[],
+  metabaseApiKey?: string
+): Promise<LetualVariationRow[]> {
+  const creds = resolveMetabaseCredentials(metabaseApiKey);
+  if (!creds) {
+    throw new Error(
+      "Metabase не настроен: укажите METABASE API key в форме или добавьте METABASE_API_KEY на сервере"
+    );
+  }
+
   if (!ids.length) return [];
   const inList = ids.map((id) => Number(id)).filter((id) => id > 0).join(",");
   if (!inList) return [];
@@ -89,7 +94,7 @@ export async function fetchLetualVariations(ids: number[]): Promise<LetualVariat
     product_name: string;
     brand_name: string;
     image_urls: string | null;
-  }>(sql);
+  }>(sql, creds);
 
   return rows.map((r) => ({
     variationId: Number(r.variation_id),
@@ -100,6 +105,4 @@ export async function fetchLetualVariations(ids: number[]): Promise<LetualVariat
   }));
 }
 
-export function metabaseIsConfigured(): boolean {
-  return metabaseConfigured();
-}
+export { metabaseIsConfigured, DEFAULT_METABASE_URL, DEFAULT_METABASE_DB_ID };

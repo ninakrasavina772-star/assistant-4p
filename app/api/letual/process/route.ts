@@ -10,6 +10,7 @@ export const maxDuration = 300;
 type ProcessBody = {
   mode?: "variation" | "url";
   openaiApiKey?: string;
+  metabaseApiKey?: string;
   variationIds?: number[];
   urls?: string[];
 };
@@ -37,7 +38,13 @@ export async function POST(req: Request) {
 
     const results = [];
     for (const variationId of ids) {
-      results.push(await processLetualByVariationId(variationId, body.openaiApiKey));
+      results.push(
+        await processLetualByVariationId(
+          variationId,
+          body.openaiApiKey,
+          body.metabaseApiKey
+        )
+      );
     }
     return NextResponse.json({ results });
   }
