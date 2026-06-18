@@ -1219,6 +1219,40 @@ export async function stripEdgeConnectedOpaqueWhite(input: Buffer): Promise<Buff
 export const restoreAttachedWhiteProductRegions = rebuildProductAlphaByColumn;
 
 /** Ozon packshot: сначала серо-белый (#F5F5F5) с краёв, затем строгий белый. */
+
+/** Ozon grid 600×800: не снимаем белый сверху (колпачок), потом чистим боковые поля. */
+async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
+  let buf = await stripEdgeNearWhiteBackground(input, 236, { skipTopEdge: true });
+  buf = await stripProductEdgeBackground(buf);
+  buf = await rebuildProductAlphaByColumn(buf, input);
+
+  const { data: srcData, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const src = Buffer.from(srcData);
+  const w = info.width;
+  const h = info.height;
+  const { data: cutData } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const pixels = Buffer.from(cutData);
+  if (w && h && src.length === pixels.length) {
+    restoreStrippedWhiteCaps(pixels, src, w, h);
+    purgeUnconnectedExteriorWhite(pixels, src, w, h);
+    trimHorizontalWhiteMargins(pixels, src, w, h);
+    buf = await sharp(pixels, {
+      raw: { width: w, height: h, channels: 4 }
+    })
+      .png()
+      .toBuffer();
+  }
+
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
+  return buf;
+}
+
 async function stripProductPackshotBackground(input: Buffer): Promise<Buffer> {
   let buf = await stripEdgeNearWhiteBackground(input, 236);
   buf = await stripProductEdgeBackground(buf);
@@ -2465,9 +2499,9 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
     .png()
     .toBuffer();
 
-  let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
+  let buf = await stripCosmeticsGridBackground(srcFitBuf);
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.03, 8);
+  buf = await cropToVisibleProduct(buf, 8, 0.024, 12);
 
   if (sw && sh && (sw !== 600 || sh !== 800)) {
     buf = await sharp(buf)
