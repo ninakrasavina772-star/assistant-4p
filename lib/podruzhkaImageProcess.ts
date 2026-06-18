@@ -2145,6 +2145,9 @@ function measureNearWhiteOpaqueRatio(pixels: Buffer, w: number, h: number): numb
 /** Убрать белый прямоугольник Ozon из AI cut-out (Essie и др. white-on-white). */
 
 /** Белый колпачок на белом Ozon (Essie и др.) — AI оставляет белый прямоугольник. */
+/** Essie nail lacquer on Ozon — white cap on white bg, AI leaves white box. */
+const ESSIE_OZON_FOTO_RE = /\/1061258\d+\.jpg/i;
+
 async function isWhiteOnWhitePackshot(input: Buffer): Promise<boolean> {
   const buf = await enhanceSourceForProcessing(input);
   const { data, info } = await sharp(buf)
@@ -2344,7 +2347,7 @@ export async function preprocessCosmeticsProductBufferAi(
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
-  if (await isWhiteOnWhitePackshot(input)) {
+  if (ESSIE_OZON_FOTO_RE.test(sourceUrl) || (await isWhiteOnWhitePackshot(input))) {
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
