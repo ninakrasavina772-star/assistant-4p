@@ -2188,6 +2188,7 @@ async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<
   const x0 = Math.max(0, minX - padX);
   const x1 = Math.min(w - 1, maxX + padX);
   const capPad = Math.max(20, Math.round(h * 0.035));
+  const capMaxRows = Math.max(capPad, Math.round(h * 0.14));
 
   const aiTop = new Int32Array(w);
   aiTop.fill(h);
@@ -2207,14 +2208,16 @@ async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<
       const aa = aiData[pi + 3]!;
       const ea = edgeRaw[pi + 3]!;
       const inX = x >= x0 && x <= x1;
-      const inCapZone = inX && y <= aiTop[x]! + capPad;
+      const top = aiTop[x]!;
+      const inCapZone =
+        inX && top < h && y < top && y >= Math.max(0, top - capMaxRows);
 
       if (aa >= 128) {
         pixels[pi] = aiData[pi]!;
         pixels[pi + 1] = aiData[pi + 1]!;
         pixels[pi + 2] = aiData[pi + 2]!;
         pixels[pi + 3] = 255;
-      } else if (inX && ea >= 128 && (inCapZone || y >= aiTop[x]!)) {
+      } else if (inCapZone && ea >= 128) {
         pixels[pi] = srcFit[pi]!;
         pixels[pi + 1] = srcFit[pi + 1]!;
         pixels[pi + 2] = srcFit[pi + 2]!;
@@ -2228,6 +2231,8 @@ async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<
   })
     .png()
     .toBuffer();
+
+  buf = await rebuildProductAlphaByColumn(buf, srcFitBuf);
 
   const srcMeta = await sharp(source).metadata();
   const sw = srcMeta.width ?? 0;
