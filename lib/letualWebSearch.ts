@@ -70,10 +70,13 @@ export async function searchLetualWebImages(
   if (e) {
     queries.push(`site:ozon.ru ${e}`);
     queries.push(`site:goldapple.ru ${e}`);
+    queries.push(`site:letu.ru ${e}`);
   }
   if (name) {
     queries.push(`${name} флакон белый фон`);
-    queries.push(`${name} product packshot`);
+    queries.push(`${name} eau de parfum packshot`);
+    queries.push(`site:ozon.ru ${name}`);
+    queries.push(`site:goldapple.ru ${name}`);
   }
 
   const seen = new Set<string>();
@@ -85,7 +88,7 @@ export async function searchLetualWebImages(
       if (seen.has(img.url)) continue;
       seen.add(img.url);
       collected.push(img);
-      if (collected.length >= 12) return collected;
+      if (collected.length >= 18) return collected;
     }
   }
 

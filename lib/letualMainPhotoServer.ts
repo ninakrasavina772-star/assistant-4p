@@ -38,19 +38,68 @@ async function tryProcessCandidates(
 function buildDbComment(best: LetualPhotoScore | undefined): string {
   if (!best || best.suitable) return "";
   const notes: string[] = [];
-  if (!best.hasWhiteBackground) notes.push("фон не белый — проверить");
+  if (!best.hasWhiteBackground) notes.push("фон не белый — вырезание");
   if (!best.isFrontal) notes.push("ракурс — проверить");
   if (best.quality < 50) notes.push("низкое качество источника");
   if (!notes.length && best.reason && best.reason !== "Не подходит") {
     notes.push(best.reason);
   }
   if (!notes.length) return "";
-  return `Фото из БД: ${notes.join("; ")}`;
+  return `Фото из БД (запасной вариант): ${notes.join("; ")}`;
 }
 
-function dbPhotoNeedsWebFallback(ranked: LetualPhotoScore[]): boolean {
-  if (!ranked.length) return true;
-  return !ranked.some((r) => !r.hasBox && !r.hasInfographic);
+function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
+  const suitable = ranked.filter((r) => r.suitable);
+  if (!suitable.length) return undefined;
+  return [...suitable].sort((a, b) => b.score - a.score)[0];
+}
+
+function dbFallbackGoodEnoughForCutout(best: LetualPhotoScore): boolean {
+  return (
+    !best.hasBox &&
+    !best.hasInfographic &&
+    best.isFrontal &&
+    best.quality >= 40
+  );
+}
+
+async function pickFromWebImages(
+  images: Awaited<ReturnType<typeof searchLetualWebImages>>,
+  openaiKey: string
+): Promise<{ sourceUrl: string; comment: string; candidates: string[] }> {
+  const allRanked: LetualPhotoScore[] = [];
+  const sourceByUrl = new Map<string, string>();
+
+  for (const item of images) {
+    if (!(await validateImageUrl(item.url))) continue;
+    const scored = await pickSuitableLetualPhoto([item.url], openaiKey);
+    for (const r of scored.ranked) {
+      sourceByUrl.set(r.url, item.source);
+      allRanked.push(r);
+    }
+  }
+
+  const suitable = findSuitableInRanked(allRanked);
+  if (suitable?.url) {
+    const src = sourceByUrl.get(suitable.url) ?? "web";
+    return {
+      sourceUrl: suitable.url,
+      comment: `Фото из интернета (${src})`,
+      candidates: []
+    };
+  }
+
+  const webBest = pickBestFromRanked(allRanked);
+  if (webBest?.url) {
+    const src = sourceByUrl.get(webBest.url) ?? "web";
+    return {
+      sourceUrl: "",
+      comment: `Фото из интернета (${src}): ${webBest.reason || "проверить"}`,
+      candidates: [webBest.url]
+    };
+  }
+
+  return { sourceUrl: "", comment: "", candidates: [] };
 }
 
 export async function processLetualByUrl(
@@ -101,49 +150,62 @@ export async function processLetualByVariationId(
     let comment = "";
     const candidateUrls: string[] = [];
     let rankedFromDb: LetualPhotoScore[] = [];
+    let dbFallback: LetualPhotoScore | undefined;
 
     if (row.imageUrls.length) {
       const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
       rankedFromDb = picked.ranked;
 
-      if (picked.url) {
-        sourceUrl = picked.url;
-        comment = buildDbComment(picked.best);
+      const suitable = findSuitableInRanked(picked.ranked);
+      if (suitable?.url) {
+        sourceUrl = suitable.url;
+        comment = buildDbComment(suitable);
       } else {
-        const fallback = pickBestFromRanked(picked.ranked);
-        if (fallback?.url) {
-          candidateUrls.push(fallback.url);
-          comment = buildDbComment(fallback);
+        dbFallback = pickBestFromRanked(picked.ranked);
+      }
+    }
+
+    // Нет идеального фото в БД → интернет (если кадр плохой), иначе вырезание с цветного фона
+    if (!sourceUrl) {
+      if (dbFallback?.url && dbFallbackGoodEnoughForCutout(dbFallback)) {
+        candidateUrls.push(dbFallback.url);
+        comment = buildDbComment(dbFallback);
+      } else {
+        try {
+          const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
+          const webPick = await pickFromWebImages(web, key);
+          if (webPick.sourceUrl) {
+            sourceUrl = webPick.sourceUrl;
+            comment = webPick.comment;
+          } else if (webPick.candidates.length) {
+            candidateUrls.push(...webPick.candidates);
+            comment = webPick.comment;
+          } else if (dbFallback?.url) {
+            candidateUrls.push(dbFallback.url);
+            comment = `${buildDbComment(dbFallback)}; в интернете не найдено`;
+          }
+        } catch (webErr) {
+          if (dbFallback?.url) {
+            candidateUrls.push(dbFallback.url);
+            const webMsg = webErr instanceof Error ? webErr.message : String(webErr);
+            comment = `${buildDbComment(dbFallback)}; ${webMsg}`;
+          } else {
+            throw webErr;
+          }
         }
       }
     }
 
-    const tryWeb =
-      dbPhotoNeedsWebFallback(rankedFromDb) ||
-      (!sourceUrl && !candidateUrls.length);
-
-    if (tryWeb) {
-      const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
-      for (const item of web) {
-        if (!(await validateImageUrl(item.url))) continue;
-        const scored = await pickSuitableLetualPhoto([item.url], key);
-        if (scored.url) {
-          sourceUrl = scored.url;
-          comment = `Фото из интернета (${item.source})`;
-          candidateUrls.length = 0;
-          break;
-        }
-        const webBest = pickBestFromRanked(scored.ranked);
-        if (webBest?.url && !webBest.hasBox) {
-          sourceUrl = "";
-          candidateUrls.unshift(webBest.url);
-          comment = `Фото из интернета (${item.source}): ${webBest.reason || "проверить"}`;
-          break;
-        }
+    const tryList: string[] = [];
+    if (sourceUrl) tryList.push(sourceUrl);
+    for (const u of candidateUrls) {
+      if (u && !tryList.includes(u)) tryList.push(u);
+    }
+    for (const r of rankedFromDb) {
+      if (r.url && !r.hasBox && !r.hasInfographic && !tryList.includes(r.url)) {
+        tryList.push(r.url);
       }
     }
-
-    const tryList = sourceUrl ? [sourceUrl, ...candidateUrls] : candidateUrls;
 
     if (!tryList.length) {
       const onlyBox =
