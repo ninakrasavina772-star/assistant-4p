@@ -10,6 +10,13 @@ export function parseFotoUrlsFromText(text: string): string[] {
   return [...new Set(urls.filter(Boolean))];
 }
 
+/** Собрать CDN URL из image_load_hash / url_hash (hex 40+ символов). */
+export function build4standCdnUrlFromHash(hash: string): string | null {
+  const h = hash.trim().toLowerCase();
+  if (!/^[0-9a-f]{40,}$/.test(h)) return null;
+  return `https://cdnru.4stand.com/huge/${h.slice(0, 2)}/${h.slice(2, 4)}/${h}.webp`;
+}
+
 /** 900x900 jpg → huge webp (тот же hash на CDN 4stand). */
 export function normalize4standHugeWebp(url: string): string {
   const m = url.match(
