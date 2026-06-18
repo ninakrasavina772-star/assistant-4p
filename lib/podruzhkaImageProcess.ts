@@ -472,7 +472,7 @@ function buildVerticalWhiteCapKeepMask(src: Buffer, w: number, h: number): Uint8
   const x0 = Math.max(0, coreMinX - padX);
   const x1 = Math.min(w - 1, coreMaxX + padX);
   /** Маска колпачка — узкая; полный колпачок добирает reclaim ниже. */
-  const maxCapRise = Math.min(110, Math.max(40, Math.round(productW * 0.16)));
+  const maxCapRise = Math.min(220, Math.max(60, Math.round(productW * 0.35)));
   const maxReflectionDrop = Math.min(14, Math.max(6, Math.round(productW * 0.03)));
 
   const mark = (x: number, y: number) => {
@@ -2129,6 +2129,106 @@ export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promi
   return finalizeCosmeticsCutout(buf);
 }
 
+
+/** Подогнать AI cut-out под размер апскейленного исходника (кэш rmbg — с сырого Ozon). */
+async function alignCutoutToSource(cutout: Buffer, source: Buffer): Promise<Buffer> {
+  const srcMeta = await sharp(source).metadata();
+  const cutMeta = await sharp(cutout).metadata();
+  const sw = srcMeta.width ?? 0;
+  const sh = srcMeta.height ?? 0;
+  const cw = cutMeta.width ?? 0;
+  const ch = cutMeta.height ?? 0;
+  if (!sw || !sh || (sw === cw && sh === ch)) return cutout;
+  return sharp(cutout)
+    .resize(sw, sh, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .png()
+    .toBuffer();
+}
+
+/**
+ * AI cut-out часто «съедает» колпачки. Восстанавливаем из исходного foto Ozon
+ * (белые и цветные шапки над телом).
+ */
+async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<Buffer> {
+  let buf = await alignCutoutToSource(cutout, source);
+  buf = await rebuildProductAlphaByColumn(buf, source);
+
+  const { data, info } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const src = Buffer.from(await sharp(source).ensureAlpha().raw().toBuffer());
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h || src.length !== data.length) return buf;
+
+  const pixels = Buffer.from(data);
+  const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
+  const exterior = buildExteriorNearWhiteMask(src, w, h, 232);
+
+  reclaimOpaqueWhiteCapAboveBody(pixels, src, whiteCapKeep, w, h);
+
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+
+  if (coreMaxX >= coreMinX) {
+    const padX = Math.max(4, Math.round((coreMaxX - coreMinX + 1) * 0.06));
+    const x0 = Math.max(0, coreMinX - padX);
+    const x1 = Math.min(w - 1, coreMaxX + padX);
+    const productW = coreMaxX - coreMinX + 1;
+    const maxRise = Math.min(300, Math.max(100, Math.round(productW * 0.58)));
+
+    for (let x = x0; x <= x1; x++) {
+      let minCutY = h;
+      for (let y = 0; y < h; y++) {
+        if (pixels[(y * w + x) * 4 + 3]! >= 128) minCutY = Math.min(minCutY, y);
+      }
+      if (minCutY >= h) continue;
+
+      let anchorY = minCutY;
+      for (let y = minCutY; y < Math.min(h, minCutY + Math.round(h * 0.35)); y++) {
+        const pi = (y * w + x) * 4;
+        if (pixels[pi + 3]! < 128) continue;
+        if (isBodyAnchorPixel(src, pi)) {
+          anchorY = y;
+          break;
+        }
+      }
+
+      const floorY = Math.max(0, anchorY - maxRise);
+      for (let y = floorY; y < anchorY; y++) {
+        const idx = y * w + x;
+        const pi = idx * 4;
+        if (pixels[pi + 3]! >= 200) continue;
+        if (exterior[idx] && whiteCapKeep[idx] !== 1) continue;
+        if (exterior[idx]) continue;
+        if (!isBodyAnchorPixel(src, pi) && readNearWhiteRgb(src, pi, 240, 28)) continue;
+        pixels[pi] = src[pi]!;
+        pixels[pi + 1] = src[pi + 1]!;
+        pixels[pi + 2] = src[pi + 2]!;
+        pixels[pi + 3] = 255;
+      }
+    }
+  }
+
+  purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
+  trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 /**
  * Косметика: локальная AI-модель (rmbg) + кэш в Yandex. При ошибке — edge.
  */
@@ -2140,7 +2240,8 @@ export async function preprocessCosmeticsProductBufferAi(
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
-  let buf = await enhanceSourceForProcessing(input);
+  const source = await enhanceSourceForProcessing(input);
+  let buf: Buffer;
   try {
     buf = await fetchAiCutout(sourceUrl);
   } catch (e) {
@@ -2148,8 +2249,9 @@ export async function preprocessCosmeticsProductBufferAi(
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
+  buf = await repairAiCosmeticsCutout(buf, source);
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.02, 6);
+  buf = await cropToVisibleProduct(buf, 8, 0.022, 14);
   return finalizeCosmeticsCutout(buf);
 }
 
