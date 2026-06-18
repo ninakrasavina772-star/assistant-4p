@@ -4,8 +4,7 @@ import { validateImageUrl } from "@/lib/letualWebSearch";
 
 function matchLabel(type: SiblingPhotoCandidate["matchType"]): string {
   if (type === "same_ean") return "тот же EAN";
-  if (type === "same_product") return "та же карточка";
-  return "та же линейка";
+  return "та же карточка";
 }
 
 function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
@@ -14,7 +13,7 @@ function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | un
   return [...suitable].sort((a, b) => b.score - a.score)[0];
 }
 
-/** Подобрать фото среди других вариаций каталога (тот же EAN / product / линейка). */
+/** Подобрать фото среди других вариаций каталога (тот же EAN / та же карточка). */
 export async function pickFromSiblingCatalogPhotos(
   variationId: number,
   openaiKey: string,
@@ -55,7 +54,7 @@ export async function pickFromSiblingCatalogPhotos(
     const meta = metaByUrl.get(suitable.url);
     return {
       sourceUrl: suitable.url,
-      comment: `Фото из каталога (вариация ${meta?.variationId}, ${matchLabel(meta?.matchType ?? "same_line")})`,
+      comment: `Фото из каталога (вариация ${meta?.variationId}, ${matchLabel(meta?.matchType ?? "same_product")})`,
       candidates: []
     };
   }
@@ -65,7 +64,7 @@ export async function pickFromSiblingCatalogPhotos(
     const meta = metaByUrl.get(best.url);
     return {
       sourceUrl: "",
-      comment: `Фото из каталога (вариация ${meta?.variationId}, ${matchLabel(meta?.matchType ?? "same_line")}): ${best.reason || "проверить"}`,
+      comment: `Фото из каталога (вариация ${meta?.variationId}, ${matchLabel(meta?.matchType ?? "same_product")}): ${best.reason || "проверить"}`,
       candidates: [best.url]
     };
   }

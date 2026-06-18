@@ -269,7 +269,7 @@ export function LetualMainPhotoTool() {
             Поиск в каталоге:{" "}
             <strong className={status.catalogSearch ? "text-emerald-700" : "text-red-700"}>
               {status.catalogSearch
-                ? "OK — другие вариации (EAN / линейка)"
+                ? "OK — тот же EAN / та же карточка"
                 : "нужен Metabase на сервере"}
             </strong>
           </p>

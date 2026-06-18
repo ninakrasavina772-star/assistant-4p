@@ -122,7 +122,7 @@ function mergeLetualImageUrls(
 export type SiblingPhotoCandidate = {
   variationId: number;
   mainImageUrl: string;
-  matchType: "same_ean" | "same_product" | "same_line";
+  matchType: "same_ean" | "same_product";
 };
 
 function hashToMainImageUrl(hash: string | null | undefined): string | null {
@@ -130,68 +130,23 @@ function hashToMainImageUrl(hash: string | null | undefined): string | null {
   return build4standCdnUrlFromHash(String(hash).trim());
 }
 
-function extractProductLineKey(brandName: string, productName: string): string | null {
-  const core = productName
-    .replace(new RegExp(brandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ")
-    .replace(/\d+[\s,.]*(ml|мл|fl\.?\s*oz|oz)\b/gi, " ")
-    .replace(/парфюмерия|унисекс|женская|мужская|eau de parfum|edp|edt|vapo|spray/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (core.length < 4) return null;
-  return core.slice(0, 48);
-}
-
-function sqlLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function siblingLineExcludeSql(productName: string): string {
-  const lower = productName.toLowerCase();
-  const terms = ["essentiel", "royal", "lumiere", "lumière", "in white", "kit"];
-  return terms
-    .filter((t) => !lower.includes(t))
-    .map((t) => `AND LOWER(COALESCE(p2.name, '') || ' ' || COALESCE(pv2.name, '')) NOT LIKE '%${t}%'`)
-    .join("\n      ");
-}
-
-/** Другие вариации с тем же EAN, product или похожим названием (brand + линейка). */
+/** Другие вариации: тот же EAN или та же карточка (product). Без «линейки» — объём может отличаться. */
 export async function fetchSiblingVariationPhotos(
   variationId: number,
   metabaseApiKey?: string,
-  seed?: { brandName: string; productName: string },
+  _seed?: { brandName: string; productName: string },
   limit = 24
 ): Promise<SiblingPhotoCandidate[]> {
   const creds = resolveMetabaseCredentials(metabaseApiKey);
   if (!creds || variationId <= 0) return [];
-
-  const lineKey =
-    seed?.brandName && seed?.productName
-      ? extractProductLineKey(seed.brandName, seed.productName)
-      : null;
-
-  const lineSql = lineKey
-    ? `
-      UNION ALL
-      SELECT pv2.id, 'same_line', 3
-      FROM seed s
-      JOIN public.brand b ON b.name = s.brand_name
-      JOIN public.product p2 ON p2.brand_id = b.id
-      JOIN public.product_variation pv2 ON pv2.product_id = p2.id AND pv2.id != s.id
-      WHERE LOWER(COALESCE(p2.name, '') || ' ' || COALESCE(pv2.name, '')) LIKE '%' || LOWER(${sqlLiteral(lineKey)}) || '%'
-      ${siblingLineExcludeSql(seed?.productName ?? "")}`
-    : "";
 
   const sql = `
     WITH seed AS (
       SELECT
         pv.id,
         NULLIF(TRIM(pv.ean), '') AS ean,
-        pv.product_id,
-        COALESCE(NULLIF(TRIM(pv.name), ''), p.name) AS product_name,
-        b.name AS brand_name
+        pv.product_id
       FROM public.product_variation pv
-      JOIN public.product p ON p.id = pv.product_id
-      JOIN public.brand b ON b.id = p.brand_id
       WHERE pv.id = ${Number(variationId)}
     ),
     candidates AS (
@@ -207,7 +162,6 @@ export async function fetchSiblingVariationPhotos(
       FROM seed s
       JOIN public.product_variation pv2
         ON pv2.product_id = s.product_id AND pv2.id != s.id
-      ${lineSql}
     )
     SELECT c.variation_id, c.match_type, c.priority, pvmi.image_load_hash
     FROM candidates c
@@ -234,7 +188,7 @@ export async function fetchSiblingVariationPhotos(
     const matchType =
       r.match_type === "same_ean" || r.match_type === "same_product"
         ? r.match_type
-        : "same_line";
+        : "same_product";
     out.push({
       variationId: Number(r.variation_id),
       mainImageUrl: url,
