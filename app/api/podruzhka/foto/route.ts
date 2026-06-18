@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { resolveAdaptiveProductPlacement } from "@/lib/podruzhkaProductAdaptive";
+import { PODRUZHKA_COSMETICS_LAYOUT_VERSION } from "@/lib/podruzhkaCosmeticsLayout";
 
 export const maxDuration = 120;
 
@@ -32,7 +33,10 @@ export async function GET(req: Request) {
       "X-Podruzhka-Draw-Y": String(placement.drawY),
       "X-Podruzhka-Width": String(placement.fit.width),
       "X-Podruzhka-Height": String(placement.fit.height),
-      "X-Podruzhka-Fit-Strategy": placement.strategyId
+      "X-Podruzhka-Fit-Strategy": placement.strategyId,
+      ...(safeProfile === "cosmetics"
+        ? { "X-Podruzhka-Layout-Version": PODRUZHKA_COSMETICS_LAYOUT_VERSION }
+        : {})
     }
   });
 }
