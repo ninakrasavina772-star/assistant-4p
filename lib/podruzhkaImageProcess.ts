@@ -2467,7 +2467,7 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
 
   let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.028, 4);
+  buf = await cropToVisibleProduct(buf, 8, 0.03, 8);
 
   if (sw && sh && (sw !== 600 || sh !== 800)) {
     buf = await sharp(buf)
@@ -2477,29 +2477,7 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
   }
 
   buf = await stripCosmeticsFloorShadow(buf);
-
-  const { data: cutData, info: cutInfo } = await sharp(buf)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const cw = cutInfo.width ?? 0;
-  const ch = cutInfo.height ?? 0;
-  const pixels = Buffer.from(cutData);
-  const srcForPurge = await sharp(source)
-    .resize(cw, ch, { fit: "fill", kernel: sharp.kernel.lanczos3 })
-    .ensureAlpha()
-    .raw()
-    .toBuffer();
-  if (cw && ch && srcForPurge.length === pixels.length) {
-    purgeUnconnectedExteriorWhite(pixels, srcForPurge, cw, ch);
-    clampColumnWhiteToProductSpan(pixels, srcForPurge, cw, ch);
-    buf = await sharp(pixels, {
-      raw: { width: cw, height: ch, channels: 4 }
-    })
-      .png()
-      .toBuffer();
-  }
-
+  buf = await trimTransparentSafe(buf);
   return finalizeCosmeticsCutout(buf);
 }
 
