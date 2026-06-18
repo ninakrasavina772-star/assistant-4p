@@ -2143,6 +2143,39 @@ function measureNearWhiteOpaqueRatio(pixels: Buffer, w: number, h: number): numb
 }
 
 /** Убрать белый прямоугольник Ozon из AI cut-out (Essie и др. white-on-white). */
+
+/** Белый колпачок на белом Ozon (Essie и др.) — AI оставляет белый прямоугольник. */
+async function isWhiteOnWhitePackshot(input: Buffer): Promise<boolean> {
+  const buf = await enhanceSourceForProcessing(input);
+  const { data, info } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const w = info.width ?? 0;
+  const h = info.height ?? 0;
+  if (!w || !h) return false;
+
+  const topRows = Math.max(8, Math.round(h * 0.14));
+  let whiteTop = 0;
+  let colored = 0;
+  let topEdgeOpaque = 0;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      const nearWhite = readNearWhiteRgb(data, pi, 240, 34);
+      if (y < topRows && nearWhite) whiteTop++;
+      if (!nearWhite && isSubstantiveSourcePixel(data, pi)) colored++;
+      if (y === 0 && !nearWhite) topEdgeOpaque++;
+    }
+  }
+
+  const topWhiteRatio = whiteTop / (topRows * w);
+  const coloredRatio = colored / (w * h);
+  const touchesTopWithProduct = topEdgeOpaque > w * 0.04;
+  return topWhiteRatio > 0.88 && coloredRatio > 0.06 && coloredRatio < 0.55;
+}
+
 async function scrubAiCosmeticsWhiteFringe(
   cutout: Buffer,
   srcFitBuf: Buffer
@@ -2294,6 +2327,10 @@ export async function preprocessCosmeticsProductBufferAi(
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
+  if (await isWhiteOnWhitePackshot(input)) {
+    return preprocessCosmeticsProductBufferEdge(input);
+  }
+
   const source = await enhanceSourceForProcessing(input);
   let buf: Buffer;
   try {
@@ -2315,7 +2352,7 @@ export async function preprocessCosmeticsProductBufferAi(
   const sh = scrubInfo.height ?? 0;
   if (sw && sh) {
     const whiteRatio = measureNearWhiteOpaqueRatio(Buffer.from(scrubCheck), sw, sh);
-    if (whiteRatio > 0.3) {
+    if (whiteRatio > 0.18) {
       console.warn(`ai cutout near-white ratio ${whiteRatio.toFixed(2)}, edge fallback`);
       return preprocessCosmeticsProductBufferEdge(input);
     }
