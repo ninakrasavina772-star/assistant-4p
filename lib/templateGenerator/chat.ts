@@ -37,6 +37,7 @@ export type TemplateChatContext = {
   selectedColumns?: string[];
   enabledColCount?: number;
   photoEnabled?: boolean;
+  photoGenerateBackgrounds?: boolean;
   photoMin?: number;
   photoTarget?: number;
   columns?: TemplateColumnBrief[];
@@ -257,7 +258,10 @@ export function buildContextBlock(ctx: TemplateChatContext): string {
   }
 
   if (ctx.photoEnabled) {
-    lines.push(`Доп. фото: мин ${ctx.photoMin}, цель ${ctx.photoTarget}`);
+    lines.push(
+      `Фото: цель ${ctx.photoTarget}, мин ${ctx.photoMin}` +
+        (ctx.photoGenerateBackgrounds === false ? " (без генерации фонов)" : " + композит на фонах")
+    );
   }
 
   return lines.join("\n");

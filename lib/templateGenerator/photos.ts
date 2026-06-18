@@ -36,6 +36,23 @@ export function parseImageUrls(text: string): string[] {
   return out;
 }
 
+export function mergeImageUrls(existing: string[], extra: string[]): string[] {
+  const seen = new Set(existing.map((u) => u.toLowerCase()));
+  const out = [...existing];
+  for (const u of extra) {
+    const key = u.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(u);
+  }
+  return out;
+}
+
+/** Яндекс/Ozon: несколько URL через запятую в одной ячейке */
+export function formatImageCellValue(urls: string[]): string {
+  return urls.filter(Boolean).join(",");
+}
+
 export function countRowPhotos(cells: Record<string, string>, imageHeader: string | null): number {
   if (!imageHeader) return 0;
   return parseImageUrls(cells[imageHeader] ?? "").length;

@@ -1,6 +1,6 @@
 import { prefillFromCsvData } from "@/lib/templateGenerator/csvPrefill";
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
-import { collectReviewPhotosFromImageCell } from "@/lib/templateGenerator/photos";
+import { resolveRowPhotos } from "@/lib/templateGenerator/photoGenerate";
 import type { ColumnSelection, FillRowInput, FillRowResult, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import { rowNeedsAiForHeaders } from "@/lib/templateGenerator/workMode";
 
@@ -20,6 +20,8 @@ export type FillBatchIn = {
     minCount: number;
     targetCount: number;
     imageHeader: string | null;
+    /** Композит товара на разные фоны, если URL в ячейке меньше цели */
+    generateBackgrounds?: boolean;
   };
   model?: string;
   /** Не ходить на сайт бренда — быстрее, но хуже для нот/описания */
@@ -238,8 +240,47 @@ function missingSelectedHeaders(fields: AiFieldSpec[], values: Record<string, st
 }
 
 function imageCellText(row: FillRowInput, imageHeader: string | null): string {
-  if (imageHeader && row.cells[imageHeader]) return row.cells[imageHeader]!;
+  if (imageHeader) {
+    const fromCell = row.cells[imageHeader]?.trim();
+    if (fromCell) return fromCell;
+    const fromCsv = row.csvData[imageHeader]?.trim();
+    if (fromCsv) return fromCsv;
+  }
+  for (const [k, v] of Object.entries(row.csvData)) {
+    if (/изображ|image|фото/i.test(k) && v.trim()) return v.trim();
+  }
   return row.cells["Ссылка на изображение *"] ?? row.cells["Ссылка на изображение"] ?? "";
+}
+
+async function resolveExtraPhotos(
+  row: FillRowInput,
+  batch: FillBatchIn
+): Promise<{ extraPhotos: string[]; imageUrls?: string[]; sources: string[] }> {
+  if (!batch.photoSettings.enabled) {
+    return { extraPhotos: [], sources: [] };
+  }
+
+  const imageText = imageCellText(row, batch.photoSettings.imageHeader);
+  const photo = await resolveRowPhotos({
+    imageText,
+    sku: row.sku,
+    minCount: batch.photoSettings.minCount,
+    targetCount: batch.photoSettings.targetCount,
+    generateBackgrounds: batch.photoSettings.generateBackgrounds !== false
+  });
+
+  const sources: string[] = [];
+  if (photo.generated.length) {
+    sources.push(`фото: +${photo.generated.length} вариантов на фоне`);
+  } else if (photo.note) {
+    sources.push(`фото: ${photo.note}`);
+  }
+
+  return {
+    extraPhotos: photo.generated,
+    imageUrls: photo.imageUrls.length ? photo.imageUrls : undefined,
+    sources
+  };
 }
 
 async function getBrandSnippet(
@@ -267,19 +308,17 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
     const brand = pickBrand(row);
     const domain = guessBrandDomain(brand);
 
-    const extraPhotos = batch.photoSettings.enabled
-      ? collectReviewPhotosFromImageCell(imageCellText(row, batch.photoSettings.imageHeader), {
-          minCount: batch.photoSettings.minCount,
-          targetCount: batch.photoSettings.targetCount
-        })
-      : [];
+    const photoResolved = await resolveExtraPhotos(row, batch);
+    const extraPhotos = photoResolved.extraPhotos;
+    const imageUrls = photoResolved.imageUrls;
+    const photoSources = photoResolved.sources;
 
     try {
       const csvPrefill = prefillFromCsvData(row.csvData, fields, row.cells, {
         keepTemplateFilled
       });
       const values: Record<string, string> = { ...csvPrefill.values };
-      const sources = [...csvPrefill.sources];
+      const sources = [...csvPrefill.sources, ...photoSources];
 
       const aiHeaders = rowNeedsAiForHeaders(
         row.cells,
@@ -297,6 +336,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           ok: true,
           values,
           extraPhotos,
+          imageUrls,
           sources
         });
         continue;
@@ -344,6 +384,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           ok: false,
           values,
           extraPhotos,
+          imageUrls,
           sources,
           error: `Не заполнены: ${stillMissing.join(", ")}`
         });
@@ -355,6 +396,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         ok: true,
         values,
         extraPhotos,
+        imageUrls,
         sources
       });
     } catch (e) {
@@ -362,8 +404,9 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         row: row.row,
         ok: false,
         values: {},
-        extraPhotos: [],
-        sources: [],
+        extraPhotos,
+        imageUrls,
+        sources: photoSources,
         error: e instanceof Error ? e.message : "Ошибка AI"
       });
     }

@@ -61,7 +61,7 @@ const SK_WORK_MODE = "fp_template_gen_work_mode";
 const SK_OVERWRITE_FILLED = "fp_template_gen_overwrite_filled";
 const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
-const FILL_REQUEST_MS = 130_000;
+const FILL_REQUEST_MS = 175_000;
 const FILL_BATCH_SIZE_DEFAULT = 50;
 
 function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
@@ -166,7 +166,8 @@ export function TemplateGeneratorTool() {
   const [strictDropdown, setStrictDropdown] = useState<Record<string, boolean>>({});
   const [dropdownSource, setDropdownSource] = useState<Record<string, DropdownSource>>({});
 
-  const [photoEnabled, setPhotoEnabled] = useState(false);
+  const [photoEnabled, setPhotoEnabled] = useState(true);
+  const [photoGenerateBackgrounds, setPhotoGenerateBackgrounds] = useState(true);
   const [photoMin, setPhotoMin] = useState(7);
   const [photoTarget, setPhotoTarget] = useState(8);
 
@@ -271,6 +272,7 @@ export function TemplateGeneratorTool() {
       selectedColumns: selected,
       enabledColCount: selected.length,
       photoEnabled,
+      photoGenerateBackgrounds,
       photoMin,
       photoTarget,
       columns,
@@ -300,6 +302,7 @@ export function TemplateGeneratorTool() {
     csvTable,
     csvMap,
     photoEnabled,
+    photoGenerateBackgrounds,
     photoMin,
     photoTarget,
     exampleFileName,
@@ -903,6 +906,7 @@ export function TemplateGeneratorTool() {
                   overwriteFilled: applyOverwrite,
                   photoSettings: {
                     enabled: photoEnabled,
+                    generateBackgrounds: photoGenerateBackgrounds,
                     minCount: photoMin,
                     targetCount: photoTarget,
                     imageHeader
@@ -936,7 +940,8 @@ export function TemplateGeneratorTool() {
           selectionList,
           allResults,
           DEFAULT_PHOTO_REVIEW_COLUMN,
-          applyOverwrite
+          applyOverwrite,
+          scan.imageCol
         );
         setPreview([...allResults]);
         setProgress(`AI: ${doneRows} / ${contexts.length} (${batchLabel})…`);
@@ -1006,6 +1011,7 @@ export function TemplateGeneratorTool() {
     csvTable,
     csvMap,
     photoEnabled,
+    photoGenerateBackgrounds,
     photoMin,
     photoTarget,
     strictDropdown,
@@ -1531,18 +1537,28 @@ export function TemplateGeneratorTool() {
             </div>
 
             <fieldset className="rounded-lg border border-slate-200 p-3 text-sm">
-              <legend className="px-1 font-semibold">Доп. фото (из шаблона)</legend>
+              <legend className="px-1 font-semibold">Фото товара</legend>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
                   checked={photoEnabled}
                   onChange={(e) => setPhotoEnabled(e.target.checked)}
                 />
-                Собрать ссылки из колонки «Ссылка на изображение» в «Доп. фото (проверка)»
+                Дополнять фото, если в ячейке меньше цели
+              </label>
+              <label className="mt-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={photoGenerateBackgrounds}
+                  disabled={!photoEnabled}
+                  onChange={(e) => setPhotoGenerateBackgrounds(e.target.checked)}
+                />
+                Генерировать варианты на разных фонах (композит из packshot)
               </label>
               <p className="mt-2 text-xs text-slate-500">
-                AI не ищет картинки в интернете — только копирует уже имеющиеся URL из шаблона или CSV-фида.
-                Фейковые ссылки (example.com) отфильтровываются.
+                Берём первое foto из «Ссылка на изображение» (шаблон или фид), снимаем белый фон и
+                ставим товар на 5 пресетов (бежевый, серый, розовый, мрамор, тёмный). Новые URL
+                добавляются в колонку изображений и в «{DEFAULT_PHOTO_REVIEW_COLUMN}».
               </p>
               <div className="mt-2 flex flex-wrap gap-4">
                 <label>
@@ -1569,8 +1585,8 @@ export function TemplateGeneratorTool() {
                 </label>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Ссылки на проверку → колонка «{DEFAULT_PHOTO_REVIEW_COLUMN}». Обработка фона — в
-                следующих версиях.
+                Нужно хранилище Yandex S3 или Vercel Blob на сервере. До {photoTarget} фото на товар,
+                не больше 5 новых вариантов за строку.
               </p>
             </fieldset>
 

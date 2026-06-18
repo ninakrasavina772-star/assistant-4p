@@ -59,6 +59,8 @@ export type FillRowResult = {
   ok: boolean;
   values: Record<string, string>;
   extraPhotos: string[];
+  /** Полный список URL для колонки «Ссылка на изображение» */
+  imageUrls?: string[];
   sources: string[];
   error?: string;
 };

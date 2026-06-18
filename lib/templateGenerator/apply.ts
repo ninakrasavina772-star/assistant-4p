@@ -1,7 +1,7 @@
 import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
 import type { ColumnSelection, FillRowResult, TemplateSheetScan } from "@/lib/templateGenerator/types";
-import { ensurePhotoReviewColumn, formatPhotoReviewValue } from "@/lib/templateGenerator/photos";
+import { ensurePhotoReviewColumn, formatImageCellValue, formatPhotoReviewValue } from "@/lib/templateGenerator/photos";
 import { DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
 
 export function applyFillResults(
@@ -10,7 +10,8 @@ export function applyFillResults(
   selection: ColumnSelection[],
   results: FillRowResult[],
   photoReviewHeader: string = DEFAULT_PHOTO_REVIEW_COLUMN,
-  overwriteFilled = false
+  overwriteFilled = false,
+  imageCol: number | null = null
 ): number {
   const colByHeader = new Map(selection.map((s) => [s.header, s.col]));
   let photoCol: number | null = null;
@@ -34,6 +35,9 @@ export function applyFillResults(
         photoCol = ensurePhotoReviewColumn(ws, scan.headerRow, photoReviewHeader);
       }
       ws.getCell(res.row, photoCol).value = formatPhotoReviewValue(res.extraPhotos);
+    }
+    if (res.extraPhotos.length && res.imageUrls?.length && imageCol) {
+      ws.getCell(res.row, imageCol).value = formatImageCellValue(res.imageUrls);
     }
   }
   return filled;
