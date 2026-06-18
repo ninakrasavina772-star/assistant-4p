@@ -6,6 +6,22 @@ import { fetchAiCutout } from "@/lib/podruzhkaAiCutout";
 
 /** Мин. длинная сторона исходника перед cut-out (Ozon часто отдаёт 600×800). */
 const PRODUCT_SOURCE_MIN_LONG_EDGE = 1400;
+const OZON_COSMETICS_GRID = { w: 600, h: 800 } as const;
+const OZON_COSMETICS_GRID_BG = { r: 255, g: 255, b: 255, alpha: 1 } as const;
+
+/** Ozon packshot grid: contain (не crop), иначе fill срезает колпачок на full-size foto. */
+async function fitCosmeticsOzonGrid(input: Buffer): Promise<Buffer> {
+  return sharp(input)
+    .resize(OZON_COSMETICS_GRID.w, OZON_COSMETICS_GRID.h, {
+      fit: "contain",
+      background: OZON_COSMETICS_GRID_BG,
+      kernel: sharp.kernel.lanczos3
+    })
+    .png()
+    .toBuffer();
+}
+
+
 const PRODUCT_UPSCALE_SHARPEN = { sigma: 0.38, m1: 0.42, m2: 0.16 } as const;
 
 /**
@@ -2138,10 +2154,7 @@ async function preprocessEssieWhiteCapPackshot(input: Buffer): Promise<Buffer> {
   const sw = srcMeta.width ?? 0;
   const sh = srcMeta.height ?? 0;
 
-  const srcFitBuf = await sharp(input)
-    .resize(600, 800, { fit: "fill", kernel: sharp.kernel.lanczos3 })
-    .png()
-    .toBuffer();
+  const srcFitBuf = await fitCosmeticsOzonGrid(input);
 
   let buf = await stripProductPackshotBackground(srcFitBuf);
   buf = await trimTransparentSafe(buf);
@@ -2494,10 +2507,7 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
   const sw = srcMeta.width ?? 0;
   const sh = srcMeta.height ?? 0;
 
-  const srcFitBuf = await sharp(input)
-    .resize(600, 800, { fit: "fill", kernel: sharp.kernel.lanczos3 })
-    .png()
-    .toBuffer();
+  const srcFitBuf = await fitCosmeticsOzonGrid(input);
 
   let buf = await stripCosmeticsGridBackground(srcFitBuf);
   buf = await trimTransparentSafe(buf);
