@@ -2158,23 +2158,40 @@ async function isWhiteOnWhitePackshot(input: Buffer): Promise<boolean> {
   const topRows = Math.max(8, Math.round(h * 0.14));
   let whiteTop = 0;
   let colored = 0;
-  let topEdgeOpaque = 0;
+  let minX = w;
+  let maxX = -1;
+  let minY = h;
+  let maxY = -1;
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const pi = (y * w + x) * 4;
       const nearWhite = readNearWhiteRgb(data, pi, 240, 34);
       if (y < topRows && nearWhite) whiteTop++;
-      if (!nearWhite && isSubstantiveSourcePixel(data, pi)) colored++;
-      if (y === 0 && !nearWhite) topEdgeOpaque++;
+      if (!nearWhite && isSubstantiveSourcePixel(data, pi)) {
+        colored++;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
     }
   }
 
   const topWhiteRatio = whiteTop / (topRows * w);
   const coloredRatio = colored / (w * h);
-  const touchesTopWithProduct = topEdgeOpaque > w * 0.04;
-  return topWhiteRatio > 0.88 && coloredRatio > 0.06 && coloredRatio < 0.55;
+  if (maxX < minX || maxY < minY) return false;
+
+  const productAspect = (maxX - minX + 1) / (maxY - minY + 1);
+  const touchesTop = minY <= Math.max(2, Math.round(h * 0.02));
+  const narrowOnWhite =
+    productAspect < 0.52 && touchesTop && topWhiteRatio > 0.65 && coloredRatio > 0.03;
+  const classicWhiteBg =
+    topWhiteRatio > 0.75 && coloredRatio > 0.04 && coloredRatio < 0.6;
+
+  return narrowOnWhite || classicWhiteBg;
 }
+
 
 async function scrubAiCosmeticsWhiteFringe(
   cutout: Buffer,
