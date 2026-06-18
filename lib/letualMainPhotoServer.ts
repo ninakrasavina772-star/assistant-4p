@@ -5,7 +5,7 @@ import {
 } from "@/lib/letualPhotoAi";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import { fetchLetualVariations } from "@/lib/letualMetabase";
-import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
+import { searchLetualWebImages, validateImageUrl, isSerpApiConfigured } from "@/lib/letualWebSearch";
 import { uploadLetualMainPhoto } from "@/lib/ozonImageStorage";
 import type { LetualResultRow } from "@/lib/letualMainPhotoExcel";
 
@@ -52,6 +52,21 @@ function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | un
   const suitable = ranked.filter((r) => r.suitable);
   if (!suitable.length) return undefined;
   return [...suitable].sort((a, b) => b.score - a.score)[0];
+}
+
+function lastResortDbUrls(urls: string[]): string[] {
+  const own = urls.filter((u) => /cdnru\.4stand|deloox/i.test(u));
+  const rest = urls.filter((u) => !own.includes(u));
+  return [...new Set([...own, ...rest])];
+}
+
+function webFallbackComment(dbNote: string): string {
+  if (!isSerpApiConfigured()) {
+    return dbNote
+      ? `${dbNote}; SerpAPI не настроен — только вырезание из БД`
+      : "SerpAPI не настроен — фото из БД с вырезанием";
+  }
+  return dbNote ? `${dbNote}; в интернете не найдено` : "В интернете не найдено — фото из БД с вырезанием";
 }
 
 function dbFallbackGoodEnoughForCutout(best: LetualPhotoScore): boolean {
@@ -171,27 +186,22 @@ export async function processLetualByVariationId(
         candidateUrls.push(dbFallback.url);
         comment = buildDbComment(dbFallback);
       } else {
-        try {
-          const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
-          const webPick = await pickFromWebImages(web, key);
-          if (webPick.sourceUrl) {
-            sourceUrl = webPick.sourceUrl;
-            comment = webPick.comment;
-          } else if (webPick.candidates.length) {
-            candidateUrls.push(...webPick.candidates);
-            comment = webPick.comment;
-          } else if (dbFallback?.url) {
-            candidateUrls.push(dbFallback.url);
-            comment = `${buildDbComment(dbFallback)}; в интернете не найдено`;
+        const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
+        const webPick = await pickFromWebImages(web, key);
+        if (webPick.sourceUrl) {
+          sourceUrl = webPick.sourceUrl;
+          comment = webPick.comment;
+        } else if (webPick.candidates.length) {
+          candidateUrls.push(...webPick.candidates);
+          comment = webPick.comment;
+        } else if (dbFallback?.url) {
+          candidateUrls.push(dbFallback.url);
+          comment = webFallbackComment(buildDbComment(dbFallback));
+        } else {
+          for (const u of lastResortDbUrls(row.imageUrls).slice(0, 4)) {
+            candidateUrls.push(u);
           }
-        } catch (webErr) {
-          if (dbFallback?.url) {
-            candidateUrls.push(dbFallback.url);
-            const webMsg = webErr instanceof Error ? webErr.message : String(webErr);
-            comment = `${buildDbComment(dbFallback)}; ${webMsg}`;
-          } else {
-            throw webErr;
-          }
+          comment = webFallbackComment("");
         }
       }
     }

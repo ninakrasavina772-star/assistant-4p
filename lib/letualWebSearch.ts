@@ -57,7 +57,11 @@ function filterAllowedSources(images: LetualWebImage[]): LetualWebImage[] {
   });
 }
 
-/** Поиск фото в интернете по EAN, затем по названию. */
+export function isSerpApiConfigured(): boolean {
+  return Boolean(process.env.SERPAPI_KEY?.trim());
+}
+
+/** Поиск фото в интернете по EAN, затем по названию. Без SERPAPI_KEY — пустой список. */
 export async function searchLetualWebImages(
   ean: string | null,
   productName: string,
@@ -90,14 +94,6 @@ export async function searchLetualWebImages(
       collected.push(img);
       if (collected.length >= 18) return collected;
     }
-  }
-
-  if (collected.length) return collected;
-
-  if (!process.env.SERPAPI_KEY?.trim()) {
-    throw new Error(
-      "Поиск в интернете недоступен: добавьте SERPAPI_KEY на сервере (Vercel env)"
-    );
   }
 
   return collected;
