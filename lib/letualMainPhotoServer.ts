@@ -5,6 +5,7 @@ import {
 } from "@/lib/letualPhotoAi";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import { fetchLetualVariations } from "@/lib/letualMetabase";
+import { pickFromSiblingCatalogPhotos } from "@/lib/letualSiblingPhotos";
 import { searchLetualWebImages, validateImageUrl, isSerpApiConfigured } from "@/lib/letualWebSearch";
 import { uploadLetualMainPhoto } from "@/lib/ozonImageStorage";
 import type { LetualResultRow } from "@/lib/letualMainPhotoExcel";
@@ -67,11 +68,15 @@ function lastResortDbUrls(urls: string[], mainImageUrl?: string | null): string[
   return [...new Set([...own, ...rest])];
 }
 
+function catalogFallbackComment(dbNote: string): string {
+  return dbNote
+    ? `${dbNote}; в каталоге лучше не найдено`
+    : "В каталоге не найдено лучшее фото — используем своё с вырезанием";
+}
+
 function webFallbackComment(dbNote: string): string {
   if (!isSerpApiConfigured()) {
-    return dbNote
-      ? `${dbNote}; SerpAPI не настроен — только вырезание из БД`
-      : "SerpAPI не настроен — фото из БД с вырезанием";
+    return catalogFallbackComment(dbNote);
   }
   return dbNote ? `${dbNote}; в интернете не найдено` : "В интернете не найдено — фото из БД с вырезанием";
 }
@@ -211,28 +216,53 @@ export async function processLetualByVariationId(
       }
     }
 
-    // Нет идеального фото в БД → интернет (если кадр плохой), иначе вырезание с цветного фона
+    // Нет идеального фото → другие вариации в каталоге, затем SerpAPI (если есть)
     if (!sourceUrl) {
       if (dbFallback?.url && dbFallbackGoodEnoughForCutout(dbFallback)) {
         candidateUrls.push(dbFallback.url);
         comment = buildDbComment(dbFallback);
       } else {
-        const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
-        const webPick = await pickFromWebImages(web, key);
-        if (webPick.sourceUrl) {
-          sourceUrl = webPick.sourceUrl;
-          comment = webPick.comment;
-        } else if (webPick.candidates.length) {
-          candidateUrls.push(...webPick.candidates);
-          comment = webPick.comment;
+        const exclude = [...row.imageUrls, row.mainImageUrl ?? ""].filter(Boolean);
+        const siblingPick = await pickFromSiblingCatalogPhotos(
+          variationId,
+          key,
+          { brandName: row.brandName, productName: row.productName },
+          exclude,
+          metabaseApiKey
+        );
+
+        if (siblingPick.sourceUrl) {
+          sourceUrl = siblingPick.sourceUrl;
+          comment = siblingPick.comment;
+        } else if (siblingPick.candidates.length) {
+          candidateUrls.push(...siblingPick.candidates);
+          comment = siblingPick.comment;
+        } else if (isSerpApiConfigured()) {
+          const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
+          const webPick = await pickFromWebImages(web, key);
+          if (webPick.sourceUrl) {
+            sourceUrl = webPick.sourceUrl;
+            comment = webPick.comment;
+          } else if (webPick.candidates.length) {
+            candidateUrls.push(...webPick.candidates);
+            comment = webPick.comment;
+          } else if (dbFallback?.url) {
+            candidateUrls.push(dbFallback.url);
+            comment = webFallbackComment(buildDbComment(dbFallback));
+          } else {
+            for (const u of lastResortDbUrls(row.imageUrls, row.mainImageUrl).slice(0, 4)) {
+              candidateUrls.push(u);
+            }
+            comment = webFallbackComment("");
+          }
         } else if (dbFallback?.url) {
           candidateUrls.push(dbFallback.url);
-          comment = webFallbackComment(buildDbComment(dbFallback));
+          comment = catalogFallbackComment(buildDbComment(dbFallback));
         } else {
           for (const u of lastResortDbUrls(row.imageUrls, row.mainImageUrl).slice(0, 4)) {
             candidateUrls.push(u);
           }
-          comment = webFallbackComment("");
+          comment = catalogFallbackComment("");
         }
       }
     }
@@ -264,7 +294,7 @@ export async function processLetualByVariationId(
         resultUrl: "",
         comment: "",
         ok: false,
-        error: `${boxNote}${deadLinks}Нет подходящего фото в интернете`
+        error: `${boxNote}${deadLinks}Нет подходящего фото в каталоге`
       };
     }
 

@@ -65,6 +65,7 @@ export function LetualMainPhotoTool() {
   const [status, setStatus] = useState<{
     storage: boolean;
     metabase: boolean;
+    catalogSearch: boolean;
     serpapi: boolean;
   } | null>(null);
 
@@ -95,17 +96,19 @@ export function LetualMainPhotoTool() {
         (d: {
           configured?: boolean;
           metabase?: boolean;
+          catalogSearch?: boolean;
           serpapi?: boolean;
         }) => {
           setStatus({
             storage: Boolean(d.configured),
             metabase: Boolean(d.metabase),
+            catalogSearch: Boolean(d.catalogSearch ?? d.metabase),
             serpapi: Boolean(d.serpapi)
           });
         }
       )
       .catch(() =>
-        setStatus({ storage: false, metabase: false, serpapi: false })
+        setStatus({ storage: false, metabase: false, catalogSearch: false, serpapi: false })
       );
   }, []);
 
@@ -263,11 +266,19 @@ export function LetualMainPhotoTool() {
             </strong>
           </p>
           <p>
+            Поиск в каталоге:{" "}
+            <strong className={status.catalogSearch ? "text-emerald-700" : "text-red-700"}>
+              {status.catalogSearch
+                ? "OK — другие вариации (EAN / линейка)"
+                : "нужен Metabase на сервере"}
+            </strong>
+          </p>
+          <p>
             Поиск в интернете (опционально):{" "}
             <strong className={status.serpapi ? "text-emerald-700" : "text-slate-600"}>
               {status.serpapi
                 ? "SerpAPI OK — Ozon/ЗЯ/Лэту"
-                : "не подключён — используем фото из БД + вырезание"}
+                : "не подключён — достаточно каталога + вырезание"}
             </strong>
           </p>
         </div>
