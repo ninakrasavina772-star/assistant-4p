@@ -1239,7 +1239,6 @@ export const restoreAttachedWhiteProductRegions = rebuildProductAlphaByColumn;
 /** Ozon grid 600×800: не снимаем белый сверху (колпачок), потом чистим боковые поля. */
 async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
   let buf = await stripEdgeNearWhiteBackground(input, 236, { skipTopEdge: true });
-  buf = await stripProductEdgeBackground(buf);
   buf = await rebuildProductAlphaByColumn(buf, input);
 
   const { data: srcData, info } = await sharp(input)
@@ -1256,8 +1255,6 @@ async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
   const pixels = Buffer.from(cutData);
   if (w && h && src.length === pixels.length) {
     restoreStrippedWhiteCaps(pixels, src, w, h);
-    purgeUnconnectedExteriorWhite(pixels, src, w, h);
-    trimHorizontalWhiteMargins(pixels, src, w, h);
     buf = await sharp(pixels, {
       raw: { width: w, height: h, channels: 4 }
     })
@@ -1265,7 +1262,6 @@ async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
       .toBuffer();
   }
 
-  buf = await stripEdgeConnectedOpaqueWhite(buf);
   return buf;
 }
 
@@ -2156,13 +2152,13 @@ async function preprocessEssieWhiteCapPackshot(input: Buffer): Promise<Buffer> {
 
   const srcFitBuf = await fitCosmeticsOzonGrid(input);
 
-  let buf = await stripProductPackshotBackground(srcFitBuf);
+  let buf = await stripCosmeticsGridBackground(srcFitBuf);
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.022, 12);
+  buf = await cropToVisibleProduct(buf, 8, 0.024, 12);
 
   if (sw && sh && (sw !== 600 || sh !== 800)) {
     buf = await sharp(buf)
-      .resize(sw, sh, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+      .resize(sw, sh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
       .png()
       .toBuffer();
   }
@@ -2520,7 +2516,6 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
       .toBuffer();
   }
 
-  buf = await stripCosmeticsFloorShadow(buf);
   buf = await trimTransparentSafe(buf);
   return finalizeCosmeticsCutout(buf);
 }
