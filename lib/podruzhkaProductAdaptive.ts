@@ -261,7 +261,7 @@ async function resolveCosmeticsUniformPlacement(
   const isNarrow = prepared.aspect < 0.55;
   const fotoMode = PODRUZHKA_COSMETICS_FOTO_MODE;
   const useCutoutPlacement = fotoMode === "edge" || fotoMode === "ai";
-  const cosmeticsTopMargin = useCutoutPlacement ? 12 : 0;
+  const cosmeticsTopMargin = useCutoutPlacement ? 20 : 0;
   const fitMaxH =
     useCutoutPlacement ? Math.max(1, zoneH - cosmeticsTopMargin - 8) : zoneH;
 

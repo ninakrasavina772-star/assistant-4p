@@ -830,6 +830,49 @@ function finalizeEdgeCosmeticsPixels(
   trimHorizontalWhiteMargins(pixels, src, w, h);
 }
 
+/** AI cut-out (rmbg) часто «съедает» белый колпачок — восстанавливаем из исходника Ozon. */
+async function restoreCosmeticsCapsFromSource(
+  cutout: Buffer,
+  source: Buffer
+): Promise<Buffer> {
+  const srcMeta = await sharp(source).metadata();
+  const cutMeta = await sharp(cutout).metadata();
+  let aligned = cutout;
+  if (srcMeta.width !== cutMeta.width || srcMeta.height !== cutMeta.height) {
+    aligned = await sharp(cutout)
+      .resize(srcMeta.width ?? 1, srcMeta.height ?? 1, { fit: "fill" })
+      .png()
+      .toBuffer();
+  }
+
+  const { data: cutData, info } = await sharp(aligned)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { data: srcData } = await sharp(source)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h || srcData.length !== cutData.length) return aligned;
+
+  const pixels = Buffer.from(cutData);
+  const src = Buffer.from(srcData);
+  finalizeEdgeCosmeticsPixels(pixels, src, w, h);
+
+  const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
+  reclaimOpaqueWhiteCapAboveBody(pixels, src, whiteCapKeep, w, h);
+  purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 /** Убрать белый прямоугольник Ozon в центре — всё, что не связано с цветным телом через белые детали товара. */
 function purgeUnconnectedExteriorWhite(
   pixels: Buffer,
@@ -2140,16 +2183,18 @@ export async function preprocessCosmeticsProductBufferAi(
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
-  let buf = await enhanceSourceForProcessing(input);
+  const source = await enhanceSourceForProcessing(input);
+  let cutout: Buffer;
   try {
-    buf = await fetchAiCutout(sourceUrl);
+    cutout = await fetchAiCutout(sourceUrl);
   } catch (e) {
     console.warn("ai cutout failed, fallback to edge:", e);
     return preprocessCosmeticsProductBufferEdge(input);
   }
 
+  let buf = await restoreCosmeticsCapsFromSource(cutout, source);
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.02, 6);
+  buf = await cropToVisibleProduct(buf, 8, 0.024, 14);
   return finalizeCosmeticsCutout(buf);
 }
 
