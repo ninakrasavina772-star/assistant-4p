@@ -297,9 +297,11 @@ export function LetualMainPhotoTool() {
             </strong>
           </p>
           <p>
-            Поиск в интернете:{" "}
-            <strong className={status.serpapi ? "text-emerald-700" : "text-amber-700"}>
-              {status.serpapi ? "SerpAPI OK" : "нужен SERPAPI_KEY на сервере"}
+            Поиск в интернете (опционально):{" "}
+            <strong className={status.serpapi ? "text-emerald-700" : "text-slate-600"}>
+              {status.serpapi
+                ? "SerpAPI OK — Ozon/ЗЯ/Лэту"
+                : "не подключён — используем фото из БД + вырезание"}
             </strong>
           </p>
         </div>
