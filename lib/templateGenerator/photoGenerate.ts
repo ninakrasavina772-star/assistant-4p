@@ -14,9 +14,9 @@ import {
   type ProductPhotoContext
 } from "@/lib/templateGenerator/photoThemes";
 
-/** AI lifestyle-фоны — дороже и дольше, но «в тему» */
 const MAX_THEMED_VARIANTS = 3;
-const MAX_GRADIENT_FALLBACK = 2;
+/** Только если AI полностью недоступен — 1 богатый процедурный фон, без «blush» */
+const RICH_FALLBACK_STYLES: BackgroundStyle[] = ["marble", "dark-luxury", "warm-beige"];
 
 async function uploadGeneratedPhoto(buf: Buffer, sku: string, tag: string): Promise<string> {
   const safeSku = sku.replace(/[^\w.-]+/g, "_").slice(0, 48) || "sku";
@@ -33,16 +33,22 @@ async function uploadGeneratedPhoto(buf: Buffer, sku: string, tag: string): Prom
   return uploadOzonImage(buf, fileName);
 }
 
+async function generateThemedWithRetry(apiKey: string, prompt: string): Promise<Buffer> {
+  try {
+    return await generateThemedBackground(apiKey, prompt);
+  } catch {
+    return generateThemedBackground(apiKey, `${prompt}, softer lighting, more depth`);
+  }
+}
+
 export type GenerateRowPhotosOpts = {
   imageText: string;
   sku: string;
   minCount: number;
   targetCount: number;
   generateBackgrounds: boolean;
-  /** OpenAI key — для тематических lifestyle-фонов */
   openaiApiKey?: string;
   productContext?: ProductPhotoContext;
-  /** themed = AI сцены в тему; gradient = только градиенты */
   photoStyle?: "themed" | "gradient";
 };
 
@@ -52,9 +58,6 @@ export type GenerateRowPhotosResult = {
   note?: string;
 };
 
-/**
- * Если фото мало — композитим товар с тематическими lifestyle-фонами (AI) или градиентами.
- */
 export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<GenerateRowPhotosResult> {
   const existing = parseImageUrls(opts.imageText);
   const target = Math.max(opts.minCount, opts.targetCount);
@@ -80,12 +83,9 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
     };
   }
 
-  const need = Math.min(target - existing.length, MAX_THEMED_VARIANTS + MAX_GRADIENT_FALLBACK);
+  const need = Math.min(target - existing.length, MAX_THEMED_VARIANTS);
   const useThemed = opts.photoStyle !== "gradient" && Boolean(opts.openaiApiKey?.trim());
-  const ctx = opts.productContext ?? {
-    brand: "",
-    productName: opts.sku
-  };
+  const ctx = opts.productContext ?? { brand: "", productName: opts.sku };
 
   let source: Buffer;
   try {
@@ -106,49 +106,64 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
   }
 
   const generated: string[] = [];
-  const themedCount = useThemed ? Math.min(need, MAX_THEMED_VARIANTS) : 0;
+  const aiErrors: string[] = [];
+  const themedCount = useThemed ? need : 0;
   const scenes = useThemed ? pickThemedScenes(ctx, themedCount) : [];
 
   for (const scene of scenes) {
     try {
-      const bg = await generateThemedBackground(opts.openaiApiKey!, scene.prompt);
+      const bg = await generateThemedWithRetry(opts.openaiApiKey!, scene.prompt);
       const composed = await compositeOnBackground(cutout, bg);
       const url = await uploadGeneratedPhoto(composed, opts.sku, scene.id);
       generated.push(url);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : "ошибка AI";
+      aiErrors.push(msg);
       console.warn("themed photo failed:", scene.id, e);
     }
   }
 
-  const gradientNeed = Math.min(need - generated.length, MAX_GRADIENT_FALLBACK);
-  const gradientStyles: BackgroundStyle[] = ["warm-beige", "blush", "marble", "cool-gray", "dark-luxury"];
-  for (let i = 0; i < gradientNeed; i++) {
-    const style = gradientStyles[i % gradientStyles.length]!;
-    try {
-      const bg = await renderBackground(style);
-      const composed = await compositeOnBackground(cutout, bg);
-      const url = await uploadGeneratedPhoto(composed, opts.sku, style);
-      generated.push(url);
-    } catch (e) {
-      console.warn("gradient photo failed:", style, e);
+  if (!generated.length) {
+    const fallbackStyles =
+      opts.photoStyle === "gradient"
+        ? (["marble", "warm-beige", "dark-luxury"] as BackgroundStyle[])
+        : RICH_FALLBACK_STYLES;
+
+    for (const style of fallbackStyles.slice(0, useThemed ? 1 : need)) {
+      try {
+        const bg = await renderBackground(style);
+        const composed = await compositeOnBackground(cutout, bg);
+        const url = await uploadGeneratedPhoto(composed, opts.sku, `fallback-${style}`);
+        generated.push(url);
+        if (useThemed) break;
+      } catch (e) {
+        console.warn("fallback photo failed:", style, e);
+      }
     }
   }
 
   if (!generated.length) {
+    const hint = aiErrors[0] ? ` (${aiErrors[0].slice(0, 80)})` : "";
     return {
       imageUrls: existing,
       generated: [],
       note: useThemed
-        ? "не удалось сгенерировать тематические фото (проверьте OpenAI Images)"
+        ? `не удалось сгенерировать фото${hint}`
         : "не удалось сгенерировать варианты фона"
     };
   }
 
-  const themeLabels = scenes.map((s) => s.label).join(", ");
+  const themeLabels = scenes.slice(0, generated.length).map((s) => s.label).join(", ");
+  const usedFallback = generated.some((u) => u.includes("fallback-"));
   return {
     imageUrls: mergeImageUrls(existing, generated),
     generated,
-    note: useThemed && themeLabels ? `темы: ${themeLabels}` : undefined
+    note:
+      themeLabels && !usedFallback
+        ? `темы: ${themeLabels}`
+        : usedFallback && useThemed
+          ? "AI-фон недоступен — использован богатый запасной фон"
+          : undefined
   };
 }
 

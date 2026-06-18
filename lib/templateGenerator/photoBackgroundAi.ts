@@ -13,13 +13,13 @@ export async function generateThemedBackground(
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       model,
       prompt,
       n: 1,
       size: "1024x1792",
-      quality: "standard",
+      quality: "hd",
       response_format: "b64_json"
     })
   });

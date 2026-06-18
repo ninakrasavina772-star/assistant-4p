@@ -1584,9 +1584,8 @@ export function TemplateGeneratorTool() {
                 </label>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Packshot снимается с белого фона, ставится на сцену по бренду, нотам и семейству
-                (пионы для цветочных, дерево/золото для восточных, цитрус для свежих и т.д.).
-                До 3 AI-кадров + 2 градиента на строку. Нужен OpenAI API key и хранилище S3.
+                Packshot снимается с белого фона, ставится на сцену по бренду и нотам (DALL·E HD).
+                До 3 кадров на строку. Shiseido → японский zen, Santal → дерево/золото и т.д.
               </p>
               <div className="mt-2 flex flex-wrap gap-4">
                 <label>

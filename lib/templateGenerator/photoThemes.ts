@@ -1,3 +1,5 @@
+import { LUXURY_SCENE_TAIL } from "@/lib/templateGenerator/photoPrompts";
+
 export type ProductPhotoContext = {
   brand: string;
   productName: string;
@@ -17,73 +19,75 @@ const SCENE_FLORAL: ThemedScene = {
   id: "floral-romantic",
   label: "цветочный романтик",
   prompt:
-    "Luxury perfume product photography backdrop, empty clear center on travertine stone for bottle placement, " +
-    "soft pink peonies and blush roses softly blurred in background, warm golden sunlight from upper left, " +
-    "feminine elegant mood, shallow depth of field, photorealistic, no perfume bottle, no product, no text, no logo"
+    "Chloé-style luxury perfume set: pale travertine stone table, soft pink peonies and blush roses " +
+    "in background bokeh, warm golden hour sunlight from upper left, delicate feminine mood. " +
+    LUXURY_SCENE_TAIL
 };
 
 const SCENE_DARK_WOODY: ThemedScene = {
   id: "dark-woody-gold",
   label: "тёмное дерево и золото",
   prompt:
-    "High-end perfume advertising background, empty center foreground on dark reflective surface, " +
-    "black studio backdrop, weathered sandalwood and oud wood textures, molten gold accents, " +
-    "metallic gold rose softly blurred on the side, dramatic chiaroscuro lighting, " +
-    "photorealistic, no bottle, no product, no text, no logo"
+    "Guerlain-style luxury perfume scene: black studio, weathered sandalwood and oud wood, " +
+    "molten gold liquid accents, metallic gold rose blurred on side, dramatic chiaroscuro. " +
+    LUXURY_SCENE_TAIL
 };
 
 const SCENE_CITRUS: ThemedScene = {
   id: "citrus-fresh",
   label: "свежий цитрус",
   prompt:
-    "Bright perfume lifestyle background, white marble surface, empty center for product, " +
-    "fresh lemon and bergamot slices and green leaves artistically blurred, crisp daylight, " +
-    "clean airy spa mood, photorealistic, no bottle, no text, no logo"
+    "Fresh citrus perfume editorial: white Carrara marble slab, lemon and bergamot slices, " +
+    "green leaves, crisp morning daylight, spa luxury mood. " + LUXURY_SCENE_TAIL
 };
 
 const SCENE_ORIENTAL: ThemedScene = {
   id: "oriental-amber",
   label: "восточный амбра",
   prompt:
-    "Oriental luxury perfume scene background, dark amber and burgundy silk fabric, " +
-    "golden incense smoke wisps, warm candlelight bokeh, empty center on polished stone, " +
-    "mysterious premium mood, photorealistic, no bottle, no text, no logo"
+    "Oriental luxury perfume: dark amber silk, golden incense smoke, candlelight bokeh, " +
+    "polished black stone surface, mysterious premium mood. " + LUXURY_SCENE_TAIL
 };
 
 const SCENE_AQUATIC: ThemedScene = {
   id: "aquatic-clean",
   label: "свежая вода",
   prompt:
-    "Fresh aquatic perfume background, pale blue gradient, water droplets and soft waves blurred, " +
-    "frosted glass reflections, cool daylight, empty center on wet white surface, " +
-    "photorealistic, no bottle, no text, no logo"
+    "Aquatic fragrance campaign: wet white stone, water droplets catching light, " +
+    "soft blue reflections, clean fresh daylight. " + LUXURY_SCENE_TAIL
 };
 
 const SCENE_GOURMAND: ThemedScene = {
   id: "gourmand-vanilla",
   label: "гурман ваниль",
   prompt:
-    "Gourmand perfume lifestyle backdrop, creamy beige surface, vanilla pods and cocoa blurred, " +
-    "warm caramel tones, cozy luxury mood, soft side light, empty center for bottle, " +
-    "photorealistic, no bottle, no text, no logo"
+    "Gourmand perfume lifestyle: creamy travertine, vanilla pods and tonka, warm caramel light, " +
+    "cozy luxury boutique mood. " + LUXURY_SCENE_TAIL
 };
 
 const SCENE_CLASSIC: ThemedScene = {
   id: "classic-luxury",
   label: "классическая роскошь",
   prompt:
-    "Timeless luxury perfume studio background, soft champagne gradient, subtle silk curtain bokeh, " +
-    "neutral beige and gold tones, elegant minimal composition, empty center, " +
-    "photorealistic, no bottle, no text, no logo"
+    "Timeless luxury perfume counter: champagne silk curtain bokeh, beige and gold tones, " +
+    "polished stone surface, elegant minimal Harrods display. " + LUXURY_SCENE_TAIL
 };
 
 const SCENE_MUSK: ThemedScene = {
   id: "powder-musk",
   label: "пудровый мускус",
   prompt:
-    "Soft powdery musk perfume background, pale lilac and nude tones, fluffy textile texture, " +
-    "gentle diffused window light, dreamy clean beauty mood, empty center on matte surface, " +
-    "photorealistic, no bottle, no text, no logo"
+    "Powdery musk fragrance: pale lilac and nude linen texture, soft window light, " +
+    "dreamy clean beauty editorial. " + LUXURY_SCENE_TAIL
+};
+
+const SCENE_JAPANESE: ThemedScene = {
+  id: "japanese-zen",
+  label: "японский минимализм",
+  prompt:
+    "Shiseido-style Japanese luxury: honed light stone surface, washi paper texture, " +
+    "single cherry blossom branch blurred, zen minimalism, soft diffused daylight. " +
+    LUXURY_SCENE_TAIL
 };
 
 const ALL_SCENES = [
@@ -94,7 +98,8 @@ const ALL_SCENES = [
   SCENE_AQUATIC,
   SCENE_GOURMAND,
   SCENE_CLASSIC,
-  SCENE_MUSK
+  SCENE_MUSK,
+  SCENE_JAPANESE
 ];
 
 const VARIATION_SUFFIXES = [
@@ -140,6 +145,7 @@ function scoreScenes(ctx: ProductPhotoContext): ThemedScene[] {
     add(SCENE_DARK_WOODY, 5);
   }
   if (/musk|мускус|powder|пудр|iris|фиалк/i.test(t)) add(SCENE_MUSK, 8);
+  if (/shiseido|шисейдо|japanese|япон|zen|sensual/i.test(t)) add(SCENE_JAPANESE, 9);
 
   add(SCENE_CLASSIC, 3);
 

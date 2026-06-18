@@ -86,29 +86,83 @@ export async function cutPackshotBackground(input: Buffer): Promise<Buffer> {
 }
 
 function backgroundSvg(style: BackgroundStyle, w: number, h: number): string {
-  const presets: Record<BackgroundStyle, string> = {
-    "warm-beige": `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#f7f0e8"/><stop offset="100%" stop-color="#e8d8c8"/></linearGradient>`,
-    "cool-gray": `<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#f4f6f8"/><stop offset="100%" stop-color="#d5dbe3"/></linearGradient>`,
-    blush: `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#fdf2f4"/><stop offset="100%" stop-color="#f0d4dc"/></linearGradient>`,
-    marble: `<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#fafafa"/><stop offset="45%" stop-color="#ececec"/><stop offset="100%" stop-color="#f5f5f5"/></linearGradient>`,
-    "dark-luxury": `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#3a3a3e"/><stop offset="100%" stop-color="#1a1a1e"/></linearGradient>`
+  const noise = `<filter id="n" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="3" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+    <feComponentTransfer><feFuncA type="linear" slope="0.07"/></feComponentTransfer>
+  </filter>`;
+
+  const presets: Record<BackgroundStyle, { grad: string; decor: string }> = {
+    "warm-beige": {
+      grad: `<linearGradient id="g" x1="0" y1="0" x2="0.2" y2="1">
+        <stop offset="0%" stop-color="#faf6f0"/><stop offset="55%" stop-color="#e9ddd0"/><stop offset="100%" stop-color="#d8c8b6"/></linearGradient>`,
+      decor: `<ellipse cx="${w * 0.2}" cy="${h * 0.18}" rx="${w * 0.35}" ry="${h * 0.12}" fill="#fff" opacity="0.35"/>
+        <rect x="0" y="${h * 0.72}" width="${w}" height="${h * 0.28}" fill="#000" opacity="0.04"/>`
+    },
+    "cool-gray": {
+      grad: `<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#f8fafc"/><stop offset="50%" stop-color="#e2e8f0"/><stop offset="100%" stop-color="#cbd5e1"/></linearGradient>`,
+      decor: `<circle cx="${w * 0.82}" cy="${h * 0.15}" r="${w * 0.22}" fill="#fff" opacity="0.25"/>
+        <rect x="0" y="${h * 0.74}" width="${w}" height="${h * 0.26}" fill="#1e293b" opacity="0.05"/>`
+    },
+    blush: {
+      grad: `<linearGradient id="g" x1="0" y1="0" x2="0.3" y2="1">
+        <stop offset="0%" stop-color="#fff8fa"/><stop offset="45%" stop-color="#f5e0e8"/><stop offset="100%" stop-color="#e8c8d4"/></linearGradient>`,
+      decor: `<ellipse cx="${w * 0.75}" cy="${h * 0.2}" rx="${w * 0.3}" ry="${h * 0.14}" fill="#fff" opacity="0.4"/>
+        <ellipse cx="${w * 0.15}" cy="${h * 0.65}" rx="${w * 0.2}" ry="${h * 0.08}" fill="#fbcfe8" opacity="0.2"/>
+        <rect x="0" y="${h * 0.73}" width="${w}" height="${h * 0.27}" fill="#831843" opacity="0.04"/>`
+    },
+    marble: {
+      grad: `<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#fafafa"/><stop offset="40%" stop-color="#ececec"/><stop offset="100%" stop-color="#e2e2e2"/></linearGradient>`,
+      decor: `<path d="M0 ${h * 0.7} Q ${w * 0.3} ${h * 0.68} ${w * 0.55} ${h * 0.72} T ${w} ${h * 0.7} L ${w} ${h} L 0 ${h} Z" fill="#000" opacity="0.06"/>
+        <ellipse cx="${w * 0.5}" cy="${h * 0.25}" rx="${w * 0.4}" ry="${h * 0.15}" fill="#fff" opacity="0.5"/>`
+    },
+    "dark-luxury": {
+      grad: `<linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#2d2d32"/><stop offset="60%" stop-color="#141418"/><stop offset="100%" stop-color="#0a0a0c"/></linearGradient>`,
+      decor: `<ellipse cx="${w * 0.7}" cy="${h * 0.22}" rx="${w * 0.35}" ry="${h * 0.18}" fill="#d4af37" opacity="0.08"/>
+        <rect x="0" y="${h * 0.75}" width="${w}" height="${h * 0.25}" fill="#000" opacity="0.35"/>`
+    }
   };
 
-  const accent =
-    style === "dark-luxury"
-      ? `<ellipse cx="${w * 0.72}" cy="${h * 0.28}" rx="${w * 0.35}" ry="${h * 0.22}" fill="#ffffff" opacity="0.06"/>`
-      : `<ellipse cx="${w * 0.78}" cy="${h * 0.22}" rx="${w * 0.28}" ry="${h * 0.18}" fill="#ffffff" opacity="0.35"/>`;
-
+  const p = presets[style];
   return `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
-    <defs>${presets[style]}</defs>
+    <defs>${noise}${p.grad}</defs>
     <rect width="100%" height="100%" fill="url(#g)"/>
-    ${accent}
+    <rect width="100%" height="100%" filter="url(#n)"/>
+    ${p.decor}
   </svg>`;
+}
+
+/** Лёгкая цветокоррекция и виньетка — «дороже» на выходе */
+export async function applyLuxuryFinish(input: Buffer): Promise<Buffer> {
+  const vignette = `<svg width="${PRODUCT_CARD_W}" height="${PRODUCT_CARD_H}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="v" cx="50%" cy="42%" r="72%">
+        <stop offset="50%" stop-color="#000000" stop-opacity="0"/>
+        <stop offset="100%" stop-color="#000000" stop-opacity="0.2"/>
+      </radialGradient>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#v)"/>
+  </svg>`;
+
+  return sharp(input)
+    .modulate({ brightness: 1.03, saturation: 1.08 })
+    .sharpen({ sigma: 0.55, m1: 0.5, m2: 0.3 })
+    .composite([{ input: Buffer.from(vignette), blend: "multiply" }])
+    .jpeg({ quality: 93, mozjpeg: true })
+    .toBuffer();
+}
+
+async function buildShadowLayer(width: number, tight: boolean): Promise<Buffer> {
+  const h = tight ? 32 : 56;
+  const rx = tight ? width * 0.2 : width * 0.36;
+  const op = tight ? 0.42 : 0.16;
+  const svg = `<svg width="${width}" height="${h}" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="${width / 2}" cy="${h / 2}" rx="${rx}" ry="${h * 0.32}" fill="#000" opacity="${op}"/>
+  </svg>`;
+  return sharp(Buffer.from(svg)).blur(tight ? 0.3 : 1.2).png().toBuffer();
 }
 
 export async function renderBackground(style: BackgroundStyle): Promise<Buffer> {
@@ -124,8 +178,8 @@ export async function compositeOnBackground(
   const pw = meta.width ?? 1;
   const ph = meta.height ?? 1;
 
-  const maxH = Math.round(PRODUCT_CARD_H * 0.68);
-  const maxW = Math.round(PRODUCT_CARD_W * 0.58);
+  const maxH = Math.round(PRODUCT_CARD_H * 0.62);
+  const maxW = Math.round(PRODUCT_CARD_W * 0.52);
   const scale = Math.min(maxW / pw, maxH / ph);
   const nw = Math.max(1, Math.round(pw * scale));
   const nh = Math.max(1, Math.round(ph * scale));
@@ -135,28 +189,29 @@ export async function compositeOnBackground(
     .png()
     .toBuffer();
 
+  const surfaceY = Math.round(PRODUCT_CARD_H * 0.76);
   const left = Math.round((PRODUCT_CARD_W - nw) / 2);
-  const top = Math.round(PRODUCT_CARD_H * 0.42 - nh / 2);
+  const top = surfaceY - nh;
 
-  const shadowW = Math.round(nw * 0.72);
-  const shadowSvg = `<svg width="${shadowW}" height="36" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="${shadowW / 2}" cy="18" rx="${shadowW * 0.46}" ry="10" fill="#000000" opacity="0.28"/>
-  </svg>`;
-  const shadowBuf = await sharp(Buffer.from(shadowSvg)).png().toBuffer();
+  const tightShadow = await buildShadowLayer(nw, true);
+  const softShadow = await buildShadowLayer(Math.round(nw * 1.15), false);
 
   const bg = await sharp(background)
     .resize(PRODUCT_CARD_W, PRODUCT_CARD_H, { fit: "cover" })
-    .jpeg({ quality: 92 })
+    .jpeg({ quality: 94 })
     .toBuffer();
 
-  const shadowLeft = Math.round((PRODUCT_CARD_W - shadowW) / 2);
-  const shadowTop = top + nh - 12;
+  const softLeft = Math.round((PRODUCT_CARD_W - Math.round(nw * 1.15)) / 2);
+  const shadowTop = surfaceY - 8;
 
-  return sharp(bg)
+  const composed = await sharp(bg)
     .composite([
-      { input: shadowBuf, left: shadowLeft, top: shadowTop },
+      { input: softShadow, left: softLeft, top: shadowTop + 6 },
+      { input: tightShadow, left, top: shadowTop },
       { input: product, left, top }
     ])
-    .jpeg({ quality: 90, mozjpeg: true })
+    .jpeg({ quality: 92, mozjpeg: true })
     .toBuffer();
+
+  return applyLuxuryFinish(composed);
 }
