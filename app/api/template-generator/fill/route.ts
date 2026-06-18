@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveOpenAiKey } from "@/lib/openaiServerKey";
 import { fillTemplateRows, type FillBatchIn } from "@/lib/templateGenerator/aiFill";
 
 export const maxDuration = 300;
@@ -13,10 +14,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Некорректный JSON" }, { status: 400 });
   }
 
-  if (!body.openaiApiKey?.trim()) {
-    return NextResponse.json({ error: "Нужен openaiApiKey" }, { status: 400 });
+  try {
+    body.openaiApiKey = resolveOpenAiKey(body.openaiApiKey);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Нужен openaiApiKey";
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
-
   const rows = Array.isArray(body.rows) ? body.rows : [];
   if (rows.length === 0 || rows.length > MAX_ROWS) {
     return NextResponse.json(

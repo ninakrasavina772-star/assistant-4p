@@ -39,6 +39,7 @@ export type TemplateChatContext = {
   photoEnabled?: boolean;
   photoGenerateBackgrounds?: boolean;
   photoStyle?: "themed" | "gradient";
+  metabaseEnabled?: boolean;
   photoMin?: number;
   photoTarget?: number;
   columns?: TemplateColumnBrief[];

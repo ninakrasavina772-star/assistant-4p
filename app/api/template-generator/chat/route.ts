@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveOpenAiKey } from "@/lib/openaiServerKey";
 import { runTemplateAssistantChat, type ChatMessage, type TemplateChatContext } from "@/lib/templateGenerator/chat";
 
 export const maxDuration = 60;
@@ -16,11 +17,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Некорректный JSON" }, { status: 400 });
   }
 
-  const key = body.openaiApiKey?.trim();
-  if (!key) {
-    return NextResponse.json({ error: "Нужен OpenAI API key" }, { status: 400 });
+  let key: string;
+  try {
+    key = resolveOpenAiKey(body.openaiApiKey);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Нужен OpenAI API key";
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
-
   const messages = body.messages ?? [];
   if (!messages.length) {
     return NextResponse.json({ error: "Нужны messages" }, { status: 400 });

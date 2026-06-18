@@ -8,6 +8,7 @@ import {
   type BackgroundStyle
 } from "@/lib/templateGenerator/photoCompose";
 import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
+import { sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
 import {
   pickThemedScenes,
   productPhotoContextFromRow,
@@ -70,7 +71,7 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
     return { imageUrls: existing, generated: [] };
   }
 
-  const primary = existing[0];
+  const primary = sortImagesForComposite(parseImageUrls(opts.imageText))[0];
   if (!primary) {
     return { imageUrls: existing, generated: [], note: "нет исходного foto в шаблоне/фиде" };
   }

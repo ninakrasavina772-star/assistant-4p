@@ -169,6 +169,12 @@ export function TemplateGeneratorTool() {
   const [photoEnabled, setPhotoEnabled] = useState(true);
   const [photoGenerateBackgrounds, setPhotoGenerateBackgrounds] = useState(true);
   const [photoStyle, setPhotoStyle] = useState<"themed" | "gradient">("themed");
+  const [metabaseEnabled, setMetabaseEnabled] = useState(true);
+  const [serverStatus, setServerStatus] = useState<{
+    openai: boolean;
+    metabase: boolean;
+    storage: string | null;
+  } | null>(null);
   const [photoMin, setPhotoMin] = useState(7);
   const [photoTarget, setPhotoTarget] = useState(8);
 
@@ -192,6 +198,19 @@ export function TemplateGeneratorTool() {
   const chatContextRef = useRef<TemplateChatContext>({});
   const columnPrefsKeyRef = useRef("");
   const [columnPrefsRestored, setColumnPrefsRestored] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/template-generator/status")
+      .then((r) => r.json())
+      .then((d: { openai?: boolean; metabase?: boolean; storage?: string | null }) => {
+        setServerStatus({
+          openai: Boolean(d.openai),
+          metabase: Boolean(d.metabase),
+          storage: d.storage ?? null
+        });
+      })
+      .catch(() => setServerStatus(null));
+  }, []);
 
   useEffect(() => {
     if (sessionStorage.getItem(SK_OPENAI_REM) !== "0") {
@@ -275,6 +294,7 @@ export function TemplateGeneratorTool() {
       photoEnabled,
       photoGenerateBackgrounds,
       photoStyle,
+      metabaseEnabled,
       photoMin,
       photoTarget,
       columns,
@@ -306,6 +326,7 @@ export function TemplateGeneratorTool() {
     photoEnabled,
     photoGenerateBackgrounds,
     photoStyle,
+    metabaseEnabled,
     photoMin,
     photoTarget,
     exampleFileName,
@@ -345,7 +366,7 @@ export function TemplateGeneratorTool() {
         return "Поняла. Напишите, какие характеристики заполнять.";
       })();
 
-      if (!key) {
+      if (!key && !serverStatus?.openai) {
         setChatMessages((prev) => [
           ...prev,
           { id: newChatId(), role: "assistant", content: fallback, at: Date.now() }
@@ -381,7 +402,7 @@ export function TemplateGeneratorTool() {
         ]);
       }
     },
-    [openaiKey]
+    [openaiKey, serverStatus]
   );
 
   const initColumns = useCallback((s: TemplateSheetScan, sheet: string) => {
@@ -702,15 +723,15 @@ export function TemplateGeneratorTool() {
   );
 
   const reviewBeforeFill = useCallback(() => {
-    if (!openaiKey.trim()) {
-      setError("Введите OpenAI API key для проверки сопоставления");
+    if (!openaiKey.trim() && !serverStatus?.openai) {
+      setError("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
       return;
     }
     void eventReply(
       "Проверь сопоставление: шаблон, фид (если включён), эталон (если загружен) и отмеченные столбцы. " +
         "Какие поля непонятны или не сопоставились? Задай уточняющие вопросы перед запуском AI."
     );
-  }, [eventReply, openaiKey]);
+  }, [eventReply, openaiKey, serverStatus]);
 
   const onSheetChange = useCallback(
     (name: string) => {
@@ -744,8 +765,8 @@ export function TemplateGeneratorTool() {
     const wb = wbRef.current;
     if (!wb || !scan) return;
     const key = openaiKey.trim();
-    if (!key) {
-      setError("Введите OpenAI API key");
+    if (!key && !serverStatus?.openai) {
+      setError("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
       return;
     }
     if (selectionList.length === 0) {
@@ -911,6 +932,7 @@ export function TemplateGeneratorTool() {
                     enabled: photoEnabled,
                     generateBackgrounds: photoGenerateBackgrounds,
                     photoStyle,
+                    metabaseEnabled,
                     minCount: photoMin,
                     targetCount: photoTarget,
                     imageHeader
@@ -1017,6 +1039,7 @@ export function TemplateGeneratorTool() {
     photoEnabled,
     photoGenerateBackgrounds,
     photoStyle,
+    metabaseEnabled,
     photoMin,
     photoTarget,
     strictDropdown,
@@ -1028,7 +1051,8 @@ export function TemplateGeneratorTool() {
     feedEnabled,
     workMode,
     overwriteFilled,
-    exampleSamples
+    exampleSamples,
+    serverStatus
   ]);
 
   const download = useCallback(
@@ -1378,9 +1402,16 @@ export function TemplateGeneratorTool() {
                 className={`${homeInput} mt-1 w-full max-w-lg`}
                 value={openaiKey}
                 onChange={(e) => setOpenaiKey(e.target.value)}
+                placeholder={serverStatus?.openai ? "необязательно — ключ на сервере" : "sk-proj-…"}
                 autoComplete="off"
               />
             </label>
+            {serverStatus ? (
+              <p className="text-xs text-slate-600">
+                Сервер: OpenAI {serverStatus.openai ? "✓" : "—"} · Metabase{" "}
+                {serverStatus.metabase ? "✓" : "—"} · хранилище {serverStatus.storage ?? "—"}
+              </p>
+            ) : null}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -1550,6 +1581,15 @@ export function TemplateGeneratorTool() {
                   onChange={(e) => setPhotoEnabled(e.target.checked)}
                 />
                 Дополнять фото, если в ячейке меньше цели
+              </label>
+              <label className="mt-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={metabaseEnabled}
+                  disabled={!photoEnabled || !serverStatus?.metabase}
+                  onChange={(e) => setMetabaseEnabled(e.target.checked)}
+                />
+                Брать foto из Metabase по SKU (variation_id) — large2x, lifestyle
               </label>
               <label className="mt-2 flex items-center gap-2">
                 <input

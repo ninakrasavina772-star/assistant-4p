@@ -1,6 +1,11 @@
 import { prefillFromCsvData } from "@/lib/templateGenerator/csvPrefill";
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
 import { resolveRowPhotos, productPhotoContextFromRow } from "@/lib/templateGenerator/photoGenerate";
+import { formatImageCellValue, mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
+import {
+  fetchMetabaseProductBySku,
+  sortImagesForComposite
+} from "@/lib/templateGenerator/metabaseProduct";
 import type { ColumnSelection, FillRowInput, FillRowResult, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import { rowNeedsAiForHeaders } from "@/lib/templateGenerator/workMode";
 
@@ -24,6 +29,8 @@ export type FillBatchIn = {
     generateBackgrounds?: boolean;
     /** themed — lifestyle-фоны в тему товара (OpenAI Images); gradient — только градиенты */
     photoStyle?: "themed" | "gradient";
+    /** Подтянуть foto и бренд из Metabase по SKU (variation_id) */
+    metabaseEnabled?: boolean;
   };
   model?: string;
   /** Не ходить на сайт бренда — быстрее, но хуже для нот/описания */
@@ -262,7 +269,33 @@ async function resolveExtraPhotos(
     return { extraPhotos: [], sources: [] };
   }
 
-  const imageText = imageCellText(row, batch.photoSettings.imageHeader);
+  let imageText = imageCellText(row, batch.photoSettings.imageHeader);
+  let productContext = productPhotoContextFromRow(row);
+  const sources: string[] = [];
+
+  if (batch.photoSettings.metabaseEnabled !== false) {
+    try {
+      const mb = await fetchMetabaseProductBySku(row.sku);
+      if (mb) {
+        if (mb.imageUrls.length) {
+          const merged = sortImagesForComposite(
+            mergeImageUrls(parseImageUrls(imageText), mb.imageUrls)
+          );
+          imageText = formatImageCellValue(merged);
+          sources.push(`Metabase: ${mb.imageUrls.length} foto`);
+        }
+        if (!productContext.brand && mb.brandName) {
+          productContext = { ...productContext, brand: mb.brandName };
+        }
+        if (!productContext.productName && mb.productName) {
+          productContext = { ...productContext, productName: mb.productName };
+        }
+      }
+    } catch (e) {
+      sources.push(`Metabase: ${e instanceof Error ? e.message : "ошибка"}`);
+    }
+  }
+
   const photo = await resolveRowPhotos({
     imageText,
     sku: row.sku,
@@ -270,11 +303,10 @@ async function resolveExtraPhotos(
     targetCount: batch.photoSettings.targetCount,
     generateBackgrounds: batch.photoSettings.generateBackgrounds !== false,
     openaiApiKey: batch.openaiApiKey,
-    productContext: productPhotoContextFromRow(row),
+    productContext,
     photoStyle: batch.photoSettings.photoStyle ?? "themed"
   });
 
-  const sources: string[] = [];
   if (photo.generated.length) {
     const styleNote =
       batch.photoSettings.photoStyle === "gradient" ? "градиенты" : "lifestyle в тему";
