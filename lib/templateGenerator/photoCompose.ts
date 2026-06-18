@@ -124,8 +124,8 @@ export async function compositeOnBackground(
   const pw = meta.width ?? 1;
   const ph = meta.height ?? 1;
 
-  const maxH = Math.round(PRODUCT_CARD_H * 0.74);
-  const maxW = Math.round(PRODUCT_CARD_W * 0.68);
+  const maxH = Math.round(PRODUCT_CARD_H * 0.68);
+  const maxW = Math.round(PRODUCT_CARD_W * 0.58);
   const scale = Math.min(maxW / pw, maxH / ph);
   const nw = Math.max(1, Math.round(pw * scale));
   const nh = Math.max(1, Math.round(ph * scale));
@@ -136,11 +136,27 @@ export async function compositeOnBackground(
     .toBuffer();
 
   const left = Math.round((PRODUCT_CARD_W - nw) / 2);
-  const top = Math.round(PRODUCT_CARD_H * 0.38 - nh / 2);
+  const top = Math.round(PRODUCT_CARD_H * 0.42 - nh / 2);
 
-  return sharp(background)
+  const shadowW = Math.round(nw * 0.72);
+  const shadowSvg = `<svg width="${shadowW}" height="36" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="${shadowW / 2}" cy="18" rx="${shadowW * 0.46}" ry="10" fill="#000000" opacity="0.28"/>
+  </svg>`;
+  const shadowBuf = await sharp(Buffer.from(shadowSvg)).png().toBuffer();
+
+  const bg = await sharp(background)
     .resize(PRODUCT_CARD_W, PRODUCT_CARD_H, { fit: "cover" })
-    .composite([{ input: product, left, top }])
+    .jpeg({ quality: 92 })
+    .toBuffer();
+
+  const shadowLeft = Math.round((PRODUCT_CARD_W - shadowW) / 2);
+  const shadowTop = top + nh - 12;
+
+  return sharp(bg)
+    .composite([
+      { input: shadowBuf, left: shadowLeft, top: shadowTop },
+      { input: product, left, top }
+    ])
     .jpeg({ quality: 90, mozjpeg: true })
     .toBuffer();
 }

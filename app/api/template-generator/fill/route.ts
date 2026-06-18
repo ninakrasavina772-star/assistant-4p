@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { fillTemplateRows, type FillBatchIn } from "@/lib/templateGenerator/aiFill";
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 const MAX_ROWS = 1;
 

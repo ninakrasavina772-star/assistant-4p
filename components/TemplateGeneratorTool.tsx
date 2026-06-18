@@ -61,7 +61,7 @@ const SK_WORK_MODE = "fp_template_gen_work_mode";
 const SK_OVERWRITE_FILLED = "fp_template_gen_overwrite_filled";
 const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
-const FILL_REQUEST_MS = 175_000;
+const FILL_REQUEST_MS = 280_000;
 const FILL_BATCH_SIZE_DEFAULT = 50;
 
 function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
@@ -168,6 +168,7 @@ export function TemplateGeneratorTool() {
 
   const [photoEnabled, setPhotoEnabled] = useState(true);
   const [photoGenerateBackgrounds, setPhotoGenerateBackgrounds] = useState(true);
+  const [photoStyle, setPhotoStyle] = useState<"themed" | "gradient">("themed");
   const [photoMin, setPhotoMin] = useState(7);
   const [photoTarget, setPhotoTarget] = useState(8);
 
@@ -273,6 +274,7 @@ export function TemplateGeneratorTool() {
       enabledColCount: selected.length,
       photoEnabled,
       photoGenerateBackgrounds,
+      photoStyle,
       photoMin,
       photoTarget,
       columns,
@@ -303,6 +305,7 @@ export function TemplateGeneratorTool() {
     csvMap,
     photoEnabled,
     photoGenerateBackgrounds,
+    photoStyle,
     photoMin,
     photoTarget,
     exampleFileName,
@@ -907,6 +910,7 @@ export function TemplateGeneratorTool() {
                   photoSettings: {
                     enabled: photoEnabled,
                     generateBackgrounds: photoGenerateBackgrounds,
+                    photoStyle,
                     minCount: photoMin,
                     targetCount: photoTarget,
                     imageHeader
@@ -1012,6 +1016,7 @@ export function TemplateGeneratorTool() {
     csvMap,
     photoEnabled,
     photoGenerateBackgrounds,
+    photoStyle,
     photoMin,
     photoTarget,
     strictDropdown,
@@ -1553,12 +1558,35 @@ export function TemplateGeneratorTool() {
                   disabled={!photoEnabled}
                   onChange={(e) => setPhotoGenerateBackgrounds(e.target.checked)}
                 />
-                Генерировать варианты на разных фонах (композит из packshot)
+                Генерировать lifestyle-фото (флакон на тематическом фоне)
               </label>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <span className="text-xs text-slate-600">Стиль фона:</span>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="radio"
+                    name="photoStyle"
+                    checked={photoStyle === "themed"}
+                    disabled={!photoEnabled || !photoGenerateBackgrounds}
+                    onChange={() => setPhotoStyle("themed")}
+                  />
+                  В тему товара (AI, как у брендов)
+                </label>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="radio"
+                    name="photoStyle"
+                    checked={photoStyle === "gradient"}
+                    disabled={!photoEnabled || !photoGenerateBackgrounds}
+                    onChange={() => setPhotoStyle("gradient")}
+                  />
+                  Простые градиенты (быстрее)
+                </label>
+              </div>
               <p className="mt-2 text-xs text-slate-500">
-                Берём первое foto из «Ссылка на изображение» (шаблон или фид), снимаем белый фон и
-                ставим товар на 5 пресетов (бежевый, серый, розовый, мрамор, тёмный). Новые URL
-                добавляются в колонку изображений и в «{DEFAULT_PHOTO_REVIEW_COLUMN}».
+                Packshot снимается с белого фона, ставится на сцену по бренду, нотам и семейству
+                (пионы для цветочных, дерево/золото для восточных, цитрус для свежих и т.д.).
+                До 3 AI-кадров + 2 градиента на строку. Нужен OpenAI API key и хранилище S3.
               </p>
               <div className="mt-2 flex flex-wrap gap-4">
                 <label>
@@ -1585,8 +1613,8 @@ export function TemplateGeneratorTool() {
                 </label>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Нужно хранилище Yandex S3 или Vercel Blob на сервере. До {photoTarget} фото на товар,
-                не больше 5 новых вариантов за строку.
+                Цель до {photoTarget} фото в ячейке. Новые URL → «Ссылка на изображение» и «
+                {DEFAULT_PHOTO_REVIEW_COLUMN}». AI-режим: ~1–2 мин на строку.
               </p>
             </fieldset>
 

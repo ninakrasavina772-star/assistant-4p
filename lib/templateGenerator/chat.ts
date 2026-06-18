@@ -38,6 +38,7 @@ export type TemplateChatContext = {
   enabledColCount?: number;
   photoEnabled?: boolean;
   photoGenerateBackgrounds?: boolean;
+  photoStyle?: "themed" | "gradient";
   photoMin?: number;
   photoTarget?: number;
   columns?: TemplateColumnBrief[];
@@ -258,10 +259,11 @@ export function buildContextBlock(ctx: TemplateChatContext): string {
   }
 
   if (ctx.photoEnabled) {
-    lines.push(
-      `Фото: цель ${ctx.photoTarget}, мин ${ctx.photoMin}` +
-        (ctx.photoGenerateBackgrounds === false ? " (без генерации фонов)" : " + композит на фонах")
-    );
+    const mode =
+      ctx.photoStyle === "gradient"
+        ? "градиенты"
+        : "lifestyle в тему (OpenAI Images)";
+    lines.push(`Фото: цель ${ctx.photoTarget}, мин ${ctx.photoMin}, режим ${mode}`);
   }
 
   return lines.join("\n");

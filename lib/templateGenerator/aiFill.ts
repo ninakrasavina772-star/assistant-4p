@@ -1,6 +1,6 @@
 import { prefillFromCsvData } from "@/lib/templateGenerator/csvPrefill";
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
-import { resolveRowPhotos } from "@/lib/templateGenerator/photoGenerate";
+import { resolveRowPhotos, productPhotoContextFromRow } from "@/lib/templateGenerator/photoGenerate";
 import type { ColumnSelection, FillRowInput, FillRowResult, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import { rowNeedsAiForHeaders } from "@/lib/templateGenerator/workMode";
 
@@ -22,6 +22,8 @@ export type FillBatchIn = {
     imageHeader: string | null;
     /** Композит товара на разные фоны, если URL в ячейке меньше цели */
     generateBackgrounds?: boolean;
+    /** themed — lifestyle-фоны в тему товара (OpenAI Images); gradient — только градиенты */
+    photoStyle?: "themed" | "gradient";
   };
   model?: string;
   /** Не ходить на сайт бренда — быстрее, но хуже для нот/описания */
@@ -266,12 +268,19 @@ async function resolveExtraPhotos(
     sku: row.sku,
     minCount: batch.photoSettings.minCount,
     targetCount: batch.photoSettings.targetCount,
-    generateBackgrounds: batch.photoSettings.generateBackgrounds !== false
+    generateBackgrounds: batch.photoSettings.generateBackgrounds !== false,
+    openaiApiKey: batch.openaiApiKey,
+    productContext: productPhotoContextFromRow(row),
+    photoStyle: batch.photoSettings.photoStyle ?? "themed"
   });
 
   const sources: string[] = [];
   if (photo.generated.length) {
-    sources.push(`фото: +${photo.generated.length} вариантов на фоне`);
+    const styleNote =
+      batch.photoSettings.photoStyle === "gradient" ? "градиенты" : "lifestyle в тему";
+    sources.push(`фото: +${photo.generated.length} (${styleNote})`);
+    if (photo.note && !photo.note.startsWith("темы:")) sources.push(`фото: ${photo.note}`);
+    else if (photo.note) sources.push(photo.note);
   } else if (photo.note) {
     sources.push(`фото: ${photo.note}`);
   }
