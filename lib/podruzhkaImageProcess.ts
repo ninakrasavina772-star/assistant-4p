@@ -2106,7 +2106,9 @@ export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promi
   const w = info.width;
   const h = info.height;
 
-  buf = await stripEdgeNearWhiteBackground(buf, 240);
+  // Ozon packshot: белый/серый #F5F5F5 с краёв (fallback при промахе AI-кэша).
+  buf = await stripProductPackshotBackground(buf);
+  buf = await stripEdgeNearWhiteBackground(buf, 232);
 
   const { data: cutData } = await sharp(buf)
     .ensureAlpha()

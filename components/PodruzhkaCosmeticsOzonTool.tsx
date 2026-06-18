@@ -62,6 +62,7 @@ import {
   type PodruzhkaErrorRow
 } from "@/lib/podruzhkaErrorReport";
 import { renderPodruzhkaCardClient } from "@/lib/podruzhkaClientRender";
+import { resolveCosmeticsModelForRender } from "@/lib/podruzhkaCosmeticsModel";
 import type { PodruzhkaAiResult, PodruzhkaFeedRow } from "@/lib/podruzhkaTypes";
 import type ExcelJS from "exceljs";
 
@@ -735,7 +736,13 @@ export function PodruzhkaCosmeticsOzonTool() {
             const rendered = await renderPodruzhkaCardClient({
               brandName: row.brandName,
               productType: readCosmeticsProductTypeForCard(ws, sheetInfo, row, ai.model),
-              model: ai.model,
+              model: resolveCosmeticsModelForRender({
+                model: ai.model,
+                productType: row.productType,
+                brandName: row.brandName,
+                name: row.name,
+                productName: row.productName
+              }),
               ml: "",
               fotoUrl,
               notes: ai.benefits,
