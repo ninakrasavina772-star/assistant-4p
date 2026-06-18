@@ -2109,7 +2109,7 @@ async function preprocessEssieWhiteCapPackshot(input: Buffer): Promise<Buffer> {
     .png()
     .toBuffer();
 
-  let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
+  let buf = await stripProductPackshotBackground(srcFitBuf);
   buf = await trimTransparentSafe(buf);
   buf = await cropToVisibleProduct(buf, 8, 0.022, 12);
 
