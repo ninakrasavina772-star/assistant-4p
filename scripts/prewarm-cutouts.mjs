@@ -7,6 +7,7 @@ import XLSX from "xlsx";
 import { rmbg } from "rmbg";
 import { BUILTIN_COSMETICS_FOTO_URLS } from "../lib/builtinCosmeticsFotoUrls.ts";
 import { FEED_COSMETICS_FOTO_URLS } from "../lib/feedCosmeticsFotoUrls.ts";
+import { PARTNER_COSMETICS_FOTO_URLS } from "../lib/partnerCosmeticsFotoUrls.ts";
 import {
   cosmeticsCutoutPublicUrl,
   saveCutoutToCache
@@ -46,7 +47,8 @@ if (!process.env.YANDEX_S3_BUCKET?.trim()) {
 
 const allUrls = new Set([
   ...BUILTIN_COSMETICS_FOTO_URLS.map(preferOzonFullSizeUrl),
-  ...FEED_COSMETICS_FOTO_URLS.map(preferOzonFullSizeUrl)
+  ...FEED_COSMETICS_FOTO_URLS.map(preferOzonFullSizeUrl),
+  ...PARTNER_COSMETICS_FOTO_URLS
 ]);
 const excelPath = process.env.COSMETICS_PREWARM_XLSX?.trim();
 if (excelPath) {

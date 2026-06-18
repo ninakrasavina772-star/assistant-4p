@@ -37,6 +37,22 @@ function blockHeight(lines: number, fontSize: number, lineHeight: number): numbe
   return lines * Math.round(fontSize * lineHeight);
 }
 
+function truncateLine(
+  m: TextMeasure,
+  text: string,
+  font: string,
+  maxWidth: number
+): string {
+  m.setFont(font);
+  if (m.textWidth(text) <= maxWidth) return text;
+  const ell = "…";
+  let t = text;
+  while (t.length > 1 && m.textWidth(t + ell) > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return t + ell;
+}
+
 function wrapLines(
   m: TextMeasure,
   text: string,
@@ -80,9 +96,12 @@ function fitModel(
     if (widest <= maxWidth) return { size, lines };
   }
   const size = minSize;
+  const font = fontForSize(size);
+  const lines = wrapLines(m, model, font, maxWidth, maxLines);
+  m.setFont(font);
   return {
     size,
-    lines: wrapLines(m, model, fontForSize(size), maxWidth, maxLines)
+    lines: lines.map((ln) => truncateLine(m, ln, font, maxWidth))
   };
 }
 

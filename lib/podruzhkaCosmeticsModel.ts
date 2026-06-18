@@ -32,6 +32,15 @@ const GENERIC_MODELS = new Set(
   ].map((s) => s.toLowerCase())
 );
 
+
+function compactLatinModel(model: string, maxWords = 5): string {
+  const t = model.trim().replace(/\s+/g, " ");
+  if (!t || !/^[\p{L}\p{N}\s\-'.]+$/u.test(t)) return t;
+  const words = t.split(/\s+/);
+  if (words.length <= maxWords) return t;
+  return words.slice(0, maxWords).join(" ");
+}
+
 function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -126,12 +135,12 @@ export function resolveCosmeticsModelForRender(input: {
   let model = repairTruncatedLatinModel(input.model.trim(), input.name || input.productName);
 
   if (!isWeakModel(model, input.productType)) {
-    return model;
+    return compactLatinModel(model);
   }
 
   const inferred = inferModelFromName(input);
   if (inferred && !isWeakModel(inferred, input.productType)) {
-    return inferred;
+    return compactLatinModel(inferred);
   }
 
   if (model) return model;

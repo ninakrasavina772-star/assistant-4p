@@ -1,5 +1,5 @@
 /** Вёрстка косметики — v5: новый template-base (петля) */
-export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v42-model";
+export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v43-partner";
 
 export type PodruzhkaCosmeticsFotoMode = "raw" | "edge" | "cutout" | "ai";
 
