@@ -1,11 +1,7 @@
 /**
- * При деплое: подготовить cut-out для каталога (только если нет в кэше).
- * PREWARM_COSMETICS_CUTOUTS=0 — отключить.
- *
- * Источники URL (объединяются):
- * - lib/builtinCosmeticsFotoUrls.ts
- * - lib/feedCosmeticsFotoUrls.ts (144 foto из part1 Excel)
- * - Excel COSMETICS_PREWARM_XLSX (опционально, локально)
+ * Опционально: подготовить cut-out для каталога (только если нет в кэше).
+ * Запуск: PREWARM_COSMETICS_CUTOUTS=1 npm run build:prewarm
+ * На Vercel по умолчанию НЕ запускается — иначе сборка зависает на сотнях rmbg.
  */
 import XLSX from "xlsx";
 import { rmbg } from "rmbg";
@@ -33,8 +29,13 @@ function collectUrlsFromExcel(excelPath) {
   return urls;
 }
 
-if (process.env.PREWARM_COSMETICS_CUTOUTS === "0") {
-  console.log("[cutouts-prewarm] skipped (PREWARM_COSMETICS_CUTOUTS=0)");
+if (process.env.PREWARM_COSMETICS_CUTOUTS !== "1") {
+  console.log("[cutouts-prewarm] skipped (set PREWARM_COSMETICS_CUTOUTS=1 to enable)");
+  process.exit(0);
+}
+
+if (process.env.VERCEL === "1") {
+  console.log("[cutouts-prewarm] skipped on Vercel — run locally: npm run cutouts");
   process.exit(0);
 }
 

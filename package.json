@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/copy-podruzhka-fonts.mjs && npx tsx scripts/prewarm-cutouts.mjs && next build",
+    "build": "node scripts/copy-podruzhka-fonts.mjs && next build",
+    "build:prewarm": "node scripts/copy-podruzhka-fonts.mjs && npx tsx scripts/prewarm-cutouts.mjs && next build",
     "start": "next start",
     "lint": "next lint",
     "cutouts": "npx tsx scripts/precompute-cutouts.mjs",
