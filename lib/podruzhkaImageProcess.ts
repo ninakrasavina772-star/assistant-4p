@@ -2150,84 +2150,83 @@ async function alignCutoutToSource(cutout: Buffer, source: Buffer): Promise<Buff
  * (белые и цветные шапки над телом).
  */
 async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<Buffer> {
-  let buf = await alignCutoutToSource(cutout, source);
-  buf = await rebuildProductAlphaByColumn(buf, source);
+  const cutMeta = await sharp(cutout).metadata();
+  const cw = cutMeta.width ?? 0;
+  const ch = cutMeta.height ?? 0;
+  if (!cw || !ch) return cutout;
 
-  const { data, info } = await sharp(buf)
+  /** rmbg-кэш 600×800, source апскейл ~1400 — чиним колпачок в сетке cut-out, потом upscale. */
+  const srcFitBuf = await sharp(source)
+    .resize(cw, ch, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .png()
+    .toBuffer();
+  const { data: aiData, info } = await sharp(cutout)
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  const src = Buffer.from(await sharp(source).ensureAlpha().raw().toBuffer());
+  const srcFit = Buffer.from(await sharp(srcFitBuf).ensureAlpha().raw().toBuffer());
   const w = info.width;
   const h = info.height;
-  if (!w || !h || src.length !== data.length) return buf;
+  if (w !== cw || h !== ch || srcFit.length !== aiData.length) {
+    return alignCutoutToSource(cutout, source);
+  }
 
-  const pixels = Buffer.from(data);
-  const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
-  const exterior = buildExteriorNearWhiteMask(src, w, h, 232);
+  const pixels = Buffer.from(aiData);
+  const whiteCapKeep = buildVerticalWhiteCapKeepMask(srcFit, w, h);
+  const exterior = buildExteriorNearWhiteMask(srcFit, w, h, 232);
 
-  reclaimOpaqueWhiteCapAboveBody(pixels, src, whiteCapKeep, w, h);
+  reclaimOpaqueWhiteCapAboveBody(pixels, srcFit, whiteCapKeep, w, h);
 
-  let coreMinX = w;
-  let coreMaxX = -1;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const pi = (y * w + x) * 4;
-      if (pixels[pi + 3]! < 128) continue;
-      coreMinX = Math.min(coreMinX, x);
-      coreMaxX = Math.max(coreMaxX, x);
+  const aiTop = new Int32Array(w);
+  aiTop.fill(h);
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      if (pixels[(y * w + x) * 4 + 3]! >= 128) {
+        aiTop[x] = y;
+        break;
+      }
     }
   }
 
-  if (coreMaxX >= coreMinX) {
-    const padX = Math.max(4, Math.round((coreMaxX - coreMinX + 1) * 0.06));
-    const x0 = Math.max(0, coreMinX - padX);
-    const x1 = Math.min(w - 1, coreMaxX + padX);
-    const productW = coreMaxX - coreMinX + 1;
-    const maxRise = Math.min(300, Math.max(100, Math.round(productW * 0.58)));
-
-    for (let x = x0; x <= x1; x++) {
-      let minCutY = h;
-      for (let y = 0; y < h; y++) {
-        if (pixels[(y * w + x) * 4 + 3]! >= 128) minCutY = Math.min(minCutY, y);
-      }
-      if (minCutY >= h) continue;
-
-      let anchorY = minCutY;
-      for (let y = minCutY; y < Math.min(h, minCutY + Math.round(h * 0.35)); y++) {
-        const pi = (y * w + x) * 4;
-        if (pixels[pi + 3]! < 128) continue;
-        if (isBodyAnchorPixel(src, pi)) {
-          anchorY = y;
-          break;
-        }
-      }
-
-      const floorY = Math.max(0, anchorY - maxRise);
-      for (let y = floorY; y < anchorY; y++) {
-        const idx = y * w + x;
-        const pi = idx * 4;
-        if (pixels[pi + 3]! >= 200) continue;
-        if (exterior[idx] && whiteCapKeep[idx] !== 1) continue;
-        if (exterior[idx]) continue;
-        if (!isBodyAnchorPixel(src, pi) && readNearWhiteRgb(src, pi, 240, 28)) continue;
-        pixels[pi] = src[pi]!;
-        pixels[pi + 1] = src[pi + 1]!;
-        pixels[pi + 2] = src[pi + 2]!;
-        pixels[pi + 3] = 255;
-      }
+  const capPad = Math.max(16, Math.round(h * 0.025));
+  for (let x = 0; x < w; x++) {
+    const limit = Math.min(h, aiTop[x]! + capPad);
+    for (let y = 0; y < limit; y++) {
+      const idx = y * w + x;
+      const pi = idx * 4;
+      if (pixels[pi + 3]! >= 250) continue;
+      if (exterior[idx] && whiteCapKeep[idx] !== 1) continue;
+      const nearWhite = readNearWhiteRgb(srcFit, pi, 238, 32);
+      if (nearWhite && whiteCapKeep[idx] !== 1 && !isBodyAnchorPixel(srcFit, pi)) continue;
+      if (exterior[idx] && nearWhite) continue;
+      pixels[pi] = srcFit[pi]!;
+      pixels[pi + 1] = srcFit[pi + 1]!;
+      pixels[pi + 2] = srcFit[pi + 2]!;
+      pixels[pi + 3] = 255;
     }
   }
 
   purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
-  trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
+  trimHorizontalWhiteMargins(pixels, srcFit, w, h, whiteCapKeep);
 
-  return sharp(pixels, {
+  let buf = await sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
   })
     .png()
     .toBuffer();
+
+  const srcMeta = await sharp(source).metadata();
+  const sw = srcMeta.width ?? 0;
+  const sh = srcMeta.height ?? 0;
+  if (sw && sh && (sw !== w || sh !== h)) {
+    buf = await sharp(buf)
+      .resize(sw, sh, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+      .png()
+      .toBuffer();
+  }
+  return buf;
 }
+
 
 /**
  * Косметика: локальная AI-модель (rmbg) + кэш в Yandex. При ошибке — edge.
