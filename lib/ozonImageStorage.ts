@@ -95,6 +95,30 @@ export async function uploadOzonImage(buf: Buffer, fileName: string): Promise<st
   );
 }
 
+/** Загрузка главного фото Летуаль (подпапка letual-main-photo). */
+export async function uploadLetualMainPhoto(buf: Buffer, fileName = "main.jpg"): Promise<string> {
+  const backend = getOzonStorageBackend();
+  if (backend === "yandex") {
+    const id = crypto.randomUUID();
+    const base = yandexPrefix();
+    const key = `${base}/letual-main-photo/${id}/${fileName}`;
+    const client = yandexClient();
+    await client.send(
+      new PutObjectCommand({
+        Bucket: process.env.YANDEX_S3_BUCKET!.trim(),
+        Key: key,
+        Body: buf,
+        ContentType: contentTypeForName(fileName),
+        ACL: "public-read",
+        CacheControl: "public, max-age=31536000, immutable"
+      })
+    );
+    return buildYandexPublicUrl(key);
+  }
+  if (backend === "vercel-blob") return uploadToVercelBlob(buf, fileName);
+  throw new Error("Хранилище не настроено для загрузки фото Летуаль");
+}
+
 /** Загрузка по фиксированному ключу (кэш cut-out и т.п.). */
 export async function uploadOzonImageAtKey(
   buf: Buffer,

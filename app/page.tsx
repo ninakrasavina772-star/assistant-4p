@@ -33,6 +33,11 @@ const tools: {
     title: "Инфографика для ЛК Подружка · Ozon косметика",
     emoji: "💄"
   },
+  {
+    href: "/letual-main-photo",
+    title: "Главное фото · Летуаль",
+    emoji: "📸"
+  },
   { href: "/template-generator", title: "Генератор шаблонов", emoji: "📋" }
 ];
 
