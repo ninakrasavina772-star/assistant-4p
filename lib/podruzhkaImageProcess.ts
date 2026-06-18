@@ -2130,6 +2130,41 @@ export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promi
 }
 
 
+function measureNearWhiteOpaqueRatio(pixels: Buffer, w: number, h: number): number {
+  let tot = 0;
+  let white = 0;
+  for (let idx = 0; idx < w * h; idx++) {
+    const pi = idx * 4;
+    if (pixels[pi + 3]! < 128) continue;
+    tot++;
+    if (readNearWhiteRgb(pixels, pi, 234, 34)) white++;
+  }
+  return tot ? white / tot : 0;
+}
+
+/** Убрать белый прямоугольник Ozon из AI cut-out (Essie и др. white-on-white). */
+async function scrubAiCosmeticsWhiteFringe(
+  cutout: Buffer,
+  srcFitBuf: Buffer
+): Promise<Buffer> {
+  const [{ data, info }, srcFit] = await Promise.all([
+    sharp(cutout).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+    sharp(srcFitBuf).ensureAlpha().raw().toBuffer()
+  ]);
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h || srcFit.length !== data.length) return cutout;
+
+  const pixels = Buffer.from(data);
+  clearFullWidthTopWhiteBands(pixels, srcFit, w, h);
+  finalizeEdgeCosmeticsPixels(pixels, srcFit, w, h);
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 /** Подогнать AI cut-out под размер апскейленного исходника (кэш rmbg — с сырого Ozon). */
 async function alignCutoutToSource(cutout: Buffer, source: Buffer): Promise<Buffer> {
   const srcMeta = await sharp(source).metadata();
@@ -2233,6 +2268,7 @@ async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<
     .toBuffer();
 
   buf = await rebuildProductAlphaByColumn(buf, srcFitBuf);
+  buf = await scrubAiCosmeticsWhiteFringe(buf, srcFitBuf);
 
   const srcMeta = await sharp(source).metadata();
   const sw = srcMeta.width ?? 0;
@@ -2270,6 +2306,21 @@ export async function preprocessCosmeticsProductBufferAi(
   buf = await repairAiCosmeticsCutout(buf, source);
   buf = await trimTransparentSafe(buf);
   buf = await cropToVisibleProduct(buf, 8, 0.022, 14);
+
+  const { data: scrubCheck, info: scrubInfo } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const sw = scrubInfo.width ?? 0;
+  const sh = scrubInfo.height ?? 0;
+  if (sw && sh) {
+    const whiteRatio = measureNearWhiteOpaqueRatio(Buffer.from(scrubCheck), sw, sh);
+    if (whiteRatio > 0.3) {
+      console.warn(`ai cutout near-white ratio ${whiteRatio.toFixed(2)}, edge fallback`);
+      return preprocessCosmeticsProductBufferEdge(input);
+    }
+  }
+
   return finalizeCosmeticsCutout(buf);
 }
 
