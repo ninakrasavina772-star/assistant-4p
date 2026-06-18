@@ -36,14 +36,21 @@ async function tryProcessCandidates(
 }
 
 function buildDbComment(best: LetualPhotoScore | undefined): string {
-  if (!best) return "";
+  if (!best || best.suitable) return "";
   const notes: string[] = [];
   if (!best.hasWhiteBackground) notes.push("фон не белый — проверить");
-  if (!best.isFrontal) notes.push("не фронтальный ракурс — проверить");
+  if (!best.isFrontal) notes.push("ракурс — проверить");
   if (best.quality < 50) notes.push("низкое качество источника");
-  if (!best.suitable) notes.push(best.reason);
+  if (!notes.length && best.reason && best.reason !== "Не подходит") {
+    notes.push(best.reason);
+  }
   if (!notes.length) return "";
   return `Фото из БД: ${notes.join("; ")}`;
+}
+
+function dbPhotoNeedsWebFallback(ranked: LetualPhotoScore[]): boolean {
+  if (!ranked.length) return true;
+  return !ranked.some((r) => !r.hasBox && !r.hasInfographic);
 }
 
 export async function processLetualByUrl(
@@ -93,14 +100,17 @@ export async function processLetualByVariationId(
     let sourceUrl = "";
     let comment = "";
     const candidateUrls: string[] = [];
+    let rankedFromDb: LetualPhotoScore[] = [];
 
     if (row.imageUrls.length) {
-      const suitable = await pickSuitableLetualPhoto(row.imageUrls, key);
-      if (suitable.url) {
-        sourceUrl = suitable.url;
-        comment = buildDbComment(suitable.best);
-      } else if (suitable.ranked.length) {
-        const fallback = pickBestFromRanked(suitable.ranked);
+      const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
+      rankedFromDb = picked.ranked;
+
+      if (picked.url) {
+        sourceUrl = picked.url;
+        comment = buildDbComment(picked.best);
+      } else {
+        const fallback = pickBestFromRanked(picked.ranked);
         if (fallback?.url) {
           candidateUrls.push(fallback.url);
           comment = buildDbComment(fallback);
@@ -108,19 +118,27 @@ export async function processLetualByVariationId(
       }
     }
 
-    if (!sourceUrl && !candidateUrls.length) {
+    const tryWeb =
+      dbPhotoNeedsWebFallback(rankedFromDb) ||
+      (!sourceUrl && !candidateUrls.length);
+
+    if (tryWeb) {
       const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
       for (const item of web) {
         if (!(await validateImageUrl(item.url))) continue;
         const scored = await pickSuitableLetualPhoto([item.url], key);
         if (scored.url) {
           sourceUrl = scored.url;
-          comment = `Фото из интернета (${item.source}), проверить вручную`;
+          comment = `Фото из интернета (${item.source})`;
+          candidateUrls.length = 0;
           break;
         }
-        if (scored.best?.url) {
-          candidateUrls.push(scored.best.url);
-          comment = `Фото из интернета (${item.source}): ${scored.best.reason}; проверить`;
+        const webBest = pickBestFromRanked(scored.ranked);
+        if (webBest?.url && !webBest.hasBox) {
+          sourceUrl = "";
+          candidateUrls.unshift(webBest.url);
+          comment = `Фото из интернета (${item.source}): ${webBest.reason || "проверить"}`;
+          break;
         }
       }
     }
@@ -128,15 +146,19 @@ export async function processLetualByVariationId(
     const tryList = sourceUrl ? [sourceUrl, ...candidateUrls] : candidateUrls;
 
     if (!tryList.length) {
+      const onlyBox =
+        rankedFromDb.length > 0 &&
+        rankedFromDb.every((r) => r.hasBox || r.hasInfographic);
       const deadLinks = row.imageUrls.length
         ? `В БД ${row.imageUrls.length} ссылок, но ни одна не скачивается (404/403). `
         : "";
+      const boxNote = onlyBox ? "В БД только фото с коробкой/инфографикой. " : "";
       return {
         variationId,
         resultUrl: "",
         comment: "",
         ok: false,
-        error: `${deadLinks}Нет подходящего фото в интернете`
+        error: `${boxNote}${deadLinks}Нет подходящего фото в интернете`
       };
     }
 

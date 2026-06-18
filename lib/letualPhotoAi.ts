@@ -32,11 +32,15 @@ type VisionJson = {
 
 const SYSTEM = `Ты эксперт по требованиям маркетплейса Летуаль к главному фото товара.
 
-Оцени изображение СТРОГО:
+Оцени изображение:
 
-is_frontal — true ТОЛЬКО если товар стоит прямо к зрителю (не 3/4, не поворот влево/вправо).
-has_white_background — true ТОЛЬКО если фон белый #FFFFFF или очень светлый однотонный студийный (не цветной, не градиент, не интерьер).
-has_box — коробка рядом или товар в коробке.
+is_frontal — true если товар смотрит на зрителя: этикетка/лицевая сторона обращена к камере.
+Симметричный круглый или цилиндрический флакон/тюбик по центру — это фронтальный ракурс.
+false ТОЛЬКО при явном 3/4 или профиле, когда заметно видна боковая грань корпуса (не крышечка).
+Лёгкий наклон крышки, блики или тень НЕ делают кадр нефронтальным.
+
+has_white_background — true если фон белый #FFFFFF или очень светлый однотонный студийный (не цветной, не градиент, не интерьер).
+has_box — true если видна упаковочная коробка рядом с товаром ИЛИ товар внутри/на коробке. Только флакон/тюбик без коробки = false.
 has_infographic — текст, бейджи, коллаж, lifestyle, модель.
 quality — 0–100: резкость (мутное < 45, чёткий packshot 75+).
 
@@ -169,24 +173,32 @@ async function scoreOneUrl(
 }
 
 export function pickBestFromRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
-  const suitable = ranked.filter((r) => r.suitable);
+  const clean = ranked.filter((r) => !r.hasBox && !r.hasInfographic);
+  if (!clean.length) return undefined;
+
+  const suitable = clean.filter((r) => r.suitable);
   if (suitable.length) {
     return [...suitable].sort((a, b) => b.score - a.score)[0];
   }
 
-  const whiteFrontal = ranked.filter(
-    (r) => r.isFrontal && r.hasWhiteBackground && !r.hasBox && !r.hasInfographic
+  const whiteFrontal = clean.filter(
+    (r) => r.isFrontal && r.hasWhiteBackground
   );
   if (whiteFrontal.length) {
     return [...whiteFrontal].sort((a, b) => b.score - a.score)[0];
   }
 
-  const frontal = ranked.filter((r) => r.isFrontal && !r.hasBox && !r.hasInfographic);
+  const frontal = clean.filter((r) => r.isFrontal);
   if (frontal.length) {
     return [...frontal].sort((a, b) => b.score - a.score)[0];
   }
 
-  return ranked.length ? [...ranked].sort((a, b) => b.score - a.score)[0] : undefined;
+  const whiteBg = clean.filter((r) => r.hasWhiteBackground);
+  if (whiteBg.length) {
+    return [...whiteBg].sort((a, b) => b.score - a.score)[0];
+  }
+
+  return [...clean].sort((a, b) => b.score - a.score)[0];
 }
 
 /** Выбрать лучшее фото среди скачиваемых URL. */

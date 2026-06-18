@@ -67,7 +67,7 @@ export function LetualMainPhotoTool() {
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<LetualResultRow[]>([]);
   const [resultBlob, setResultBlob] = useState<{ blob: Blob; name: string } | null>(null);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [excelBuilding, setExcelBuilding] = useState(false);
   const [status, setStatus] = useState<{
     storage: boolean;
     metabase: boolean;
@@ -214,9 +214,11 @@ export function LetualMainPhotoTool() {
   useEffect(() => {
     if (!results.length) {
       setResultBlob(null);
+      setExcelBuilding(false);
       return;
     }
     let cancelled = false;
+    setExcelBuilding(true);
     void (async () => {
       const blob =
         tab === "variations"
@@ -231,29 +233,44 @@ export function LetualMainPhotoTool() {
             ? `letual-main-photo-${suffix}.xlsx`
             : `letual-urls-${suffix}.xlsx`
       });
+      setExcelBuilding(false);
     })();
     return () => {
       cancelled = true;
     };
   }, [results, tab]);
 
-  useEffect(() => {
-    if (!resultBlob) {
-      setDownloadUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(resultBlob.blob);
-    setDownloadUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [resultBlob]);
+  const downloadExcel = useCallback(async () => {
+    if (!results.length) return;
 
-  const downloadExcel = useCallback(() => {
-    if (!downloadUrl || !resultBlob) return;
+    let blob = resultBlob?.blob;
+    let name = resultBlob?.name;
+    if (!blob) {
+      setExcelBuilding(true);
+      try {
+        blob =
+          tab === "variations"
+            ? await buildLetualVariationResultWorkbook(results)
+            : await buildLetualUrlResultWorkbook(results);
+        const suffix = new Date().toISOString().slice(0, 10);
+        name =
+          tab === "variations"
+            ? `letual-main-photo-${suffix}.xlsx`
+            : `letual-urls-${suffix}.xlsx`;
+        setResultBlob({ blob, name });
+      } finally {
+        setExcelBuilding(false);
+      }
+    }
+    if (!blob || !name) return;
+
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = downloadUrl;
-    a.download = resultBlob.name;
+    a.href = url;
+    a.download = name;
     a.click();
-  }, [downloadUrl, resultBlob]);
+    URL.revokeObjectURL(url);
+  }, [resultBlob, results, tab]);
 
   return (
     <div className="space-y-6">
@@ -425,11 +442,11 @@ export function LetualMainPhotoTool() {
             </h2>
             <button
               type="button"
-              disabled={!downloadUrl || busy}
-              onClick={downloadExcel}
+              disabled={!results.length}
+              onClick={() => void downloadExcel()}
               className="inline-flex shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Скачать Excel
+              {excelBuilding ? "Скачать Excel (обновляется…)" : "Скачать Excel"}
             </button>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
