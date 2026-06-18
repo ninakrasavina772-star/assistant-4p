@@ -53,3 +53,25 @@ export function sortImagesForComposite(urls: string[]): string[] {
 export function metabaseProductIsConfigured(): boolean {
   return metabaseIsConfigured();
 }
+
+/** Пакетная загрузка товаров по variation_id */
+export async function fetchMetabaseProductsByIds(
+  ids: number[],
+  metabaseApiKey?: string
+): Promise<MetabaseProductRow[]> {
+  if (!ids.length) return [];
+  const unique = [...new Set(ids.filter((id) => id > 0))];
+  const rows = await fetchLetualVariations(unique, metabaseApiKey);
+  const byId = new Map(
+    rows.map((r) => [
+      r.variationId,
+      {
+        variationId: r.variationId,
+        productName: r.productName,
+        brandName: r.brandName,
+        imageUrls: r.imageUrls
+      } satisfies MetabaseProductRow
+    ])
+  );
+  return unique.map((id) => byId.get(id)).filter((x): x is MetabaseProductRow => Boolean(x));
+}

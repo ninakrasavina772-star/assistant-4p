@@ -30,8 +30,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    const reply = await runTemplateAssistantChat(key, messages, body.context ?? {}, body.model);
-    return NextResponse.json({ reply });
+    const result = await runTemplateAssistantChat(key, messages, body.context ?? {}, body.model);
+    return NextResponse.json(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка чата";
     return NextResponse.json({ error: msg }, { status: 502 });

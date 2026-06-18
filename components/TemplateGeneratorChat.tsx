@@ -1,15 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage, TemplateChatContext } from "@/lib/templateGenerator/chat";
+import type { ChatMessage, TemplateChatContext, AssistantFillAction } from "@/lib/templateGenerator/chat";
 import { homeBtnPrimary, homeInput } from "@/components/homeTheme";
 
 type Props = {
   apiKey: string;
+  serverOpenAi?: boolean;
   messages: ChatMessage[];
   onMessagesChange: (messages: ChatMessage[]) => void;
   context: TemplateChatContext;
   onError?: (message: string) => void;
+  onAssistantAction?: (action: AssistantFillAction) => void;
 };
 
 type SpeechRecognitionCtor = new () => {
@@ -34,10 +36,12 @@ function getSpeechRecognition(): SpeechRecognitionCtor | null {
 
 export function TemplateGeneratorChat({
   apiKey,
+  serverOpenAi,
   messages,
   onMessagesChange,
   context,
-  onError
+  onError,
+  onAssistantAction
 }: Props) {
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -60,8 +64,8 @@ export function TemplateGeneratorChat({
       const trimmed = text.trim();
       if (!trimmed || thinking) return;
 
-      if (!apiKey.trim()) {
-        onError?.("Введите OpenAI API key, чтобы общаться с ассистентом");
+      if (!apiKey.trim() && !serverOpenAi) {
+        onError?.("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
         return;
       }
 
@@ -86,7 +90,11 @@ export function TemplateGeneratorChat({
             context
           })
         });
-        const j = (await res.json()) as { reply?: string; error?: string };
+        const j = (await res.json()) as {
+          reply?: string;
+          action?: AssistantFillAction;
+          error?: string;
+        };
         if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
         const assistantMsg: ChatMessage = {
           id: `${Date.now()}-a`,
@@ -95,13 +103,14 @@ export function TemplateGeneratorChat({
           at: Date.now()
         };
         onMessagesChange([...next, assistantMsg]);
+        if (j.action) onAssistantAction?.(j.action);
       } catch (e) {
         onError?.(e instanceof Error ? e.message : "Ошибка чата");
       } finally {
         setThinking(false);
       }
     },
-    [apiKey, context, messages, onError, onMessagesChange, thinking]
+    [apiKey, serverOpenAi, context, messages, onAssistantAction, onError, onMessagesChange, thinking]
   );
 
   const toggleVoice = useCallback(() => {

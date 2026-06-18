@@ -32,9 +32,11 @@ import { filterRowsForFill } from "@/lib/templateGenerator/workMode";
 import {
   buildCsvSampleRows,
   buildFillPromptFromChat,
+  buildStrictExampleInstructions,
   chatStorageKey,
   newChatId,
   welcomeMessage,
+  type AssistantFillAction,
   type ChatMessage,
   type TemplateChatContext,
   type TemplateProductSample
@@ -43,6 +45,9 @@ import {
   buildExampleReferenceText,
   loadExampleTemplateSamples
 } from "@/lib/templateGenerator/exampleTemplate";
+import { injectVariationProducts } from "@/lib/templateGenerator/injectVariationRows";
+import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
+import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
 import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
 import {
@@ -63,6 +68,23 @@ const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
 const FILL_REQUEST_MS = 280_000;
 const FILL_BATCH_SIZE_DEFAULT = 50;
+
+type RunFillOptions = {
+  variationIds?: number[];
+  strictExample?: boolean;
+  selectionOverride?: ColumnSelection[];
+};
+
+function buildDefaultSelection(scan: TemplateSheetScan): ColumnSelection[] {
+  return scan.columns
+    .filter((c) => !c.readonly && (c.contentDefault || isContentDefaultColumn(c.header)))
+    .map((c) => ({
+      header: c.header,
+      col: c.col,
+      mode: "ai" as const,
+      dropdownSource: defaultDropdownSource(c)
+    }));
+}
 
 function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
   if (values.length <= max) return values;
@@ -761,7 +783,7 @@ export function TemplateGeneratorTool() {
       }));
   }, [scan, enabledCols, strictDropdown, dropdownSource]);
 
-  const runFill = useCallback(async () => {
+  const runFill = useCallback(async (opts?: RunFillOptions) => {
     const wb = wbRef.current;
     if (!wb || !scan) return;
     const key = openaiKey.trim();
@@ -769,15 +791,18 @@ export function TemplateGeneratorTool() {
       setError("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
       return;
     }
-    if (selectionList.length === 0) {
-      setError("Выберите хотя бы один столбец");
+    const activeSelection =
+      opts?.selectionOverride?.length ? opts.selectionOverride : selectionList;
+    if (activeSelection.length === 0) {
+      setError("Выберите хотя бы один столбец (или загрузите шаблон с контентными полями)");
       return;
     }
-    if (workMode === "from_scratch" && (!feedEnabled || !csvTable)) {
+    const byVariationIds = Boolean(opts?.variationIds?.length);
+    if (!byVariationIds && workMode === "from_scratch" && (!feedEnabled || !csvTable)) {
       setError("Режим «С нуля» требует включённый и загруженный CSV-фид");
       return;
     }
-    if (feedEnabled && !csvTable) {
+    if (!byVariationIds && feedEnabled && !csvTable) {
       setError("Включён CSV-фид, но файл не загружен — загрузите фид или снимите галочку «Использовать фид»");
       return;
     }
@@ -792,8 +817,8 @@ export function TemplateGeneratorTool() {
     setBatchNotice("");
 
     const ws = wb.getWorksheet(scan.sheetName)!;
-    const allContexts = collectRowContexts(ws, scan);
-    const selectedHeaders = selectionList.map((s) => s.header);
+    let allContexts = collectRowContexts(ws, scan);
+    const selectedHeaders = activeSelection.map((s) => s.header);
     const csvMapResolved = feedEnabled
       ? enhanceCsvColumnMap(
           csvTable ?? { headers: [], rows: [] },
@@ -808,12 +833,50 @@ export function TemplateGeneratorTool() {
       feedEnabled && csvTable ? buildCsvIndex(csvTable, csvMapResolved) : new Map();
     const feedSkuSet = feedEnabled && csvTable ? new Set(csvIndex.keys()) : null;
 
-    const fillableContexts = filterRowsForFill(allContexts, {
+    let fillableContexts = filterRowsForFill(allContexts, {
       workMode,
       selectedHeaders,
       feedSkuSet,
-      overwriteFilled
+      overwriteFilled: byVariationIds ? true : overwriteFilled
     });
+
+    if (byVariationIds && opts?.variationIds) {
+      try {
+        setProgress(`Metabase: ищу ${opts.variationIds.length} variation_id…`);
+        const mbRes = await fetch("/api/template-generator/metabase-products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ variationIds: opts.variationIds })
+        });
+        const mbJson = (await mbRes.json()) as {
+          products?: {
+            variationId: number;
+            productName: string;
+            brandName: string;
+            imageUrls: string[];
+          }[];
+          missing?: number[];
+          error?: string;
+        };
+        if (!mbRes.ok) throw new Error(mbJson.error ?? `Metabase HTTP ${mbRes.status}`);
+        const products = mbJson.products ?? [];
+        if (!products.length) {
+          throw new Error(
+            `В Metabase не найдено ни одного товара из ${opts.variationIds.length} ID` +
+              (mbJson.missing?.length ? ` (пропущены: ${mbJson.missing.join(", ")})` : "")
+          );
+        }
+        fillableContexts = injectVariationProducts(ws, scan, products);
+        allContexts = collectRowContexts(ws, scan);
+        if (mbJson.missing?.length) {
+          setBatchNotice(`Не найдены в Metabase: ${mbJson.missing.join(", ")}`);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка Metabase");
+        setBusy(false);
+        return;
+      }
+    }
 
     const totalRows = fillableContexts.length;
     if (totalRows === 0) {
@@ -825,14 +888,16 @@ export function TemplateGeneratorTool() {
       setBusy(false);
       return;
     }
-    if (fillRowOffset >= totalRows) {
+    if (!byVariationIds && fillRowOffset >= totalRows) {
       setError("Все строки уже обработаны — загрузите шаблон заново или скачайте файл.");
       setBusy(false);
       return;
     }
 
-    const batchSize = Math.max(1, Math.min(fillBatchSize, 200));
-    const batchStart = fillRowOffset;
+    const batchSize = byVariationIds
+      ? totalRows
+      : Math.max(1, Math.min(fillBatchSize, 200));
+    const batchStart = byVariationIds ? 0 : fillRowOffset;
     const contexts = fillableContexts.slice(batchStart, batchStart + batchSize);
     const batchEnd = batchStart + contexts.length;
     const batchLabel = `строки ${batchStart + 1}–${batchEnd} из ${totalRows}`;
@@ -854,7 +919,7 @@ export function TemplateGeneratorTool() {
       null;
 
     const keepCell = (header: string) =>
-      selectionList.some((s) => s.header === header) ||
+      activeSelection.some((s) => s.header === header) ||
       /название|бренд|артикул|изображение|sku|описание|тип|пол|семейство|нот|объем|объём|линейка|год|тестер/i.test(
         header
       );
@@ -883,7 +948,7 @@ export function TemplateGeneratorTool() {
       );
     }
 
-    const columnMeta = selectionList.map((sel) => {
+    const columnMeta = activeSelection.map((sel) => {
       const c = scan.columns.find((x) => x.header === sel.header);
       if (!c) return null;
       const source = dropdownSource[c.header] ?? defaultDropdownSource(c);
@@ -900,8 +965,15 @@ export function TemplateGeneratorTool() {
     }).filter((x): x is NonNullable<typeof x> => x != null);
 
     const exampleRefText = buildExampleReferenceText(exampleSamples);
-    const fillPrompt = buildFillPromptFromChat(chatMessages, exampleRefText);
-    const applyOverwrite = workMode === "from_scratch" || overwriteFilled;
+    const strictBlock =
+      opts?.strictExample || byVariationIds
+        ? buildStrictExampleInstructions(exampleSamples.length > 0)
+        : "";
+    const fillPrompt = [strictBlock, buildFillPromptFromChat(chatMessages, exampleRefText)]
+      .filter(Boolean)
+      .join("\n\n");
+    const applyOverwrite =
+      byVariationIds || workMode === "from_scratch" || overwriteFilled;
 
     let doneRows = 0;
     try {
@@ -921,7 +993,7 @@ export function TemplateGeneratorTool() {
                 body: JSON.stringify({
                   openaiApiKey: key,
                   userPrompt: fillPrompt,
-                  columns: selectionList,
+                  columns: activeSelection,
                   columnMeta,
                   rows,
                   skipWebContext: false,
@@ -963,7 +1035,7 @@ export function TemplateGeneratorTool() {
         applyFillResults(
           ws,
           scan,
-          selectionList,
+          activeSelection,
           allResults,
           DEFAULT_PHOTO_REVIEW_COLUMN,
           applyOverwrite,
@@ -1054,6 +1126,37 @@ export function TemplateGeneratorTool() {
     exampleSamples,
     serverStatus
   ]);
+
+  const handleAssistantAction = useCallback(
+    async (action: AssistantFillAction) => {
+      if (action.type !== "start_fill") return;
+      if (!wbRef.current || !scan) {
+        setError("Сначала загрузите Excel-шаблон");
+        return;
+      }
+      if (action.strictExample && !exampleSamples.length) {
+        void eventReply(
+          "Эталон не загружен — заполню по Metabase и правилам из чата. Для строгого копирования стиля загрузите образец."
+        );
+      }
+      const selectionOverride =
+        selectionList.length > 0 ? undefined : buildDefaultSelection(scan);
+      if (selectionOverride?.length) {
+        setEnabledCols((prev) => {
+          const next = { ...prev };
+          for (const s of selectionOverride) next[s.header] = true;
+          return next;
+        });
+        setStep(2);
+      }
+      await runFill({
+        variationIds: action.variationIds,
+        strictExample: action.strictExample,
+        selectionOverride
+      });
+    },
+    [scan, selectionList, exampleSamples, eventReply, runFill]
+  );
 
   const download = useCallback(
     async (part?: number) => {
@@ -1423,10 +1526,12 @@ export function TemplateGeneratorTool() {
 
             <TemplateGeneratorChat
               apiKey={openaiKey}
+              serverOpenAi={serverStatus?.openai}
               messages={chatMessages}
               onMessagesChange={setChatMessages}
               context={chatContext}
               onError={setError}
+              onAssistantAction={(action) => void handleAssistantAction(action)}
             />
 
             {scan ? (

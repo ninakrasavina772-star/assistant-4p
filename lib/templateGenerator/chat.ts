@@ -1,5 +1,6 @@
 import type { CsvColumnMap, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import type { CsvTable } from "@/lib/templateGenerator/csvIndex";
+import { parseVariationIdsFromList } from "@/lib/templateGenerator/parseVariationIds";
 
 export type ChatRole = "user" | "assistant";
 
@@ -54,29 +55,73 @@ export type TemplateChatContext = {
   exampleSamples?: TemplateProductSample[];
 };
 
+export type AssistantFillAction = {
+  type: "start_fill";
+  /** Если пусто — заполнить текущую партию шаблона как кнопка «Запустить AI» */
+  variationIds?: number[];
+  strictExample: boolean;
+};
+
+export type ChatAssistantResult = {
+  reply: string;
+  action?: AssistantFillAction;
+};
+
+const START_FILL_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "start_template_fill",
+    description:
+      "Запустить AI-заполнение Excel-шаблона. Товары по variation_id подтягиваются из Metabase. " +
+      "Вызывай, когда пользователь просит заполнить/сгенерировать шаблон или даёт список ID вариаций.",
+    parameters: {
+      type: "object",
+      properties: {
+        variation_ids: {
+          type: "array",
+          items: { type: "integer" },
+          description:
+            "Список variation_id (числовые ID). Если пользователь не указал ID — передай пустой массив."
+        },
+        strict_example: {
+          type: "boolean",
+          description:
+            "true — строго копировать стиль эталона заполнения (если образец загружен). По умолчанию true."
+        }
+      },
+      required: ["variation_ids"]
+    }
+  }
+};
+
 const CHAT_SYSTEM = `Ты ассистент «Генератор шаблонов» для контент-отдела (любая витрина: Ozon, Яндекс Маркет, Wildberries и др.).
 
 ЗАЧЕМ ТЫ НУЖЕН:
-- Ты НЕ заполняешь Excel сам — это кнопка «Запустить AI» на странице.
+- Помогаешь спланировать заполнение и ЗАПУСКАЕШЬ его по команде через инструмент start_template_fill.
 - Два сценария:
-  1) «Дополнить» — в шаблоне уже есть товары и часть полей; заполняем только пустое (фид → AI для пробелов).
-  2) «С нуля» — шаблон витрины + фид; сопоставляешь колонки, задаёшь правила (язык названия, стиль нот и т.д.), затем массовое заполнение.
-- Всё, что пользователь напишет или продиктует — станет заданием для AI на каждой строке.
+  1) «Дополнить» — в шаблоне уже есть товары; заполняем пустое (фид → AI для пробелов).
+  2) «По списку variation_id» — пользователь даёт ID вариаций (числа); Metabase найдёт товар, строки появятся в шаблоне, AI заполнит поля.
+- Всё, что пользователь напишет — станет заданием для AI на каждой строке.
+
+ЗАПУСК ЗАПОЛНЕНИЯ (инструмент start_template_fill):
+- Команды: «заполни», «запусти генерацию», «сделай шаблон», «заполни ID 123 456», список чисел.
+- variation_ids — числовые ID из Metabase (variation_id). Извлекай из сообщения все числа.
+- Если ID не указаны, но просят запустить — передай variation_ids: [].
+- strict_example: true если загружен эталон (образец) — копируем стиль образца.
+- Перед запуском: шаблон должен быть загружен. Если нет — попроси загрузить, инструмент не вызывай.
+- Metabase подключён — foto, название и бренд подтягиваются автоматически.
 
 ВАЖНО — данные в контексте ниже:
 - Если есть примеры товаров — НЕ проси бренд/SKU заново.
-- Если фид включён — подскажи сопоставление колонок фида и шаблона.
-- Если фид выключен — допустимо только AI по названию и бренду.
-- Если есть «Эталон заполнения» — ориентируйся на стиль и формат образца.
-- Если пользователь просит проверить сопоставление — перечисли неясные поля и задай конкретные вопросы ДО запуска.
+- Если есть «Эталон заполнения» — при запуске strict_example=true, AI копирует формат образца.
+- Если пользователь просит проверить сопоставление — задай вопросы ДО запуска (без инструмента).
 
 Твоя роль:
-- Русский язык, кратко. Порядок: шаблон → (фид) → режим → столбцы → задание в чате → запуск партиями.
-- Помогай с правилами полей: «название на русском», «ноты кратко», «описание до N символов».
-- Напоминай про галочки столбцов и партии по ~50 строк.
-- Не выдумывай, что заполнение уже идёт.
+- Русский язык, кратко.
+- Помогай с правилами полей: «название на русском», «ноты кратко».
+- После вызова инструмента кратко подтверди: сколько ID, что будет сделано, что Excel скачается автоматически.
 
-Отвечай обычным текстом, без JSON.`;
+Отвечай обычным текстом (кроме вызова инструмента).`;
 
 const PREVIEW_KEYS = [
   "бренд",
@@ -146,21 +191,20 @@ export function welcomeMessage(): ChatMessage {
     content: `Привет! Я ассистент генератора шаблонов для любой витрины.
 
 Зачем я здесь:
-• Помогаю спланировать заполнение ДО кнопки «Запустить AI».
-• Запоминаю ваши правила — они уйдут в задание для AI на каждой строке.
-• Можно писать или нажать 🎤 и продиктовать (например: «название на русском, ноты кратко»).
+• Помогаю спланировать заполнение и **запускаю его по вашей команде**.
+• Запоминаю правила — они уйдут в задание для AI на каждой строке.
+• Можно писать или нажать 🎤 и продиктовать.
 
-Два режима работы:
-1. Дополнить — шаблон уже с товарами, часть полей заполнена. Берём фид где есть, пустое добиваем AI. Готовые ячейки не трогаем.
-2. С нуля — шаблон витрины + фид. Сопоставляем колонки, вы задаёте правила в чате, заполняем товары из фида.
+Как запустить заполнение:
+1. Загрузите Excel-шаблон (и при необходимости **эталон заполнения**).
+2. Напишите в чат, например:
+   «Заполни variation_id: 7127308278, 7127308279»
+   или «Запусти генерацию для этих ID: …»
+3. Я найду товары в Metabase, заполню шаблон по образцу и **скачайте Excel** автоматически.
 
-Как начать:
-1. Загрузите Excel-шаблон витрины.
-2. При необходимости включите фид и загрузите CSV.
-3. Выберите режим и опишите правила в чате.
-4. Отметьте столбцы → запуск партиями по ~50 строк.
+Без списка ID можно сказать «запусти заполнение» — обработаю текущую партию шаблона.
 
-Я не заполняю файл сам — только консультирую. С чего начнём?`
+С чего начнём?`
   };
 }
 
@@ -267,6 +311,12 @@ export function buildContextBlock(ctx: TemplateChatContext): string {
     lines.push(`Фото: цель ${ctx.photoTarget}, мин ${ctx.photoMin}, режим ${mode}`);
   }
 
+  lines.push(
+    "",
+    "Metabase: подключён — по variation_id можно искать товар и foto.",
+    "Запуск заполнения: через инструмент start_template_fill (список variation_id или текущая партия)."
+  );
+
   return lines.join("\n");
 }
 
@@ -295,12 +345,27 @@ export function buildFillPromptFromChat(
   return parts.join("\n");
 }
 
+export function buildStrictExampleInstructions(hasExample: boolean): string {
+  if (!hasExample) {
+    return (
+      "Заполняй профессионально по данным Metabase, названию и бренду. " +
+      "Эталон не загружен — придерживайся стандартного стиля маркетплейса."
+    );
+  }
+  return (
+    "СТРОГИЙ РЕЖИМ ЭТАЛОНА:\n" +
+    "- Копируй ТОЧНО формат, стиль, длину и структуру полей как в образце.\n" +
+    "- Не выдумывай факты — только данные товара, Metabase и официальный сайт бренда.\n" +
+    "- Тон, пунктуация, регистр, разделители — как в эталоне."
+  );
+}
+
 export async function runTemplateAssistantChat(
   apiKey: string,
   messages: ChatMessage[],
   context: TemplateChatContext,
   model?: string
-): Promise<string> {
+): Promise<ChatAssistantResult> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -309,11 +374,13 @@ export async function runTemplateAssistantChat(
     },
     body: JSON.stringify({
       model: model?.trim() || "gpt-4o-mini",
-      temperature: 0.4,
+      temperature: 0.35,
       messages: [
         { role: "system", content: `${CHAT_SYSTEM}\n\n${buildContextBlock(context)}` },
         ...messages.map((m) => ({ role: m.role, content: m.content }))
-      ]
+      ],
+      tools: [START_FILL_TOOL],
+      tool_choice: "auto"
     })
   });
 
@@ -323,7 +390,61 @@ export async function runTemplateAssistantChat(
   }
 
   const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: {
+      message?: {
+        content?: string | null;
+        tool_calls?: {
+          id: string;
+          type: string;
+          function?: { name?: string; arguments?: string };
+        }[];
+      };
+    }[];
   };
-  return String(data.choices?.[0]?.message?.content ?? "").trim() || "Понял. Что ещё уточнить перед запуском?";
+
+  const message = data.choices?.[0]?.message;
+  const toolCall = message?.tool_calls?.find((t) => t.function?.name === "start_template_fill");
+
+  if (toolCall?.function?.arguments) {
+    let args: { variation_ids?: unknown; strict_example?: boolean } = {};
+    try {
+      args = JSON.parse(toolCall.function.arguments) as typeof args;
+    } catch {
+      args = {};
+    }
+
+    const variationIds = parseVariationIdsFromList(args.variation_ids, 50);
+    const hasExample = Boolean(context.exampleSamples?.length);
+    const strictExample = args.strict_example !== false && hasExample;
+
+    if (!context.templateFile) {
+      return {
+        reply:
+          "Сначала загрузите Excel-шаблон на странице (кнопка «Загрузить шаблон»), затем повторите команду с ID вариаций."
+      };
+    }
+
+    const action: AssistantFillAction = {
+      type: "start_fill",
+      variationIds: variationIds.length ? variationIds : undefined,
+      strictExample
+    };
+
+    const idLine = variationIds.length
+      ? `${variationIds.length} variation_id: ${variationIds.slice(0, 8).join(", ")}${variationIds.length > 8 ? "…" : ""}`
+      : "текущая партия строк шаблона";
+
+    const reply =
+      message?.content?.trim() ||
+      `Запускаю заполнение (${idLine}).` +
+        `${hasExample && strictExample ? " Стиль — строго по эталону." : ""}` +
+        " Metabase подтянет foto и данные. Excel скачается автоматически по готовности.";
+
+    return { reply, action };
+  }
+
+  const text = String(message?.content ?? "").trim();
+  return {
+    reply: text || "Понял. Что ещё уточнить перед запуском?"
+  };
 }
