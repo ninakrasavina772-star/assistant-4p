@@ -16,6 +16,8 @@ export type LetualVariationRow = {
   ean: string | null;
   productName: string;
   brandName: string;
+  /** Главное фото из product_variation_main_image */
+  mainImageUrl: string | null;
   imageUrls: string[];
 };
 
@@ -69,12 +71,17 @@ function parseImageHashes(raw: unknown): string[] {
   return [...new Set(s.split(/\s+/).filter((h) => /^[0-9a-f]{40,}$/i.test(h)))];
 }
 
-/** CDN из hash (карточка) + свои ссылки; parfimo только если hash нет. */
+/** Lifestyle-кадры поставщика (цветы, ингредиенты) — не packshot товара. */
+function isLifestyleSupplierUrl(url: string): boolean {
+  return /cdnbigbuy\.com\/images\/\d+_R(?:10|20|30)\b/i.test(url);
+}
+
+/** CDN из hash (карточка). Доп. hash из link — только если нет main. */
 function mergeLetualImageUrls(
   mainImageHash: string | null,
   linkHashes: string[],
   linkUrls: string[]
-): string[] {
+): { mainImageUrl: string | null; imageUrls: string[] } {
   const fromHashes: string[] = [];
   const seenHashKeys = new Set<string>();
 
@@ -89,16 +96,26 @@ function mergeLetualImageUrls(
   };
 
   addHash(mainImageHash);
-  for (const h of linkHashes) addHash(h);
-
-  if (fromHashes.length) {
-    const ownCdn = linkUrls
-      .map((u) => normalize4standHugeWebp(u))
-      .filter((u) => /cdnru\.4stand|deloox/i.test(u));
-    return dedupeAndNormalizeFotoUrls([...fromHashes, ...ownCdn]);
+  if (!fromHashes.length) {
+    for (const h of linkHashes) addHash(h);
   }
 
-  return dedupeAndNormalizeFotoUrls(linkUrls);
+  const filteredLinks = linkUrls
+    .map((u) => normalize4standHugeWebp(u))
+    .filter((u) => !isLifestyleSupplierUrl(u));
+
+  const mainImageUrl = fromHashes[0] ?? null;
+
+  if (fromHashes.length) {
+    const ownCdn = filteredLinks.filter((u) => /cdnru\.4stand|deloox/i.test(u));
+    const merged = dedupeAndNormalizeFotoUrls([...fromHashes, ...ownCdn]);
+    return { mainImageUrl, imageUrls: merged };
+  }
+
+  return {
+    mainImageUrl: filteredLinks[0] ?? null,
+    imageUrls: dedupeAndNormalizeFotoUrls(filteredLinks)
+  };
 }
 
 export async function fetchLetualVariations(
@@ -145,17 +162,21 @@ export async function fetchLetualVariations(
     image_urls: string | null;
   }>(sql, creds);
 
-  return rows.map((r) => ({
-    variationId: Number(r.variation_id),
-    ean: r.ean ? String(r.ean).trim() : null,
-    productName: String(r.product_name ?? "").trim(),
-    brandName: String(r.brand_name ?? "").trim(),
-    imageUrls: mergeLetualImageUrls(
+  return rows.map((r) => {
+    const merged = mergeLetualImageUrls(
       r.main_image_hash ? String(r.main_image_hash).trim() : null,
       parseImageHashes(r.image_hashes),
       parseImageUrls(r.image_urls)
-    )
-  }));
+    );
+    return {
+      variationId: Number(r.variation_id),
+      ean: r.ean ? String(r.ean).trim() : null,
+      productName: String(r.product_name ?? "").trim(),
+      brandName: String(r.brand_name ?? "").trim(),
+      mainImageUrl: merged.mainImageUrl,
+      imageUrls: merged.imageUrls
+    };
+  });
 }
 
 export { metabaseIsConfigured, DEFAULT_METABASE_URL, DEFAULT_METABASE_DB_ID };

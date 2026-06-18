@@ -38,6 +38,7 @@ async function tryProcessCandidates(
 function buildDbComment(best: LetualPhotoScore | undefined): string {
   if (!best || best.suitable) return "";
   const notes: string[] = [];
+  if (best.hasBox) notes.push("в кадре коробка — вырезание флакона");
   if (!best.hasWhiteBackground) notes.push("фон не белый — вырезание");
   if (!best.isFrontal) notes.push("ракурс — проверить");
   if (best.quality < 50) notes.push("низкое качество источника");
@@ -45,7 +46,12 @@ function buildDbComment(best: LetualPhotoScore | undefined): string {
     notes.push(best.reason);
   }
   if (!notes.length) return "";
-  return `Фото из БД (запасной вариант): ${notes.join("; ")}`;
+  return `Главное фото: ${notes.join("; ")}`;
+}
+
+function dbPhotoNeedsWebFallback(ranked: LetualPhotoScore[]): boolean {
+  if (!ranked.length) return true;
+  return !ranked.some((r) => r.hasProduct);
 }
 
 function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
@@ -54,9 +60,10 @@ function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | un
   return [...suitable].sort((a, b) => b.score - a.score)[0];
 }
 
-function lastResortDbUrls(urls: string[]): string[] {
-  const own = urls.filter((u) => /cdnru\.4stand|deloox/i.test(u));
-  const rest = urls.filter((u) => !own.includes(u));
+function lastResortDbUrls(urls: string[], mainImageUrl?: string | null): string[] {
+  const ordered = mainImageUrl ? [mainImageUrl, ...urls] : urls;
+  const own = ordered.filter((u) => /cdnru\.4stand|deloox/i.test(u));
+  const rest = ordered.filter((u) => !own.includes(u));
   return [...new Set([...own, ...rest])];
 }
 
@@ -167,16 +174,40 @@ export async function processLetualByVariationId(
     let rankedFromDb: LetualPhotoScore[] = [];
     let dbFallback: LetualPhotoScore | undefined;
 
-    if (row.imageUrls.length) {
-      const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
-      rankedFromDb = picked.ranked;
+    const galleryUrls = row.imageUrls.filter((u) => u !== row.mainImageUrl);
+
+    if (row.mainImageUrl) {
+      const mainPick = await pickSuitableLetualPhoto([row.mainImageUrl], key);
+      rankedFromDb = mainPick.ranked;
+
+      const mainSuitable = findSuitableInRanked(mainPick.ranked);
+      if (mainSuitable?.url) {
+        sourceUrl = mainSuitable.url;
+        comment = buildDbComment(mainSuitable);
+      } else {
+        const mainBest = mainPick.ranked[0];
+        if (mainBest?.hasProduct) {
+          candidateUrls.push(mainBest.url);
+          comment = buildDbComment(mainBest);
+          dbFallback = mainBest;
+        }
+      }
+    }
+
+    if (!sourceUrl && !candidateUrls.length && galleryUrls.length) {
+      const picked = await pickSuitableLetualPhoto(galleryUrls, key);
+      rankedFromDb = [...rankedFromDb, ...picked.ranked];
 
       const suitable = findSuitableInRanked(picked.ranked);
       if (suitable?.url) {
         sourceUrl = suitable.url;
         comment = buildDbComment(suitable);
       } else {
-        dbFallback = pickBestFromRanked(picked.ranked);
+        dbFallback = pickBestFromRanked(picked.ranked) ?? dbFallback;
+        if (dbFallback?.url && !candidateUrls.includes(dbFallback.url)) {
+          candidateUrls.push(dbFallback.url);
+          comment = buildDbComment(dbFallback);
+        }
       }
     }
 
@@ -198,7 +229,7 @@ export async function processLetualByVariationId(
           candidateUrls.push(dbFallback.url);
           comment = webFallbackComment(buildDbComment(dbFallback));
         } else {
-          for (const u of lastResortDbUrls(row.imageUrls).slice(0, 4)) {
+          for (const u of lastResortDbUrls(row.imageUrls, row.mainImageUrl).slice(0, 4)) {
             candidateUrls.push(u);
           }
           comment = webFallbackComment("");
@@ -208,11 +239,14 @@ export async function processLetualByVariationId(
 
     const tryList: string[] = [];
     if (sourceUrl) tryList.push(sourceUrl);
+    if (row.mainImageUrl && !tryList.includes(row.mainImageUrl)) {
+      tryList.push(row.mainImageUrl);
+    }
     for (const u of candidateUrls) {
       if (u && !tryList.includes(u)) tryList.push(u);
     }
     for (const r of rankedFromDb) {
-      if (r.url && !r.hasBox && !r.hasInfographic && !tryList.includes(r.url)) {
+      if (r.url && r.hasProduct && !tryList.includes(r.url)) {
         tryList.push(r.url);
       }
     }
