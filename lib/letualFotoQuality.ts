@@ -1,19 +1,20 @@
 import sharp from "sharp";
-import { preferOzonFullSizeUrl } from "@/lib/podruzhkaImageFetch";
+import { preferOzonFullSizeUrl, fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import {
   dedupeAndNormalizeFotoUrls,
   normalize4standHugeWebp
 } from "@/lib/podruzhkaFotoPick";
-import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 
 export type LetualTechnicalScore = {
   url: string;
+  originalUrl: string;
   width: number;
   height: number;
   pixels: number;
   bytes: number;
   sharpness: number;
   technicalScore: number;
+  downloadable: true;
 };
 
 /** Максимальное разрешение: 4stand huge, Ozon -f. */
@@ -27,6 +28,40 @@ export function normalizeLetualSourceUrl(url: string): string {
 export function normalizeLetualFotoUrls(urls: string[]): string[] {
   const normalized = urls.map(normalizeLetualSourceUrl);
   return dedupeAndNormalizeFotoUrls(normalized);
+}
+
+function urlCandidates(raw: string): string[] {
+  const t = raw.trim();
+  const out: string[] = [];
+  const add = (u: string) => {
+    if (u && !out.includes(u)) out.push(u);
+  };
+  add(normalizeLetualSourceUrl(t));
+  add(preferOzonFullSizeUrl(t));
+  add(t);
+  return out;
+}
+
+/** Скачать фото: нормализованный URL, затем оригинал из БД. */
+export async function fetchLetualImageDetailed(
+  rawUrl: string
+): Promise<{ buf: Buffer; usedUrl: string; originalUrl: string } | null> {
+  const originalUrl = rawUrl.trim();
+  for (const candidate of urlCandidates(originalUrl)) {
+    const fetched = await fetchPodruzhkaProductImageDetailed(candidate);
+    if (fetched.buf?.length) {
+      return { buf: fetched.buf, usedUrl: candidate, originalUrl };
+    }
+  }
+  return null;
+}
+
+export function hostPriorityScore(url: string): number {
+  const u = url.toLowerCase();
+  if (/cdnru\.4stand|4partners|deloox\.com/.test(u)) return 250;
+  if (/ozon|goldapple|letu\.ru/.test(u)) return 120;
+  if (/makeupstore|parfimo|notino|douglas/.test(u)) return -80;
+  return 0;
 }
 
 function urlResolutionHint(url: string): number {
@@ -69,10 +104,11 @@ export async function measureImageSharpness(buf: Buffer): Promise<number> {
   return Math.max(0, variance);
 }
 
-export async function measureLetualTechnicalScore(url: string): Promise<LetualTechnicalScore | null> {
-  const norm = normalizeLetualSourceUrl(url);
-  const fetched = await fetchPodruzhkaProductImageDetailed(norm);
-  if (!fetched.buf?.length) return null;
+export async function measureLetualTechnicalScore(
+  rawUrl: string
+): Promise<LetualTechnicalScore | null> {
+  const fetched = await fetchLetualImageDetailed(rawUrl);
+  if (!fetched) return null;
 
   const meta = await sharp(fetched.buf).metadata();
   const width = meta.width ?? 0;
@@ -85,26 +121,45 @@ export async function measureLetualTechnicalScore(url: string): Promise<LetualTe
     Math.min(pixels / 2500, 400) +
     Math.min(sharpness / 4, 120) +
     Math.min(bytes / 8000, 80) +
-    urlResolutionHint(norm);
+    urlResolutionHint(fetched.usedUrl) +
+    hostPriorityScore(fetched.usedUrl);
 
   return {
-    url: norm,
+    url: fetched.usedUrl,
+    originalUrl: fetched.originalUrl,
     width,
     height,
     pixels,
     bytes,
     sharpness,
-    technicalScore
+    technicalScore,
+    downloadable: true
   };
+}
+
+/** Только URL, которые реально скачиваются. */
+export async function filterDownloadableLetualUrls(urls: string[]): Promise<string[]> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of urls) {
+    const t = raw.trim();
+    if (!t.startsWith("http") || seen.has(t)) continue;
+    const ok = await fetchLetualImageDetailed(t);
+    if (ok) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
 }
 
 /** Предварительный ранжир по разрешению и резкости (без AI). */
 export async function rankLetualUrlsByTechnicalQuality(
   urls: string[]
 ): Promise<LetualTechnicalScore[]> {
-  const list = normalizeLetualFotoUrls(urls);
+  const downloadable = await filterDownloadableLetualUrls(urls);
   const measured = (
-    await Promise.all(list.map((url) => measureLetualTechnicalScore(url)))
+    await Promise.all(downloadable.map((url) => measureLetualTechnicalScore(url)))
   ).filter((x): x is LetualTechnicalScore => x !== null);
 
   measured.sort((a, b) => b.technicalScore - a.technicalScore);

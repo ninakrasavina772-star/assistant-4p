@@ -72,13 +72,17 @@ export async function buildLetualVariationResultWorkbook(
   ws.columns = [
     { header: "variation_id", key: "variationId", width: 16 },
     { header: "main_photo_url", key: "resultUrl", width: 72 },
-    { header: "comment", key: "comment", width: 48 }
+    { header: "source_url", key: "sourceUrl", width: 72 },
+    { header: "comment", key: "comment", width: 48 },
+    { header: "error", key: "error", width: 40 }
   ];
   for (const r of rows) {
     ws.addRow({
       variationId: r.variationId ?? "",
-      resultUrl: r.resultUrl,
-      comment: r.comment
+      resultUrl: r.ok ? r.resultUrl : "",
+      sourceUrl: r.sourceUrl ?? "",
+      comment: r.comment,
+      error: r.ok ? "" : (r.error ?? "ошибка")
     });
   }
   const buf = await wb.xlsx.writeBuffer();

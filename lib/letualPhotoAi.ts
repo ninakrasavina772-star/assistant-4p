@@ -1,7 +1,7 @@
-import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import {
+  fetchLetualImageDetailed,
   normalizeLetualSourceUrl,
-  normalizeLetualFotoUrls,
+  filterDownloadableLetualUrls,
   rankLetualUrlsByTechnicalQuality,
   type LetualTechnicalScore
 } from "@/lib/letualFotoQuality";
@@ -13,6 +13,7 @@ export type LetualPhotoScore = {
   hasBox: boolean;
   hasInfographic: boolean;
   isFrontal: boolean;
+  hasWhiteBackground: boolean;
   quality: number;
   sharpness: number;
   pixels: number;
@@ -24,6 +25,7 @@ type VisionJson = {
   has_box?: boolean;
   has_infographic?: boolean;
   is_frontal?: boolean;
+  has_white_background?: boolean;
   quality?: number;
   reason?: string;
 };
@@ -32,45 +34,44 @@ const SYSTEM = `Ты эксперт по требованиям маркетпл
 
 Оцени изображение СТРОГО:
 
-is_frontal — true ТОЛЬКО если товар стоит прямо к зрителю:
-- лицевая сторона параллельна камере, этикетка/логотип по центру;
-- флакон НЕ повёрнут влево/вправо, НЕ в ракурсе 3/4, не видна боковая грань шире 10%;
-- если видно, что товар развёрнут вправо или влево — is_frontal: false.
+is_frontal — true ТОЛЬКО если товар стоит прямо к зрителю (не 3/4, не поворот влево/вправо).
+has_white_background — true ТОЛЬКО если фон белый #FFFFFF или очень светлый однотонный студийный (не цветной, не градиент, не интерьер).
+has_box — коробка рядом или товар в коробке.
+has_infographic — текст, бейджи, коллаж, lifestyle, модель.
+quality — 0–100: резкость (мутное < 45, чёткий packshot 75+).
 
-has_box — картонная коробка рядом или товар в коробке.
-has_infographic — текст, бейджи, коллаж, lifestyle, модель, инфографика.
-quality — 0–100: резкость и чёткость (мутное, размытое, JPEG-артефакты → ниже 45; чёткий packshot → 75+).
+suitable — true ТОЛЬКО если: is_frontal=true, has_white_background=true, has_box=false, has_infographic=false, quality>=50.
 
-suitable — true ТОЛЬКО если: is_frontal=true, has_box=false, has_infographic=false, quality>=50.
-
-JSON: {"suitable":true,"has_box":false,"has_infographic":false,"is_frontal":true,"quality":82,"reason":"..."}`;
+JSON: {"suitable":true,"has_box":false,"has_infographic":false,"is_frontal":true,"has_white_background":true,"quality":82,"reason":"..."}`;
 
 const MIN_QUALITY = 50;
 const MIN_SHARPNESS = 18;
-const VISION_TOP = 10;
+const VISION_TOP = 12;
 
-async function imageToDataUrl(url: string): Promise<string | null> {
-  const norm = normalizeLetualSourceUrl(url);
-  const fetched = await fetchPodruzhkaProductImageDetailed(norm);
-  if (!fetched.buf?.length) return null;
+async function imageToDataUrl(rawUrl: string): Promise<{ dataUrl: string; usedUrl: string } | null> {
+  const fetched = await fetchLetualImageDetailed(rawUrl);
+  if (!fetched) return null;
   const b64 = fetched.buf.toString("base64");
-  const mime = norm.toLowerCase().includes(".png") ? "image/png" : "image/jpeg";
-  return `data:${mime};base64,${b64}`;
+  const mime = fetched.usedUrl.toLowerCase().includes(".png") ? "image/png" : "image/jpeg";
+  return { dataUrl: `data:${mime};base64,${b64}`, usedUrl: fetched.usedUrl };
 }
 
 function combineScore(
   vision: VisionJson,
-  technical: LetualTechnicalScore | undefined
+  technical: LetualTechnicalScore | undefined,
+  usedUrl: string
 ): LetualPhotoScore {
   const quality = Math.max(0, Math.min(100, Number(vision.quality) || 0));
   const hasBox = Boolean(vision.has_box);
   const hasInfographic = Boolean(vision.has_infographic);
   const isFrontal = Boolean(vision.is_frontal);
+  const hasWhiteBackground = Boolean(vision.has_white_background);
   const sharpness = technical?.sharpness ?? 0;
   const pixels = technical?.pixels ?? 0;
 
   const suitable =
     isFrontal &&
+    hasWhiteBackground &&
     !hasBox &&
     !hasInfographic &&
     quality >= MIN_QUALITY &&
@@ -81,6 +82,8 @@ function combineScore(
   score += Math.min(pixels / 5000, 50);
   if (isFrontal) score += 80;
   else score -= 150;
+  if (hasWhiteBackground) score += 70;
+  else score -= 120;
   if (!hasBox) score += 15;
   if (!hasInfographic) score += 15;
   if (hasBox) score -= 80;
@@ -89,6 +92,9 @@ function combineScore(
   if (sharpness < MIN_SHARPNESS) score -= 30;
 
   let reason = String(vision.reason ?? "").trim();
+  if (!hasWhiteBackground) {
+    reason = reason ? `${reason}; фон не белый` : "Фон не белый/светлый";
+  }
   if (!isFrontal && !reason.includes("фронт")) {
     reason = reason ? `${reason}; не фронтальный ракурс` : "Не фронтальный ракурс";
   }
@@ -97,12 +103,13 @@ function combineScore(
   }
 
   return {
-    url: technical?.url ?? "",
+    url: usedUrl,
     score,
     suitable,
     hasBox,
     hasInfographic,
     isFrontal,
+    hasWhiteBackground,
     quality,
     sharpness,
     pixels,
@@ -111,27 +118,13 @@ function combineScore(
 }
 
 async function scoreOneUrl(
-  url: string,
+  rawUrl: string,
   technical: LetualTechnicalScore | undefined,
   openaiApiKey: string,
   model: string
-): Promise<LetualPhotoScore> {
-  const norm = normalizeLetualSourceUrl(url);
-  const dataUrl = await imageToDataUrl(norm);
-  if (!dataUrl) {
-    return {
-      url: norm,
-      score: 0,
-      suitable: false,
-      hasBox: true,
-      hasInfographic: true,
-      isFrontal: false,
-      quality: 0,
-      sharpness: technical?.sharpness ?? 0,
-      pixels: technical?.pixels ?? 0,
-      reason: "Не удалось скачать"
-    };
-  }
+): Promise<LetualPhotoScore | null> {
+  const img = await imageToDataUrl(rawUrl);
+  if (!img) return null;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -150,9 +143,9 @@ async function scoreOneUrl(
           content: [
             {
               type: "text",
-              text: "Оцени packshot для главного фото Летуаль. Фронтальный ракурс обязателен."
+              text: "Оцени packshot для главного фото Летуаль. Белый фон и фронтальный ракурс обязательны."
             },
-            { type: "image_url", image_url: { url: dataUrl, detail: "high" } }
+            { type: "image_url", image_url: { url: img.dataUrl, detail: "high" } }
           ]
         }
       ]
@@ -160,21 +153,7 @@ async function scoreOneUrl(
     signal: AbortSignal.timeout(60_000)
   });
 
-  if (!res.ok) {
-    const err = await res.text().catch(() => "");
-    return {
-      url: norm,
-      score: 0,
-      suitable: false,
-      hasBox: true,
-      hasInfographic: true,
-      isFrontal: false,
-      quality: 0,
-      sharpness: technical?.sharpness ?? 0,
-      pixels: technical?.pixels ?? 0,
-      reason: `OpenAI ${res.status}: ${err.slice(0, 120)}`
-    };
-  }
+  if (!res.ok) return null;
 
   const json = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
@@ -186,49 +165,76 @@ async function scoreOneUrl(
     parsed = {};
   }
 
-  const merged = combineScore(parsed, technical);
-  merged.url = norm;
-  return merged;
+  return combineScore(parsed, technical, img.usedUrl);
 }
 
 export function pickBestFromRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
-  const frontalOk = ranked.filter((r) => r.suitable && r.isFrontal);
-  if (frontalOk.length) {
-    return [...frontalOk].sort((a, b) => b.score - a.score)[0];
+  const suitable = ranked.filter((r) => r.suitable);
+  if (suitable.length) {
+    return [...suitable].sort((a, b) => b.score - a.score)[0];
   }
 
-  const frontalAny = ranked.filter((r) => r.isFrontal && !r.hasBox && !r.hasInfographic);
-  if (frontalAny.length) {
-    return [...frontalAny].sort((a, b) => b.score - a.score)[0];
+  const whiteFrontal = ranked.filter(
+    (r) => r.isFrontal && r.hasWhiteBackground && !r.hasBox && !r.hasInfographic
+  );
+  if (whiteFrontal.length) {
+    return [...whiteFrontal].sort((a, b) => b.score - a.score)[0];
   }
 
-  return [...ranked].sort((a, b) => b.score - a.score)[0];
+  const frontal = ranked.filter((r) => r.isFrontal && !r.hasBox && !r.hasInfographic);
+  if (frontal.length) {
+    return [...frontal].sort((a, b) => b.score - a.score)[0];
+  }
+
+  return ranked.length ? [...ranked].sort((a, b) => b.score - a.score)[0] : undefined;
 }
 
-/** Выбрать лучшее фото: сначала тех. качество, затем AI (фронт + резкость). */
+/** Выбрать лучшее фото среди скачиваемых URL. */
 export async function pickBestLetualPhoto(
   urls: string[],
   openaiApiKey: string,
   model = "gpt-4o-mini"
-): Promise<{ url: string; ranked: LetualPhotoScore[] }> {
-  const list = normalizeLetualFotoUrls(urls);
-  if (!list.length) return { url: "", ranked: [] };
+): Promise<{ url: string; ranked: LetualPhotoScore[]; downloadableCount: number }> {
+  const downloadable = await filterDownloadableLetualUrls(urls);
+  if (!downloadable.length) {
+    return { url: "", ranked: [], downloadableCount: 0 };
+  }
 
-  const technicalRanked = await rankLetualUrlsByTechnicalQuality(list);
-  const technicalByUrl = new Map(technicalRanked.map((t) => [t.url, t]));
-
-  const forVision =
-    technicalRanked.length > 0
-      ? technicalRanked.slice(0, VISION_TOP).map((t) => t.url)
-      : list.slice(0, VISION_TOP);
-
-  const ranked = await Promise.all(
-    forVision.map((url) =>
-      scoreOneUrl(url, technicalByUrl.get(normalizeLetualSourceUrl(url)), openaiApiKey, model)
-    )
+  const technicalRanked = await rankLetualUrlsByTechnicalQuality(downloadable);
+  const technicalByRaw = new Map(
+    technicalRanked.map((t) => [t.originalUrl, t])
   );
+
+  const forVision = downloadable.slice(0, VISION_TOP);
+
+  const ranked = (
+    await Promise.all(
+      forVision.map((raw) =>
+        scoreOneUrl(raw, technicalByRaw.get(raw), openaiApiKey, model)
+      )
+    )
+  ).filter((x): x is LetualPhotoScore => x !== null);
+
   ranked.sort((a, b) => b.score - a.score);
 
   const best = pickBestFromRanked(ranked);
-  return { url: best?.url ?? forVision[0] ?? "", ranked };
+  return {
+    url: best?.url ?? "",
+    ranked,
+    downloadableCount: downloadable.length
+  };
+}
+
+export async function pickSuitableLetualPhoto(
+  urls: string[],
+  openaiApiKey: string
+): Promise<{ url: string; ranked: LetualPhotoScore[]; best?: LetualPhotoScore }> {
+  const picked = await pickBestLetualPhoto(urls, openaiApiKey);
+  const best = pickBestFromRanked(picked.ranked);
+  const suitableUrl = best?.suitable ? best.url : "";
+  return {
+    url: suitableUrl,
+    ranked: picked.ranked,
+    best
+  };
 }

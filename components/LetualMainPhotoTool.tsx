@@ -67,6 +67,7 @@ export function LetualMainPhotoTool() {
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<LetualResultRow[]>([]);
   const [resultBlob, setResultBlob] = useState<{ blob: Blob; name: string } | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<{
     storage: boolean;
     metabase: boolean;
@@ -202,11 +203,26 @@ export function LetualMainPhotoTool() {
         all.push(...part);
         setResults([...all]);
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка обработки");
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }, [metabaseKey, openaiKey, status, syncFromText, tab, text]);
 
+  useEffect(() => {
+    if (!results.length) {
+      setResultBlob(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
       const blob =
         tab === "variations"
-          ? await buildLetualVariationResultWorkbook(all)
-          : await buildLetualUrlResultWorkbook(all);
+          ? await buildLetualVariationResultWorkbook(results)
+          : await buildLetualUrlResultWorkbook(results);
+      if (cancelled) return;
       const suffix = new Date().toISOString().slice(0, 10);
       setResultBlob({
         blob,
@@ -215,13 +231,29 @@ export function LetualMainPhotoTool() {
             ? `letual-main-photo-${suffix}.xlsx`
             : `letual-urls-${suffix}.xlsx`
       });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка обработки");
-    } finally {
-      setBusy(false);
-      setProgress(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [results, tab]);
+
+  useEffect(() => {
+    if (!resultBlob) {
+      setDownloadUrl(null);
+      return;
     }
-  }, [metabaseKey, openaiKey, status, syncFromText, tab, text]);
+    const url = URL.createObjectURL(resultBlob.blob);
+    setDownloadUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [resultBlob]);
+
+  const downloadExcel = useCallback(() => {
+    if (!downloadUrl || !resultBlob) return;
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = resultBlob.name;
+    a.click();
+  }, [downloadUrl, resultBlob]);
 
   return (
     <div className="space-y-6">
@@ -387,22 +419,20 @@ export function LetualMainPhotoTool() {
 
       {results.length > 0 ? (
         <section className={homeCard}>
-          <div className={homeCardHeader}>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
             <h2 className={homeCardTitle}>
               Результат ({stats.ok} OK{stats.fail ? `, ${stats.fail} ошибок` : ""})
             </h2>
+            <button
+              type="button"
+              disabled={!downloadUrl || busy}
+              onClick={downloadExcel}
+              className="inline-flex shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Скачать Excel
+            </button>
           </div>
           <div className={`${homeCardBody} space-y-4`}>
-            {resultBlob ? (
-              <a
-                href={URL.createObjectURL(resultBlob.blob)}
-                download={resultBlob.name}
-                className="inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white no-underline hover:bg-emerald-500"
-              >
-                Скачать Excel
-              </a>
-            ) : null}
-
             <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
               {results.map((r, i) => (
                 <li key={i} className="flex flex-wrap gap-4 p-4">

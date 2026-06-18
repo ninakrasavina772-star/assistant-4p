@@ -1,17 +1,13 @@
-import { pickBestLetualPhoto, pickBestFromRanked } from "@/lib/letualPhotoAi";
+import {
+  pickBestFromRanked,
+  pickSuitableLetualPhoto,
+  type LetualPhotoScore
+} from "@/lib/letualPhotoAi";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import { fetchLetualVariations } from "@/lib/letualMetabase";
 import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
 import { uploadLetualMainPhoto } from "@/lib/ozonImageStorage";
 import type { LetualResultRow } from "@/lib/letualMainPhotoExcel";
-
-export type LetualProcessVariationInput = {
-  variationId: number;
-};
-
-export type LetualProcessUrlInput = {
-  sourceUrl: string;
-};
 
 function resolveOpenAiKey(clientKey?: string): string {
   const k = (clientKey ?? "").trim() || (process.env.OPENAI_API_KEY ?? "").trim();
@@ -22,6 +18,32 @@ function resolveOpenAiKey(clientKey?: string): string {
 async function processAndUpload(sourceUrl: string): Promise<string> {
   const jpeg = await processLetualMainPhotoFromUrl(sourceUrl);
   return uploadLetualMainPhoto(jpeg, "main.jpg");
+}
+
+async function tryProcessCandidates(
+  candidates: string[]
+): Promise<{ resultUrl: string; sourceUrl: string } | null> {
+  for (const url of candidates) {
+    if (!url) continue;
+    try {
+      const resultUrl = await processAndUpload(url);
+      return { resultUrl, sourceUrl: url };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function buildDbComment(best: LetualPhotoScore | undefined): string {
+  if (!best) return "";
+  const notes: string[] = [];
+  if (!best.hasWhiteBackground) notes.push("фон не белый — проверить");
+  if (!best.isFrontal) notes.push("не фронтальный ракурс — проверить");
+  if (best.quality < 50) notes.push("низкое качество источника");
+  if (!best.suitable) notes.push(best.reason);
+  if (!notes.length) return "";
+  return `Фото из БД: ${notes.join("; ")}`;
 }
 
 export async function processLetualByUrl(
@@ -70,66 +92,71 @@ export async function processLetualByVariationId(
 
     let sourceUrl = "";
     let comment = "";
-    let webSource = "";
+    const candidateUrls: string[] = [];
 
     if (row.imageUrls.length) {
-      const picked = await pickBestLetualPhoto(row.imageUrls, key);
-      if (picked.url) {
-        sourceUrl = picked.url;
-        const best = pickBestFromRanked(picked.ranked) ?? picked.ranked[0];
-        if (best) {
-          const notes: string[] = [];
-          if (!best.isFrontal) notes.push("не фронтальный ракурс — проверить");
-          if (best.quality < 50) notes.push("низкое качество источника");
-          if (!best.suitable) notes.push(best.reason);
-          if (notes.length) {
-            comment = `Фото из БД: ${notes.join("; ")}`;
-          }
+      const suitable = await pickSuitableLetualPhoto(row.imageUrls, key);
+      if (suitable.url) {
+        sourceUrl = suitable.url;
+        comment = buildDbComment(suitable.best);
+      } else if (suitable.ranked.length) {
+        const fallback = pickBestFromRanked(suitable.ranked);
+        if (fallback?.url) {
+          candidateUrls.push(fallback.url);
+          comment = buildDbComment(fallback);
         }
       }
     }
 
-    if (!sourceUrl) {
+    if (!sourceUrl && !candidateUrls.length) {
       const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
-      for (const candidate of web) {
-        if (!(await validateImageUrl(candidate.url))) continue;
-        const scored = await pickBestLetualPhoto([candidate.url], key);
-        if (scored.url && scored.ranked[0]?.suitable) {
+      for (const item of web) {
+        if (!(await validateImageUrl(item.url))) continue;
+        const scored = await pickSuitableLetualPhoto([item.url], key);
+        if (scored.url) {
           sourceUrl = scored.url;
-          webSource = candidate.source;
+          comment = `Фото из интернета (${item.source}), проверить вручную`;
           break;
         }
-        if (!sourceUrl && scored.url) {
-          sourceUrl = scored.url;
-          webSource = candidate.source;
+        if (scored.best?.url) {
+          candidateUrls.push(scored.best.url);
+          comment = `Фото из интернета (${item.source}): ${scored.best.reason}; проверить`;
         }
       }
-
-      if (!sourceUrl && web[0]?.url) {
-        sourceUrl = web[0].url;
-        webSource = web[0].source;
-      }
-
-      if (!sourceUrl) {
-        return {
-          variationId,
-          resultUrl: "",
-          comment: "",
-          ok: false,
-          error: "Нет фото в БД и не найдено подходящее в интернете"
-        };
-      }
-
-      comment = `Фото из интернета (${webSource || "web"}), проверить вручную`;
     }
 
-    const resultUrl = await processAndUpload(sourceUrl);
+    const tryList = sourceUrl ? [sourceUrl, ...candidateUrls] : candidateUrls;
+
+    if (!tryList.length) {
+      const deadLinks = row.imageUrls.length
+        ? `В БД ${row.imageUrls.length} ссылок, но ни одна не скачивается (404/403). `
+        : "";
+      return {
+        variationId,
+        resultUrl: "",
+        comment: "",
+        ok: false,
+        error: `${deadLinks}Нет подходящего фото в интернете`
+      };
+    }
+
+    const processed = await tryProcessCandidates(tryList);
+    if (!processed) {
+      return {
+        variationId,
+        resultUrl: "",
+        comment: "",
+        ok: false,
+        error: `Не удалось обработать фото (${tryList.length} кандидатов, ошибки скачивания)`
+      };
+    }
+
     return {
       variationId,
-      sourceUrl,
-      resultUrl,
+      sourceUrl: processed.sourceUrl,
+      resultUrl: processed.resultUrl,
       comment,
-      previewUrl: resultUrl,
+      previewUrl: processed.resultUrl,
       ok: true
     };
   } catch (e) {
