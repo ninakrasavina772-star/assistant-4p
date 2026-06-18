@@ -2146,8 +2146,8 @@ async function alignCutoutToSource(cutout: Buffer, source: Buffer): Promise<Buff
 }
 
 /**
- * AI cut-out часто «съедает» колпачки. Восстанавливаем из исходного foto Ozon
- * (белые и цветные шапки над телом).
+ * AI cut-out часто «съедает» колпачки. В сетке rmbg (600×800) объединяем AI с edge-маской
+ * из исходника — edge заполняет пропуски над телом, AI сохраняет чистые боковые края.
  */
 async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<Buffer> {
   const cutMeta = await sharp(cutout).metadata();
@@ -2155,59 +2155,73 @@ async function repairAiCosmeticsCutout(cutout: Buffer, source: Buffer): Promise<
   const ch = cutMeta.height ?? 0;
   if (!cw || !ch) return cutout;
 
-  /** rmbg-кэш 600×800, source апскейл ~1400 — чиним колпачок в сетке cut-out, потом upscale. */
   const srcFitBuf = await sharp(source)
     .resize(cw, ch, { fit: "fill", kernel: sharp.kernel.lanczos3 })
     .png()
     .toBuffer();
-  const { data: aiData, info } = await sharp(cutout)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const srcFit = Buffer.from(await sharp(srcFitBuf).ensureAlpha().raw().toBuffer());
+  const edgeBuf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
+
+  const [{ data: aiData, info }, edgeRaw, srcFit] = await Promise.all([
+    sharp(cutout).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+    sharp(edgeBuf).ensureAlpha().raw().toBuffer(),
+    sharp(srcFitBuf).ensureAlpha().raw().toBuffer()
+  ]);
+
   const w = info.width;
   const h = info.height;
-  if (w !== cw || h !== ch || srcFit.length !== aiData.length) {
+  if (w !== cw || h !== ch || srcFit.length !== aiData.length || edgeRaw.length !== aiData.length) {
     return alignCutoutToSource(cutout, source);
   }
 
-  const pixels = Buffer.from(aiData);
-  const whiteCapKeep = buildVerticalWhiteCapKeepMask(srcFit, w, h);
-  const exterior = buildExteriorNearWhiteMask(srcFit, w, h, 232);
+  let minX = w;
+  let maxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (aiData[(y * w + x) * 4 + 3]! < 128) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+    }
+  }
+  if (maxX < minX) return alignCutoutToSource(cutout, source);
 
-  reclaimOpaqueWhiteCapAboveBody(pixels, srcFit, whiteCapKeep, w, h);
+  const padX = Math.max(4, Math.round((maxX - minX + 1) * 0.05));
+  const x0 = Math.max(0, minX - padX);
+  const x1 = Math.min(w - 1, maxX + padX);
+  const capPad = Math.max(20, Math.round(h * 0.035));
 
   const aiTop = new Int32Array(w);
   aiTop.fill(h);
-  for (let x = 0; x < w; x++) {
+  for (let x = x0; x <= x1; x++) {
     for (let y = 0; y < h; y++) {
-      if (pixels[(y * w + x) * 4 + 3]! >= 128) {
+      if (aiData[(y * w + x) * 4 + 3]! >= 128) {
         aiTop[x] = y;
         break;
       }
     }
   }
 
-  const capPad = Math.max(16, Math.round(h * 0.025));
-  for (let x = 0; x < w; x++) {
-    const limit = Math.min(h, aiTop[x]! + capPad);
-    for (let y = 0; y < limit; y++) {
-      const idx = y * w + x;
-      const pi = idx * 4;
-      if (pixels[pi + 3]! >= 250) continue;
-      if (exterior[idx] && whiteCapKeep[idx] !== 1) continue;
-      const nearWhite = readNearWhiteRgb(srcFit, pi, 238, 32);
-      if (nearWhite && whiteCapKeep[idx] !== 1 && !isBodyAnchorPixel(srcFit, pi)) continue;
-      if (exterior[idx] && nearWhite) continue;
-      pixels[pi] = srcFit[pi]!;
-      pixels[pi + 1] = srcFit[pi + 1]!;
-      pixels[pi + 2] = srcFit[pi + 2]!;
-      pixels[pi + 3] = 255;
+  const pixels = Buffer.alloc(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      const aa = aiData[pi + 3]!;
+      const ea = edgeRaw[pi + 3]!;
+      const inX = x >= x0 && x <= x1;
+      const inCapZone = inX && y <= aiTop[x]! + capPad;
+
+      if (aa >= 128) {
+        pixels[pi] = aiData[pi]!;
+        pixels[pi + 1] = aiData[pi + 1]!;
+        pixels[pi + 2] = aiData[pi + 2]!;
+        pixels[pi + 3] = 255;
+      } else if (inX && ea >= 128 && (inCapZone || y >= aiTop[x]!)) {
+        pixels[pi] = srcFit[pi]!;
+        pixels[pi + 1] = srcFit[pi + 1]!;
+        pixels[pi + 2] = srcFit[pi + 2]!;
+        pixels[pi + 3] = 255;
+      }
     }
   }
-
-  purgeUnreachableWhiteOpaque(pixels, whiteCapKeep, w, h);
-  trimHorizontalWhiteMargins(pixels, srcFit, w, h, whiteCapKeep);
 
   let buf = await sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
