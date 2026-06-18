@@ -68,7 +68,15 @@ function parseImageHashes(raw: unknown): string[] {
   if (!raw) return [];
   const s = String(raw).trim();
   if (!s) return [];
-  return [...new Set(s.split(/\s+/).filter((h) => /^[0-9a-f]{40,}$/i.test(h)))];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const h of s.split(/\s+/)) {
+    const t = h.trim().toLowerCase();
+    if (!/^[0-9a-f]{40,}$/.test(t) || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
 }
 
 /** Lifestyle-кадры поставщика (цветы, ингредиенты) — не packshot товара. */
@@ -76,46 +84,39 @@ function isLifestyleSupplierUrl(url: string): boolean {
   return /cdnbigbuy\.com\/images\/\d+_R(?:10|20|30)\b/i.test(url);
 }
 
-/** CDN из hash (карточка). Доп. hash из link — только если нет main. */
+/** CDN из hash: main первым, затем остальные фото вариации (по position). */
 function mergeLetualImageUrls(
   mainImageHash: string | null,
   linkHashes: string[],
   linkUrls: string[]
 ): { mainImageUrl: string | null; imageUrls: string[] } {
-  const fromHashes: string[] = [];
+  const orderedHashes: string[] = [];
   const seenHashKeys = new Set<string>();
 
-  const addHash = (hash?: string | null) => {
+  const pushHash = (hash?: string | null) => {
     if (!hash) return;
     const cdn = build4standCdnUrlFromHash(hash);
     if (!cdn) return;
     const key = cdn.slice(cdn.indexOf("/huge/") + 6);
     if (seenHashKeys.has(key)) return;
     seenHashKeys.add(key);
-    fromHashes.push(cdn);
+    orderedHashes.push(hash.trim().toLowerCase());
   };
 
-  addHash(mainImageHash);
-  if (!fromHashes.length) {
-    for (const h of linkHashes) addHash(h);
-  }
+  pushHash(mainImageHash);
+  for (const h of linkHashes) pushHash(h);
+
+  const cdnUrls = orderedHashes
+    .map((h) => build4standCdnUrlFromHash(h))
+    .filter((u): u is string => Boolean(u));
 
   const filteredLinks = linkUrls
     .map((u) => normalize4standHugeWebp(u))
     .filter((u) => !isLifestyleSupplierUrl(u));
 
-  const mainImageUrl = fromHashes[0] ?? null;
-
-  if (fromHashes.length) {
-    const ownCdn = filteredLinks.filter((u) => /cdnru\.4stand|deloox/i.test(u));
-    const merged = dedupeAndNormalizeFotoUrls([...fromHashes, ...ownCdn]);
-    return { mainImageUrl, imageUrls: merged };
-  }
-
-  return {
-    mainImageUrl: filteredLinks[0] ?? null,
-    imageUrls: dedupeAndNormalizeFotoUrls(filteredLinks)
-  };
+  const mainImageUrl = cdnUrls[0] ?? null;
+  const merged = dedupeAndNormalizeFotoUrls([...cdnUrls, ...filteredLinks]);
+  return { mainImageUrl, imageUrls: merged };
 }
 
 export type SiblingPhotoCandidate = {
@@ -266,7 +267,7 @@ export async function fetchLetualVariations(
       COALESCE(NULLIF(TRIM(pv.name), ''), p.name) AS product_name,
       b.name AS brand_name,
       NULLIF(TRIM(pvmi.image_load_hash), '') AS main_image_hash,
-      STRING_AGG(DISTINCT NULLIF(TRIM(il.url_hash), ''), ' ') AS image_hashes,
+      STRING_AGG(NULLIF(TRIM(il.url_hash), ''), ' ' ORDER BY pvil.position, il.id) AS image_hashes,
       STRING_AGG(il.url, ' ' ORDER BY pvil.position, il.id) AS image_urls
     FROM public.product_variation pv
     JOIN public.product p ON p.id = pv.product_id

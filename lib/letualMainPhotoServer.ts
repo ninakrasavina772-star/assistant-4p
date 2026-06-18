@@ -179,39 +179,24 @@ export async function processLetualByVariationId(
     let rankedFromDb: LetualPhotoScore[] = [];
     let dbFallback: LetualPhotoScore | undefined;
 
-    const galleryUrls = row.imageUrls.filter((u) => u !== row.mainImageUrl);
-
-    if (row.mainImageUrl) {
-      const mainPick = await pickSuitableLetualPhoto([row.mainImageUrl], key);
-      rankedFromDb = mainPick.ranked;
-
-      const mainSuitable = findSuitableInRanked(mainPick.ranked);
-      if (mainSuitable?.url) {
-        sourceUrl = mainSuitable.url;
-        comment = buildDbComment(mainSuitable);
-      } else {
-        const mainBest = mainPick.ranked[0];
-        if (mainBest?.hasProduct) {
-          candidateUrls.push(mainBest.url);
-          comment = buildDbComment(mainBest);
-          dbFallback = mainBest;
-        }
-      }
-    }
-
-    if (!sourceUrl && !candidateUrls.length && galleryUrls.length) {
-      const picked = await pickSuitableLetualPhoto(galleryUrls, key);
-      rankedFromDb = [...rankedFromDb, ...picked.ranked];
+    if (row.imageUrls.length) {
+      const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
+      rankedFromDb = picked.ranked;
 
       const suitable = findSuitableInRanked(picked.ranked);
       if (suitable?.url) {
         sourceUrl = suitable.url;
         comment = buildDbComment(suitable);
       } else {
-        dbFallback = pickBestFromRanked(picked.ranked) ?? dbFallback;
-        if (dbFallback?.url && !candidateUrls.includes(dbFallback.url)) {
-          candidateUrls.push(dbFallback.url);
-          comment = buildDbComment(dbFallback);
+        const best = pickBestFromRanked(picked.ranked);
+        if (best?.url) {
+          if (best.suitable) {
+            sourceUrl = best.url;
+          } else {
+            candidateUrls.push(best.url);
+          }
+          comment = buildDbComment(best);
+          dbFallback = best;
         }
       }
     }
@@ -269,13 +254,11 @@ export async function processLetualByVariationId(
 
     const tryList: string[] = [];
     if (sourceUrl) tryList.push(sourceUrl);
-    if (row.mainImageUrl && !tryList.includes(row.mainImageUrl)) {
-      tryList.push(row.mainImageUrl);
-    }
     for (const u of candidateUrls) {
       if (u && !tryList.includes(u)) tryList.push(u);
     }
-    for (const r of rankedFromDb) {
+    const rankedSorted = [...rankedFromDb].sort((a, b) => b.score - a.score);
+    for (const r of rankedSorted) {
       if (r.url && r.hasProduct && !tryList.includes(r.url)) {
         tryList.push(r.url);
       }
