@@ -3,10 +3,11 @@ import {
   preprocessCosmeticsProductBufferEdge
 } from "@/lib/podruzhkaImageProcess";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
+import { normalizeLetualSourceUrl } from "@/lib/letualFotoQuality";
 import { compositeLetualMainPhoto } from "@/lib/letualMainPhotoLayout";
 
 export async function downloadImageBuffer(url: string): Promise<Buffer> {
-  const fetched = await fetchPodruzhkaProductImageDetailed(url);
+  const fetched = await fetchPodruzhkaProductImageDetailed(normalizeLetualSourceUrl(url));
   if (!fetched.buf?.length) {
     throw new Error(fetched.error ?? "Не удалось скачать изображение");
   }

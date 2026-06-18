@@ -1,4 +1,4 @@
-import { pickBestLetualPhoto } from "@/lib/letualPhotoAi";
+import { pickBestLetualPhoto, pickBestFromRanked } from "@/lib/letualPhotoAi";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import { fetchLetualVariations } from "@/lib/letualMetabase";
 import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
@@ -76,9 +76,15 @@ export async function processLetualByVariationId(
       const picked = await pickBestLetualPhoto(row.imageUrls, key);
       if (picked.url) {
         sourceUrl = picked.url;
-        const best = picked.ranked[0];
-        if (best && !best.suitable) {
-          comment = `Фото из БД: ${best.reason}; проверить вручную`;
+        const best = pickBestFromRanked(picked.ranked) ?? picked.ranked[0];
+        if (best) {
+          const notes: string[] = [];
+          if (!best.isFrontal) notes.push("не фронтальный ракурс — проверить");
+          if (best.quality < 50) notes.push("низкое качество источника");
+          if (!best.suitable) notes.push(best.reason);
+          if (notes.length) {
+            comment = `Фото из БД: ${notes.join("; ")}`;
+          }
         }
       }
     }
