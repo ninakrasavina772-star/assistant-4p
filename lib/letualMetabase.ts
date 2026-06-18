@@ -125,7 +125,7 @@ export async function fetchLetualVariations(
   const creds = resolveMetabaseCredentials(metabaseApiKey);
   if (!creds) {
     throw new Error(
-      "Metabase не настроен: укажите METABASE API key в форме или добавьте METABASE_API_KEY на сервере"
+      "Metabase не настроен: добавьте METABASE_API_KEY на сервере (Vercel env)"
     );
   }
 

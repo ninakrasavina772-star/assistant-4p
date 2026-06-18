@@ -10,7 +10,6 @@ export async function GET() {
     label: storageBackendLabel(),
     backend,
     metabase: metabaseEnv,
-    metabaseViaUi: !metabaseEnv,
     serpapi: Boolean(process.env.SERPAPI_KEY?.trim()),
     openai: Boolean(process.env.OPENAI_API_KEY?.trim())
   });
