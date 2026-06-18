@@ -2096,6 +2096,34 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
 /**
  * Косметика: апскейл + strip белого/серого Ozon от всех краёв, затем восстановление колпачков.
  */
+
+/** Essie: белый колпачок на белом Ozon — cut-out на сетке 600×800, без AI и без edge-flood. */
+async function preprocessEssieWhiteCapPackshot(input: Buffer): Promise<Buffer> {
+  const source = await enhanceSourceForProcessing(input);
+  const srcMeta = await sharp(source).metadata();
+  const sw = srcMeta.width ?? 0;
+  const sh = srcMeta.height ?? 0;
+
+  const srcFitBuf = await sharp(input)
+    .resize(600, 800, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .png()
+    .toBuffer();
+
+  let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
+  buf = await scrubAiCosmeticsWhiteFringe(buf, srcFitBuf);
+  buf = await trimTransparentSafe(buf);
+  buf = await cropToVisibleProduct(buf, 8, 0.022, 12);
+
+  if (sw && sh && (sw !== 600 || sh !== 800)) {
+    buf = await sharp(buf)
+      .resize(sw, sh, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+      .png()
+      .toBuffer();
+  }
+
+  return finalizeCosmeticsCutout(buf);
+}
+
 export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promise<Buffer> {
   let buf = await enhanceSourceForProcessing(input);
   const { data: srcData, info } = await sharp(buf)
@@ -2348,7 +2376,7 @@ export async function preprocessCosmeticsProductBufferAi(
   }
 
   if (ESSIE_OZON_FOTO_RE.test(sourceUrl) || (await isWhiteOnWhitePackshot(input))) {
-    return preprocessCosmeticsProductBufferEdge(input);
+    return preprocessEssieWhiteCapPackshot(input);
   }
 
   const source = await enhanceSourceForProcessing(input);
