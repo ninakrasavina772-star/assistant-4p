@@ -327,6 +327,8 @@ async function resolveCosmeticsUniformPlacement(
         ? `cosmetics-raw-v1${isNarrow ? "-narrow" : ""}`
         : fotoMode === "ai"
           ? `cosmetics-ai-v1${isNarrow ? "-narrow" : ""}`
+          : fotoMode === "cutout"
+            ? `cosmetics-cutout-v1${isNarrow ? "-narrow" : ""}`
           : fotoMode === "edge"
             ? `cosmetics-edge-v3${isNarrow ? "-narrow" : ""}`
             : `cosmetics-uniform-v3${isNarrow ? "-narrow" : ""}`,

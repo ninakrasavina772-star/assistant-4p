@@ -2110,7 +2110,6 @@ async function preprocessEssieWhiteCapPackshot(input: Buffer): Promise<Buffer> {
     .toBuffer();
 
   let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
-  buf = await scrubAiCosmeticsWhiteFringe(buf, srcFitBuf);
   buf = await trimTransparentSafe(buf);
   buf = await cropToVisibleProduct(buf, 8, 0.022, 12);
 
@@ -2421,12 +2420,64 @@ export async function preprocessCosmeticsProductBufferRaw(input: Buffer): Promis
  * Косметика на белом (Ozon): апскейл → мягкий cut-out → dilate.
  * Не вызываем cleanProductAlphaFringe — он «съедал» бежевые края.
  */
+
+/** Белый ореол (255/255/255 с alpha) на сером фоне — снимаем у границы с прозрачностью. */
+async function purgeNearWhiteOpaqueFringe(input: Buffer, threshold = 236): Promise<Buffer> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const w = info.width ?? 0;
+  const h = info.height ?? 0;
+  if (!w || !h) return input;
+
+  const pixels = Buffer.from(data);
+  const isOpaque = (pi: number) => pixels[pi + 3]! >= 128;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (!isOpaque(pi) || !readNearWhiteRgb(pixels, pi, threshold, 34)) continue;
+      let touches = x === 0 || y === 0 || x === w - 1 || y === h - 1;
+      if (!touches && x > 0 && !isOpaque(pi - 4)) touches = true;
+      if (!touches && x < w - 1 && !isOpaque(pi + 4)) touches = true;
+      if (!touches && y > 0 && !isOpaque(pi - w * 4)) touches = true;
+      if (!touches && y < h - 1 && !isOpaque(pi + w * 4)) touches = true;
+      if (touches) pixels[pi + 3] = 0;
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
-  let buf = await enhanceSourceForProcessing(input);
-  buf = await extractCosmeticsPackshotFromWhite(buf);
-  buf = await stripCosmeticsFloorShadow(buf);
+  const source = await enhanceSourceForProcessing(input);
+  const srcMeta = await sharp(source).metadata();
+  const sw = srcMeta.width ?? 0;
+  const sh = srcMeta.height ?? 0;
+
+  const srcFitBuf = await sharp(input)
+    .resize(600, 800, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+    .png()
+    .toBuffer();
+
+  let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
   buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.032);
+  buf = await cropToVisibleProduct(buf, 8, 0.022, 10);
+
+  if (sw && sh && (sw !== 600 || sh !== 800)) {
+    buf = await sharp(buf)
+      .resize(sw, sh, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+      .png()
+      .toBuffer();
+  }
+
+  buf = await stripCosmeticsFloorShadow(buf);
+  buf = await purgeNearWhiteOpaqueFringe(buf);
   return finalizeCosmeticsCutout(buf);
 }
 

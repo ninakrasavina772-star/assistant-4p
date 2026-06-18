@@ -1,5 +1,5 @@
 /** Вёрстка косметики — v5: новый template-base (петля) */
-export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v52-essie-grid";
+export const PODRUZHKA_COSMETICS_LAYOUT_VERSION = "html-figma-cosmetics-v53-grid-cutout";
 
 export type PodruzhkaCosmeticsFotoMode = "raw" | "edge" | "cutout" | "ai";
 
@@ -7,7 +7,7 @@ export type PodruzhkaCosmeticsFotoMode = "raw" | "edge" | "cutout" | "ai";
  * ai — локальная модель снятия фона (бесплатно, кэш в Yandex).
  * edge — эвристика; raw — foto как на Ozon; cutout — старый pipeline.
  */
-export const PODRUZHKA_COSMETICS_FOTO_MODE: PodruzhkaCosmeticsFotoMode = "ai";
+export const PODRUZHKA_COSMETICS_FOTO_MODE: PodruzhkaCosmeticsFotoMode = "cutout";
 
 /** Серые описания benefit: +2px к парфюму (20 → 22) */
 export const PODRUZHKA_COSMETICS_NOTE_DESC_SIZE = 22;
