@@ -42,6 +42,8 @@ export function sortImagesForComposite(urls: string[]): string[] {
     const l = u.toLowerCase();
     let s = 0;
     if (/large2x|large\//.test(l)) s += 40;
+    if (/\/huge\//.test(l)) s += 1200;
+    if (/multimedia-1-f\//.test(l)) s += 900;
     if (/webp|jpg|jpeg/.test(l)) s += 5;
     if (/4stand|cdnru/.test(l)) s += 10;
     if (/pack|white|_w\./.test(l)) s -= 15;

@@ -2,13 +2,12 @@ import { getOzonStorageBackend, uploadOzonImage, uploadOzonImageAtKey } from "@/
 import { generateThemedBackground } from "@/lib/templateGenerator/photoBackgroundAi";
 import {
   compositeOnBackground,
-  cutPackshotBackground,
-  fetchProductImage,
+  fetchBestProductSource,
+  prepareLetualProductCutout,
   renderBackground,
   type BackgroundStyle
 } from "@/lib/templateGenerator/photoCompose";
 import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
-import { sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
 import {
   pickThemedScenes,
   productPhotoContextFromRow,
@@ -71,8 +70,8 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
     return { imageUrls: existing, generated: [] };
   }
 
-  const primary = sortImagesForComposite(parseImageUrls(opts.imageText))[0];
-  if (!primary) {
+  const urls = parseImageUrls(opts.imageText);
+  if (!urls.length) {
     return { imageUrls: existing, generated: [], note: "нет исходного foto в шаблоне/фиде" };
   }
 
@@ -90,7 +89,7 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
 
   let source: Buffer;
   try {
-    source = await fetchProductImage(primary);
+    source = await fetchBestProductSource(urls);
   } catch (e) {
     return {
       imageUrls: existing,
@@ -101,7 +100,7 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
 
   let cutout: Buffer;
   try {
-    cutout = await cutPackshotBackground(source);
+    cutout = await prepareLetualProductCutout(source);
   } catch {
     cutout = source;
   }

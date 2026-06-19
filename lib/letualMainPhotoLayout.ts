@@ -29,26 +29,30 @@ export type LetualPlacement = {
 export function computeLetualPlacement(
   productW: number,
   productH: number,
-  canvas = LETUAL_CANVAS_SIZE
+  canvasW = LETUAL_CANVAS_SIZE,
+  canvasH = canvasW
 ): LetualPlacement {
   const layout = classifyLetualLayout(productW, productH);
+  const marginScale = canvasW / LETUAL_CANVAS_SIZE;
 
   if (layout === "vertical") {
-    const scale = canvas / productH;
+    const scale = canvasH / productH;
     const w = Math.round(productW * scale);
-    const h = canvas;
-    const left = Math.round((canvas - w) / 2);
+    const h = canvasH;
+    const left = Math.round((canvasW - w) / 2);
     return { layout, left, top: 0, width: w, height: h };
   }
 
-  const sideMargin =
-    layout === "wide_low" ? LETUAL_SIDE_MARGIN_WIDE_LOW : LETUAL_SIDE_MARGIN_SQUARE;
-  const maxW = canvas - sideMargin * 2;
+  const sideMargin = Math.round(
+    (layout === "wide_low" ? LETUAL_SIDE_MARGIN_WIDE_LOW : LETUAL_SIDE_MARGIN_SQUARE) *
+      marginScale
+  );
+  const maxW = canvasW - sideMargin * 2;
   const scale = Math.min(maxW / productW, 1);
   const w = Math.round(productW * scale);
   const h = Math.round(productH * scale);
-  const left = Math.round((canvas - w) / 2);
-  const top = canvas - h;
+  const left = Math.round((canvasW - w) / 2);
+  const top = canvasH - h;
   return { layout, left, top, width: w, height: h };
 }
 

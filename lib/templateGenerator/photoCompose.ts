@@ -1,4 +1,18 @@
 import sharp from "sharp";
+import {
+  cropToVisibleProduct,
+  preprocessCosmeticsProductBufferEdge
+} from "@/lib/podruzhkaImageProcess";
+import {
+  fetchLetualImageDetailed,
+  normalizeLetualFotoUrls,
+  rankLetualUrlsByTechnicalQuality
+} from "@/lib/letualFotoQuality";
+import {
+  computeLetualPlacement,
+  measureProductSilhouette
+} from "@/lib/letualMainPhotoLayout";
+import { sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
 
 export const PRODUCT_CARD_W = 1200;
 export const PRODUCT_CARD_H = 1600;
@@ -14,6 +28,8 @@ export const BACKGROUND_STYLES = [
 export type BackgroundStyle = (typeof BACKGROUND_STYLES)[number];
 
 export async function fetchProductImage(url: string): Promise<Buffer> {
+  const fetched = await fetchLetualImageDetailed(url);
+  if (fetched?.buf?.length) return fetched.buf;
   const res = await fetch(url, {
     signal: AbortSignal.timeout(25_000),
     headers: { Accept: "image/*", "User-Agent": "assistant-4p-template-generator/1.0" }
@@ -22,6 +38,29 @@ export async function fetchProductImage(url: string): Promise<Buffer> {
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length < 512) throw new Error("Пустой файл изображения");
   return buf;
+}
+
+/** Лучший исходник: нормализация URL как у Летуаль (/huge/, Ozon -f) + технический ранг. */
+export async function fetchBestProductSource(urls: string[]): Promise<Buffer> {
+  const normalized = normalizeLetualFotoUrls(urls);
+  const sorted = sortImagesForComposite(urls);
+  const merged = [...new Set([...normalized, ...sorted])].filter((u) => /^https?:\/\//i.test(u));
+  if (!merged.length) throw new Error("Нет URL foto");
+
+  const ranked = await rankLetualUrlsByTechnicalQuality(merged.slice(0, 12));
+  const tryUrls = ranked.length ? ranked.map((r) => r.url) : merged.slice(0, 6);
+
+  for (const url of tryUrls) {
+    const fetched = await fetchLetualImageDetailed(url);
+    if (fetched?.buf?.length) return fetched.buf;
+  }
+  throw new Error("Не скачалось foto ни по одному URL");
+}
+
+/** Cutout как «Главное фото Летуаль»: edge pipeline + crop по силуэту. */
+export async function prepareLetualProductCutout(raw: Buffer): Promise<Buffer> {
+  const cutout = await preprocessCosmeticsProductBufferEdge(raw);
+  return cropToVisibleProduct(cutout, 8, 0.02, 4);
 }
 
 function isPackshotBackground(r: number, g: number, b: number): boolean {
@@ -174,39 +213,37 @@ export async function compositeOnBackground(
   productCutout: Buffer,
   background: Buffer
 ): Promise<Buffer> {
-  const meta = await sharp(productCutout).metadata();
-  const pw = meta.width ?? 1;
-  const ph = meta.height ?? 1;
-
-  const maxH = Math.round(PRODUCT_CARD_H * 0.62);
-  const maxW = Math.round(PRODUCT_CARD_W * 0.52);
-  const scale = Math.min(maxW / pw, maxH / ph);
-  const nw = Math.max(1, Math.round(pw * scale));
-  const nh = Math.max(1, Math.round(ph * scale));
+  const silhouette = await measureProductSilhouette(productCutout);
+  const placement = computeLetualPlacement(
+    silhouette.width,
+    silhouette.height,
+    PRODUCT_CARD_W,
+    PRODUCT_CARD_H
+  );
 
   const product = await sharp(productCutout)
-    .resize(nw, nh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+    .resize(placement.width, placement.height, { fit: "fill" })
     .png()
     .toBuffer();
 
-  const surfaceY = Math.round(PRODUCT_CARD_H * 0.76);
-  const left = Math.round((PRODUCT_CARD_W - nw) / 2);
-  const top = surfaceY - nh;
+  const left = placement.left;
+  const top = placement.top;
+  const footY = top + placement.height;
 
-  const tightShadow = await buildShadowLayer(nw, true);
-  const softShadow = await buildShadowLayer(Math.round(nw * 1.15), false);
+  const tightShadow = await buildShadowLayer(placement.width, true);
+  const softShadow = await buildShadowLayer(Math.round(placement.width * 1.12), false);
 
   const bg = await sharp(background)
     .resize(PRODUCT_CARD_W, PRODUCT_CARD_H, { fit: "cover" })
     .jpeg({ quality: 94 })
     .toBuffer();
 
-  const softLeft = Math.round((PRODUCT_CARD_W - Math.round(nw * 1.15)) / 2);
-  const shadowTop = surfaceY - 8;
+  const softLeft = Math.round((PRODUCT_CARD_W - Math.round(placement.width * 1.12)) / 2);
+  const shadowTop = Math.min(footY - 6, PRODUCT_CARD_H - 40);
 
   const composed = await sharp(bg)
     .composite([
-      { input: softShadow, left: softLeft, top: shadowTop + 6 },
+      { input: softShadow, left: softLeft, top: shadowTop + 4 },
       { input: tightShadow, left, top: shadowTop },
       { input: product, left, top }
     ])
