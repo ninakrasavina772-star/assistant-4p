@@ -600,7 +600,7 @@ function restoreStrippedWhiteCaps(pixels: Buffer, src: Buffer, w: number, h: num
   const x1 = Math.min(w - 1, coreMaxX + padX);
   const minColoredRows = Math.max(24, Math.round(h * 0.08));
   const productW = coreMaxX - coreMinX + 1;
-  const maxRise = Math.min(200, Math.max(80, Math.round(productW * 0.45)));
+  const maxRise = Math.min(96, Math.max(36, Math.round(productW * 0.2)));
 
   const isPureWhiteSrc = (pi: number) => {
     const r = src[pi]!;
@@ -627,6 +627,7 @@ function restoreStrippedWhiteCaps(pixels: Buffer, src: Buffer, w: number, h: num
     for (let y = minBodyY - 1, rise = 0; y >= 0 && rise < maxRise; y--, rise++) {
       const pi = (y * w + x) * 4;
       if (!readNearWhiteRgb(src, pi, 228, 40)) break;
+      if (isPaddingRow(src, w, y, x0, x1)) break;
       if (pixels[pi + 3]! >= 128) continue;
       pixels[pi] = src[pi]!;
       pixels[pi + 1] = src[pi + 1]!;
@@ -1255,6 +1256,8 @@ async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
   const pixels = Buffer.from(cutData);
   if (w && h && src.length === pixels.length) {
     restoreStrippedWhiteCaps(pixels, src, w, h);
+    purgeUnconnectedExteriorWhite(pixels, src, w, h);
+    clearFullWidthTopWhiteBands(pixels, src, w, h);
     buf = await sharp(pixels, {
       raw: { width: w, height: h, channels: 4 }
     })
@@ -2498,6 +2501,9 @@ async function purgeNearWhiteOpaqueFringe(input: Buffer, threshold = 236): Promi
 }
 
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
+  if (await isWhiteOnWhitePackshot(input)) {
+    return preprocessEssieWhiteCapPackshot(input);
+  }
   const source = await enhanceSourceForProcessing(input);
   const srcMeta = await sharp(source).metadata();
   const sw = srcMeta.width ?? 0;
@@ -2511,7 +2517,7 @@ export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<B
 
   if (sw && sh && (sw !== 600 || sh !== 800)) {
     buf = await sharp(buf)
-      .resize(sw, sh, { fit: "fill", kernel: sharp.kernel.lanczos3 })
+      .resize(sw, sh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
       .png()
       .toBuffer();
   }
