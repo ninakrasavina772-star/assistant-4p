@@ -930,7 +930,7 @@ function reclaimOpaqueWhiteCapAboveBody(
   const x1 = Math.min(w - 1, coreMaxX + padX);
   const minColoredRows = Math.max(24, Math.round(h * 0.1));
   const productW = coreMaxX - coreMinX + 1;
-  const maxRise = Math.min(200, Math.max(80, Math.round(productW * 0.45)));
+  const maxRise = Math.min(72, Math.max(28, Math.round(productW * 0.16)));
 
   const isPureWhiteSrc = (pi: number) => {
     const r = src[pi]!;
@@ -958,6 +958,7 @@ function reclaimOpaqueWhiteCapAboveBody(
       const idx = y * w + x;
       const pi = idx * 4;
       if (!readNearWhiteRgb(src, pi, 228, 40)) break;
+      if (isPaddingRow(src, w, y, x0, x1)) break;
       pixels[pi] = src[pi]!;
       pixels[pi + 1] = src[pi + 1]!;
       pixels[pi + 2] = src[pi + 2]!;
@@ -1143,30 +1144,34 @@ export async function rebuildProductAlphaByColumn(
 
   const opaqueAt = (x: number, y: number) => pixels[(y * w + x) * 4 + 3]! >= 20;
 
+  const productW = coreMaxX - coreMinX + 1;
+  const maxCapRise = Math.min(180, Math.max(56, Math.round(productW * 0.72)));
+
   for (let x = x0; x <= x1; x++) {
     const anchorY: number[] = [];
+    const coloredAnchorY: number[] = [];
     for (let y = 0; y < h; y++) {
       const pi = (y * w + x) * 4;
-      if (isProductAnchorPixel(pixels, pi, src)) anchorY.push(y);
+      if (!isProductAnchorPixel(pixels, pi, src)) continue;
+      anchorY.push(y);
+      if (pixels[pi + 3]! >= 20 && !readNearWhiteRgb(pixels, pi, 242, 30)) {
+        coloredAnchorY.push(y);
+      }
     }
-    if (!anchorY.length) continue;
+    if (!coloredAnchorY.length) continue;
 
-    const yTop = Math.min(...anchorY);
+    const yTopColored = Math.min(...coloredAnchorY);
     const yBot = Math.max(...anchorY);
+    const yFillFrom = Math.max(0, yTopColored - maxCapRise);
 
-    for (let y = yTop; y <= yBot; y++) {
+    for (let y = yFillFrom; y <= yBot; y++) {
       const pi = (y * w + x) * 4;
       if (opaqueAt(x, y)) continue;
       if (!readNearWhiteRgb(src, pi, 236, 28)) continue;
+      if (isPaddingRow(src, w, y, x0, x1)) continue;
       restoreAt(x, y);
     }
 
-    for (let y = yTop - 1; y >= 0; y--) {
-      const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(src, pi, 236, 28)) break;
-      if (isPaddingRow(src, w, y, x0, x1)) break;
-      restoreAt(x, y);
-    }
   }
 
   return sharp(pixels, {
@@ -1238,6 +1243,7 @@ export const restoreAttachedWhiteProductRegions = rebuildProductAlphaByColumn;
 /** Ozon packshot: сначала серо-белый (#F5F5F5) с краёв, затем строгий белый. */
 
 /** Ozon grid 600×800: не снимаем белый сверху (колпачок), потом чистим боковые поля. */
+
 async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
   let buf = await stripEdgeNearWhiteBackground(input, 236, { skipTopEdge: true });
   buf = await rebuildProductAlphaByColumn(buf, input);
@@ -1255,8 +1261,8 @@ async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
     .toBuffer({ resolveWithObject: true });
   const pixels = Buffer.from(cutData);
   if (w && h && src.length === pixels.length) {
-    restoreStrippedWhiteCaps(pixels, src, w, h);
     purgeUnconnectedExteriorWhite(pixels, src, w, h);
+    clampColumnWhiteToProductSpan(pixels, src, w, h);
     clearFullWidthTopWhiteBands(pixels, src, w, h);
     buf = await sharp(pixels, {
       raw: { width: w, height: h, channels: 4 }
