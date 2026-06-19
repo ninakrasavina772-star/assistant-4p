@@ -1893,6 +1893,26 @@ export async function featherProductAlpha(input: Buffer, sigma = 0.85): Promise<
 }
 
 /** Колонки с товаром: белый колпачок и перемычки → alpha=255 (после resize/halo). */
+
+function touchesTransparentNeighbor(
+  pixels: Buffer,
+  w: number,
+  h: number,
+  x: number,
+  y: number
+): boolean {
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) return true;
+      if (pixels[(ny * w + nx) * 4 + 3]! < 20) return true;
+    }
+  }
+  return false;
+}
+
 export async function solidifyProductColumnStacks(input: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(input)
     .ensureAlpha()
@@ -1925,12 +1945,6 @@ export async function solidifyProductColumnStacks(input: Buffer): Promise<Buffer
       pixels[pi + 3] = 255;
     }
 
-    for (let y = yTop - 1; y >= 0; y--) {
-      const pi = (y * w + x) * 4;
-      if (!readNearWhiteRgb(pixels, pi, 236, 30)) break;
-      if (isPaddingRow(pixels, w, y, footprint.x0, footprint.x1)) break;
-      pixels[pi + 3] = 255;
-    }
   }
 
   return sharp(pixels, {
@@ -2045,18 +2059,22 @@ export async function solidifyProductInterior(input: Buffer): Promise<Buffer> {
       const i = (y * w + x) * 4;
       const a = pixels[i + 3]!;
       if (a < 40 || a === 255) continue;
+
+      if (a < 230 && touchesTransparentNeighbor(pixels, w, h, x, y)) continue;
+
       const r = pixels[i]!;
       const g = pixels[i + 1]!;
       const b = pixels[i + 2]!;
       const avg = (r + g + b) / 3;
       const spread = Math.max(r, g, b) - Math.min(r, g, b);
       const neutral = r - b <= 12;
-      // Светлый полупрозрачный ореол (белый Ozon / серая петля макета) — непрозрачный, иначе просвечивает фон
       if (neutral && avg >= 228 && spread <= 20) {
-        pixels[i + 3] = 255;
+        if (!touchesTransparentNeighbor(pixels, w, h, x, y)) {
+          pixels[i + 3] = 255;
+        }
         continue;
       }
-      pixels[i + 3] = 255;
+      if (avg < 210) pixels[i + 3] = 255;
     }
   }
 
@@ -2072,7 +2090,6 @@ export async function finalizeProductCutout(input: Buffer): Promise<Buffer> {
   let buf = await solidifyProductColumnStacks(input);
   buf = await removeBoundaryWhiteHalo(buf);
   buf = await solidifyProductInterior(buf);
-  buf = await solidifyProductColumnStacks(buf);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await stripEdgeConnectedOpaqueWhite(buf);
   return buf;
@@ -2131,8 +2148,33 @@ export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
 
 /** Предобработка PNG перед fit (парфюм): апскейл → мягкий cut-out → duo-gap. */
 export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
-  let buf = await enhanceSourceForProcessing(input);
-  buf = await stripProductPackshotBackground(buf);
+  const source = await enhanceSourceForProcessing(input);
+  let buf = await stripProductPackshotBackground(source);
+
+  const { data: srcData, info } = await sharp(source)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const src = Buffer.from(srcData);
+  const w = info.width ?? 0;
+  const h = info.height ?? 0;
+  const { data: cutData } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const pixels = Buffer.from(cutData);
+  if (w && h && src.length === pixels.length) {
+    purgeUnconnectedExteriorWhite(pixels, src, w, h);
+    purgeMultiPackshotInteriorGutters(pixels, src, w, h);
+    clampColumnWhiteToProductSpan(pixels, src, w, h);
+    clearFullWidthTopWhiteBands(pixels, src, w, h);
+    buf = await sharp(pixels, {
+      raw: { width: w, height: h, channels: 4 }
+    })
+      .png()
+      .toBuffer();
+  }
+
   buf = await stripProductFloorShadow(buf, {
     avgMin: 90,
     avgMax: 172,
