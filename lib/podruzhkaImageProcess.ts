@@ -1262,6 +1262,7 @@ async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
   const pixels = Buffer.from(cutData);
   if (w && h && src.length === pixels.length) {
     purgeUnconnectedExteriorWhite(pixels, src, w, h);
+    purgeMultiPackshotInteriorGutters(pixels, src, w, h);
     clampColumnWhiteToProductSpan(pixels, src, w, h);
     clearFullWidthTopWhiteBands(pixels, src, w, h);
     buf = await sharp(pixels, {
@@ -2154,25 +2155,9 @@ export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
 
 /** Essie: белый колпачок на белом Ozon — cut-out на сетке 600×800, без AI и без edge-flood. */
 async function preprocessEssieWhiteCapPackshot(input: Buffer): Promise<Buffer> {
-  const source = await enhanceSourceForProcessing(input);
-  const srcMeta = await sharp(source).metadata();
-  const sw = srcMeta.width ?? 0;
-  const sh = srcMeta.height ?? 0;
-
-  const srcFitBuf = await fitCosmeticsOzonGrid(input);
-
-  let buf = await stripCosmeticsGridBackground(srcFitBuf);
-  buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.024, 12);
-
-  if (sw && sh && (sw !== 600 || sh !== 800)) {
-    buf = await sharp(buf)
-      .resize(sw, sh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
-      .png()
-      .toBuffer();
-  }
-
-  return finalizeCosmeticsCutout(buf);
+  if (await isMultiProductPackshot(input)) return preprocessCosmeticsGridPackshot(input);
+  if (await shouldUseExtractWhitePath(input)) return preprocessWhiteOnWhitePackshot(input);
+  return preprocessCosmeticsGridPackshot(input);
 }
 
 export async function preprocessCosmeticsProductBufferEdge(input: Buffer): Promise<Buffer> {
@@ -2226,6 +2211,235 @@ function measureNearWhiteOpaqueRatio(pixels: Buffer, w: number, h: number): numb
 /** Белый колпачок на белом Ozon (Essie и др.) — AI оставляет белый прямоугольник. */
 /** Essie nail lacquer on Ozon — white cap on white bg, AI leaves white box. */
 const ESSIE_OZON_FOTO_RE = /\/1061258\d+\.jpg/i;
+
+
+/** Несколько товаров в одном Ozon foto (3-in-1 румяна и т.п.). */
+async function isMultiProductPackshot(input: Buffer): Promise<boolean> {
+  const buf = await enhanceSourceForProcessing(input);
+  const { data, info } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width ?? 0;
+  const h = info.height ?? 0;
+  if (!w || !h) return false;
+
+  const colColor = new Uint16Array(w);
+  for (let x = 0; x < w; x++) {
+    let n = 0;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(data, pi, 236, 32) && isSubstantiveSourcePixel(data, pi)) n++;
+    }
+    colColor[x] = n;
+  }
+
+  const minCol = Math.max(12, Math.round(h * 0.02));
+  const minRun = Math.max(28, Math.round(w * 0.06));
+  const minGap = Math.max(10, Math.round(w * 0.012));
+  const maxRunFrac = 0.34;
+
+  const runs: { x0: number; x1: number }[] = [];
+  let runStart = -1;
+  for (let x = 0; x < w; x++) {
+    const active = colColor[x]! >= minCol;
+    if (active && runStart < 0) runStart = x;
+    if (!active && runStart >= 0) {
+      if (x - runStart >= minRun) runs.push({ x0: runStart, x1: x - 1 });
+      runStart = -1;
+    }
+  }
+  if (runStart >= 0 && w - runStart >= minRun) runs.push({ x0: runStart, x1: w - 1 });
+  if (runs.length < 2) return false;
+
+  for (const run of runs) {
+    const runW = run.x1 - run.x0 + 1;
+    if (runW / w > maxRunFrac) return false;
+  }
+
+  let wideGaps = 0;
+  for (let i = 1; i < runs.length; i++) {
+    const gap = runs[i]!.x0 - runs[i - 1]!.x1 - 1;
+    if (gap >= minGap) wideGaps++;
+  }
+  return wideGaps >= runs.length - 1;
+}
+
+/** Убрать белые/серые «прослойки» между несколькими товарами в одном foto. */
+function purgeMultiPackshotInteriorGutters(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  const colColor = new Uint16Array(w);
+  for (let x = 0; x < w; x++) {
+    let n = 0;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(src, pi, 236, 32) && isSubstantiveSourcePixel(src, pi)) n++;
+    }
+    colColor[x] = n;
+  }
+
+  const minCol = Math.max(12, Math.round(h * 0.02));
+  const minRun = Math.max(28, Math.round(w * 0.06));
+  const minGap = Math.max(8, Math.round(w * 0.01));
+
+  const runs: { x0: number; x1: number }[] = [];
+  let runStart = -1;
+  for (let x = 0; x < w; x++) {
+    const active = colColor[x]! >= minCol;
+    if (active && runStart < 0) runStart = x;
+    if (!active && runStart >= 0) {
+      if (x - runStart >= minRun) runs.push({ x0: runStart, x1: x - 1 });
+      runStart = -1;
+    }
+  }
+  if (runStart >= 0 && w - runStart >= minRun) runs.push({ x0: runStart, x1: w - 1 });
+  if (runs.length < 2) return;
+
+  const isGutterPixel = (pi: number) => {
+    if (!readNearWhiteRgb(src, pi, 238, 34)) return false;
+    const r = src[pi]!;
+    const g = src[pi + 1]!;
+    const b = src[pi + 2]!;
+    const avg = (r + g + b) / 3;
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    return avg >= 168 && spread <= 28;
+  };
+
+  for (let i = 1; i < runs.length; i++) {
+    const gapX0 = runs[i - 1]!.x1 + 1;
+    const gapX1 = runs[i]!.x0 - 1;
+    if (gapX1 - gapX0 + 1 < minGap) continue;
+    for (let x = gapX0; x <= gapX1; x++) {
+      let coloredOpaque = 0;
+      for (let y = 0; y < h; y++) {
+        const pi = (y * w + x) * 4;
+        if (pixels[pi + 3]! < 128) continue;
+        if (!readNearWhiteRgb(src, pi, 236, 32)) coloredOpaque++;
+      }
+      for (let y = 0; y < h; y++) {
+        const pi = (y * w + x) * 4;
+        if (pixels[pi + 3]! < 128) continue;
+        if (coloredOpaque >= 8 && !isGutterPixel(pi)) continue;
+        pixels[pi + 3] = 0;
+      }
+    }
+  }
+}
+
+async function finalizeExtractCosmeticsPixels(
+  buf: Buffer,
+  srcFitBuf: Buffer
+): Promise<Buffer> {
+  const { data: srcData, info } = await sharp(srcFitBuf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const src = Buffer.from(srcData);
+  const w = info.width;
+  const h = info.height;
+  const { data: cutData } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const pixels = Buffer.from(cutData);
+  if (!w || !h || src.length !== pixels.length) return buf;
+
+  purgeUnconnectedExteriorWhite(pixels, src, w, h);
+  clampColumnWhiteToProductSpan(pixels, src, w, h);
+  clearFullWidthTopWhiteBands(pixels, src, w, h);
+
+  buf = await sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
+  buf = await removeSemiTransparentWhiteFringe(buf);
+  return buf;
+}
+
+async function preprocessCosmeticsGridPackshot(input: Buffer): Promise<Buffer> {
+  const source = await enhanceSourceForProcessing(input);
+  const srcMeta = await sharp(source).metadata();
+  const sw = srcMeta.width ?? 0;
+  const sh = srcMeta.height ?? 0;
+
+  const srcFitBuf = await fitCosmeticsOzonGrid(input);
+
+  let buf = await stripCosmeticsGridBackground(srcFitBuf);
+  buf = await trimTransparentSafe(buf);
+  buf = await cropToVisibleProduct(buf, 8, 0.024, 12);
+
+  if (sw && sh && (sw !== 600 || sh !== 800)) {
+    buf = await sharp(buf)
+      .resize(sw, sh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+      .png()
+      .toBuffer();
+  }
+
+  buf = await stripEdgeConnectedOpaqueWhite(buf);
+  buf = await removeSemiTransparentWhiteFringe(buf);
+  buf = await trimTransparentSafe(buf);
+  return finalizeCosmeticsCutout(buf);
+}
+
+async function preprocessWhiteOnWhitePackshot(input: Buffer): Promise<Buffer> {
+  const source = await enhanceSourceForProcessing(input);
+  const srcMeta = await sharp(source).metadata();
+  const sw = srcMeta.width ?? 0;
+  const sh = srcMeta.height ?? 0;
+
+  const srcFitBuf = await fitCosmeticsOzonGrid(input);
+
+  let buf = await extractCosmeticsPackshotFromWhite(srcFitBuf);
+  buf = await finalizeExtractCosmeticsPixels(buf, srcFitBuf);
+  buf = await trimTransparentSafe(buf);
+  buf = await cropToVisibleProduct(buf, 8, 0.024, 12);
+
+  if (sw && sh && (sw !== 600 || sh !== 800)) {
+    buf = await sharp(buf)
+      .resize(sw, sh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
+      .png()
+      .toBuffer();
+  }
+
+  buf = await trimTransparentSafe(buf);
+  return finalizeCosmeticsCutout(buf);
+}
+
+
+/** Узкий товар на белом (тюбик) — extract; широкие с декором — grid strip. */
+async function shouldUseExtractWhitePath(input: Buffer): Promise<boolean> {
+  const buf = await enhanceSourceForProcessing(input);
+  const { data, info } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width ?? 0;
+  const h = info.height ?? 0;
+  if (!w || !h) return false;
+
+  let minX = w;
+  let maxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (!readNearWhiteRgb(data, pi, 236, 32) && isSubstantiveSourcePixel(data, pi)) {
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+      }
+    }
+  }
+  if (maxX < minX) return false;
+  return (maxX - minX + 1) / w < 0.72;
+}
 
 async function isWhiteOnWhitePackshot(input: Buffer): Promise<boolean> {
   const buf = await enhanceSourceForProcessing(input);
@@ -2507,29 +2721,16 @@ async function purgeNearWhiteOpaqueFringe(input: Buffer, threshold = 236): Promi
 }
 
 export async function preprocessCosmeticsProductBuffer(input: Buffer): Promise<Buffer> {
-  if (await isWhiteOnWhitePackshot(input)) {
-    return preprocessEssieWhiteCapPackshot(input);
+  if (await isMultiProductPackshot(input)) {
+    return preprocessCosmeticsGridPackshot(input);
   }
-  const source = await enhanceSourceForProcessing(input);
-  const srcMeta = await sharp(source).metadata();
-  const sw = srcMeta.width ?? 0;
-  const sh = srcMeta.height ?? 0;
-
-  const srcFitBuf = await fitCosmeticsOzonGrid(input);
-
-  let buf = await stripCosmeticsGridBackground(srcFitBuf);
-  buf = await trimTransparentSafe(buf);
-  buf = await cropToVisibleProduct(buf, 8, 0.024, 12);
-
-  if (sw && sh && (sw !== 600 || sh !== 800)) {
-    buf = await sharp(buf)
-      .resize(sw, sh, { fit: "inside", kernel: sharp.kernel.lanczos3 })
-      .png()
-      .toBuffer();
+  if (
+    (await isWhiteOnWhitePackshot(input)) &&
+    (await shouldUseExtractWhitePath(input))
+  ) {
+    return preprocessWhiteOnWhitePackshot(input);
   }
-
-  buf = await trimTransparentSafe(buf);
-  return finalizeCosmeticsCutout(buf);
+  return preprocessCosmeticsGridPackshot(input);
 }
 
 export type FitProductOptions = {
