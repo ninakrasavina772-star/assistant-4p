@@ -15,8 +15,6 @@ import {
 } from "@/lib/templateGenerator/photoThemes";
 
 const MAX_THEMED_VARIANTS = 3;
-/** Только если AI полностью недоступен — 1 богатый процедурный фон, без «blush» */
-const RICH_FALLBACK_STYLES: BackgroundStyle[] = ["marble", "dark-luxury", "warm-beige"];
 
 async function uploadGeneratedPhoto(buf: Buffer, sku: string, tag: string): Promise<string> {
   const safeSku = sku.replace(/[^\w.-]+/g, "_").slice(0, 48) || "sku";
@@ -123,47 +121,49 @@ export async function resolveRowPhotos(opts: GenerateRowPhotosOpts): Promise<Gen
     }
   }
 
-  if (!generated.length) {
-    const fallbackStyles =
-      opts.photoStyle === "gradient"
-        ? (["marble", "warm-beige", "dark-luxury"] as BackgroundStyle[])
-        : RICH_FALLBACK_STYLES;
-
-    for (const style of fallbackStyles.slice(0, useThemed ? 1 : need)) {
+  // SVG-градиенты только при явном выборе «Простые градиенты» в UI
+  if (!generated.length && opts.photoStyle === "gradient") {
+    const fallbackStyles: BackgroundStyle[] = ["marble", "warm-beige", "dark-luxury"];
+    for (const style of fallbackStyles.slice(0, need)) {
       try {
         const bg = await renderBackground(style);
         const composed = await compositeOnBackground(cutout, bg);
-        const url = await uploadGeneratedPhoto(composed, opts.sku, `fallback-${style}`);
+        const url = await uploadGeneratedPhoto(composed, opts.sku, `gradient-${style}`);
         generated.push(url);
-        if (useThemed) break;
       } catch (e) {
-        console.warn("fallback photo failed:", style, e);
+        console.warn("gradient photo failed:", style, e);
       }
     }
   }
 
   if (!generated.length) {
-    const hint = aiErrors[0] ? ` (${aiErrors[0].slice(0, 80)})` : "";
+    const hint = aiErrors[0] ? ` (${aiErrors[0].slice(0, 120)})` : "";
+    if (useThemed) {
+      return {
+        imageUrls: existing,
+        generated: [],
+        note: `DALL·E не сгенерировал фон${hint}. Проверьте OPENAI_API_KEY на Vercel и баланс OpenAI.`
+      };
+    }
+    if (opts.photoStyle !== "gradient") {
+      return {
+        imageUrls: existing,
+        generated: [],
+        note: "Для AI-фонов нужен OpenAI API key (в форме или OPENAI_API_KEY на Vercel)."
+      };
+    }
     return {
       imageUrls: existing,
       generated: [],
-      note: useThemed
-        ? `не удалось сгенерировать фото${hint}`
-        : "не удалось сгенерировать варианты фона"
+      note: `Не удалось сгенерировать фото${hint}`
     };
   }
 
   const themeLabels = scenes.slice(0, generated.length).map((s) => s.label).join(", ");
-  const usedFallback = generated.some((u) => u.includes("fallback-"));
   return {
     imageUrls: mergeImageUrls(existing, generated),
     generated,
-    note:
-      themeLabels && !usedFallback
-        ? `темы: ${themeLabels}`
-        : usedFallback && useThemed
-          ? "AI-фон недоступен — использован богатый запасной фон"
-          : undefined
+    note: themeLabels ? `темы: ${themeLabels}` : undefined
   };
 }
 
