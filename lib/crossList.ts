@@ -1,5 +1,9 @@
 import { productBrandName } from "./brand-filter";
 import {
+  crossRubricColorVerdict,
+  crossRubricPairBlockedByColor,
+} from "./crossRubricColorGate";
+import {
   classifyCrossSoftPair,
   combinedNameSimilarity,
   computeIntraSoftDupTiers,
@@ -7,7 +11,10 @@ import {
   prefetchCrossRubricACrossPhashes,
   prefetchCrossRubricBCrossPhashes,
   prefetchOnlyACrossPhashes,
-  prefetchOnlyBCrossPhashes
+  prefetchOnlyBCrossPhashes,
+  visualSimilarAcrossAllPhotos,
+  CROSS_RUBRIC_FACTORY_PHASH_MAX,
+  type CrossSoftDupOptions
 } from "./dupTiers";
 import { type PhashCache } from "./imagePhash";
 import {
@@ -52,6 +59,9 @@ export async function buildOnlyBCrossWithA(
   const byBrandA = new Map<string, FpProduct[]>();
   const factoryToA = new Map<string, FpProduct[]>();
   const crossRubric = matchOpts?.crossRubric === true;
+  const crossSoftOpts: CrossSoftDupOptions | undefined = crossRubric
+    ? { crossRubric: true }
+    : undefined;
   for (const pA of allA) {
     const bk = normBrandKeyStr(pA);
     if (!byBrandA.has(bk)) byBrandA.set(bk, []);
@@ -123,10 +133,29 @@ export async function buildOnlyBCrossWithA(
         for (const pA of factoryToA.get(tok) || []) {
           if (pA.id === pB.id) continue;
           if (hitA.has(pA.id)) continue;
+          const cA = toCompareProduct(pA);
+          if (!sameBrandForFuzzy(cA, cB)) continue;
+          const colorV = crossRubricColorVerdict(
+            cA,
+            cB,
+            pA.name,
+            pB.name,
+            nameLocale
+          );
+          if (colorV === "conflict") continue;
+          if (colorV === "unknown") {
+            const visualOk = visualSimilarAcrossAllPhotos(
+              cA,
+              cB,
+              phashCache,
+              CROSS_RUBRIC_FACTORY_PHASH_MAX
+            );
+            if (!visualOk) continue;
+          }
           hitA.add(pA.id);
           rows.push({
             kind: "article",
-            productOnA: toCompareProduct(pA),
+            productOnA: cA,
             productFromOnlyB: cB,
             article: tok
           });
@@ -145,12 +174,19 @@ export async function buildOnlyBCrossWithA(
     for (const pA of sorted) {
       const cA = toCompareProduct(pA);
       if (!sameBrandForFuzzy(cA, cB)) continue;
+      if (
+        crossRubric &&
+        crossRubricPairBlockedByColor(cA, cB, pA.name, pB.name, nameLocale)
+      ) {
+        continue;
+      }
       const r = await classifyCrossSoftPair(
         cA,
         cB,
         nameLocale,
         attrOpts,
         phashCache,
+        crossSoftOpts
       );
       if (!r) continue;
       hitA.add(pA.id);
@@ -200,6 +236,9 @@ export async function buildOnlyACrossWithB(
   const byBrandB = new Map<string, FpProduct[]>();
   const factoryToB = new Map<string, FpProduct[]>();
   const crossRubric = matchOpts?.crossRubric === true;
+  const crossSoftOpts: CrossSoftDupOptions | undefined = crossRubric
+    ? { crossRubric: true }
+    : undefined;
   for (const pB of allB) {
     const bk = normBrandKeyStr(pB);
     if (!byBrandB.has(bk)) byBrandB.set(bk, []);
@@ -278,12 +317,19 @@ export async function buildOnlyACrossWithB(
     for (const pB of sorted) {
       const cB = toCompareProduct(pB);
       if (!sameBrandForFuzzy(cA, cB)) continue;
+      if (
+        crossRubric &&
+        crossRubricPairBlockedByColor(cA, cB, pA.name, pB.name, nameLocale)
+      ) {
+        continue;
+      }
       const r = await classifyCrossSoftPair(
         cA,
         cB,
         nameLocale,
         attrOpts,
         phashCache,
+        crossSoftOpts
       );
       if (!r) continue;
       hitB.add(pB.id);

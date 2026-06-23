@@ -17,6 +17,7 @@ import {
   classifyNoveltiesAgainstA,
   findInternalNoveltyDuplicates
 } from "@/lib/cleanNovelties";
+import { buildCrossRubricVariationCatalog } from "@/lib/crossRubricCatalog";
 import { findIntraSiteDuplicates } from "@/lib/intraSiteDups";
 import { metabaseIsConfigured } from "@/lib/letualMetabase";
 import { fetchFpProductsByVariationIdsFromMetabase } from "@/lib/metabaseVariationProducts";
@@ -247,6 +248,24 @@ async function resolveFeedCsvInput(label: string, urlRaw: unknown, textRaw: unkn
     throw new Error(`${label}: CSV слишком большой`);
   }
   return t;
+}
+
+
+function withCrossRubricCatalog(
+  result: CompareResult,
+  productsA: import("@/lib/types").FpProduct[],
+  productsB: import("@/lib/types").FpProduct[]
+): CompareResult {
+  if (!result.crossRubricMode) return result;
+  return {
+    ...result,
+    crossRubricVariationCatalog: buildCrossRubricVariationCatalog(
+      productsA,
+      productsB,
+      result.onlyBCrossWithA ?? [],
+      result.onlyACrossWithB ?? []
+    )
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -548,7 +567,7 @@ export async function POST(req: NextRequest) {
           totalB
         }
       };
-      return NextResponse.json(result);
+      return NextResponse.json(withCrossRubricCatalog(result, productsA, productsB));
     }
 
     const tokenA = resolveToken(body.tokenA, "A"),
@@ -752,7 +771,7 @@ export async function POST(req: NextRequest) {
           totalB
         }
       };
-      return NextResponse.json(result);
+      return NextResponse.json(withCrossRubricCatalog(result, productsA, productsB));
     }
 
     const tokenA = resolveToken(body.tokenA, "A"),
@@ -939,7 +958,7 @@ export async function POST(req: NextRequest) {
           totalB
         }
       };
-      return NextResponse.json(result);
+      return NextResponse.json(withCrossRubricCatalog(result, productsA, productsB));
     }
 
     const tokenA = resolveToken(body.tokenA, "A"),
@@ -1297,7 +1316,7 @@ export async function POST(req: NextRequest) {
             totalB
           }
         };
-        return NextResponse.json(result);
+        return NextResponse.json(withCrossRubricCatalog(result, productsA, productsB));
       }
 
       const csvA = await resolveFeedCsvInput("Сайт A", body.feedUrlA, body.feedCsvTextA);
@@ -1340,7 +1359,7 @@ export async function POST(req: NextRequest) {
         unlikelySearch: buildUnlikelySearch(attrMatch),
         catalogFromFeeds: true
       };
-      return NextResponse.json(result);
+      return NextResponse.json(withCrossRubricCatalog(result, productsA, productsB));
     }
 
     if (singleDupsMode) {
@@ -1537,7 +1556,7 @@ export async function POST(req: NextRequest) {
           totalB
         }
       };
-      return NextResponse.json(result);
+      return NextResponse.json(withCrossRubricCatalog(result, productsA, productsB));
     }
 
     const tokenA = resolveToken(body.tokenA, "A"),

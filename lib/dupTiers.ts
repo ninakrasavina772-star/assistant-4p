@@ -1,4 +1,5 @@
 import { incompatibleBeautyTitles } from "./beautyCategoryConflict";
+import { crossRubricPairBlockedByColor } from "./crossRubricColorGate";
 import { productBrandName } from "./brand-filter";
 import { firstImageRefEquivalent } from "./imageUrlMatch";
 import {
@@ -29,7 +30,8 @@ import { wordFollowedByConflictingDigit } from "./variantNameGuard";
 
 /** Внутри одной рубрики: мягче aHash — разные ракурсы/превью одного товара. */
 const INTRA_SOFT_VISUAL_HAMMING_MAX = 16;
-const INTRA_UNLIKELY_VISUAL_HAMMING_MAX = 11;
+export const CROSS_RUBRIC_FACTORY_PHASH_MAX = 11;
+const INTRA_UNLIKELY_VISUAL_HAMMING_MAX = CROSS_RUBRIC_FACTORY_PHASH_MAX;
 /** Порог схожести названия для ~90% без эквивалентного URL фото (только intra, тот же бренд). */
 const INTRA_NAME_STRONG_NO_URL_MIN = 0.55;
 /**
@@ -243,7 +245,7 @@ function visualFromCache(
  * хоть одно фото A визуально похоже на хоть одно фото B (одинаковый URL или
  * phash в пределах `maxDist`).
  */
-function visualSimilarAcrossAllPhotos(
+export function visualSimilarAcrossAllPhotos(
   cA: CompareProduct,
   cB: CompareProduct,
   cache: PhashCache,
@@ -272,6 +274,8 @@ export type CrossSoftDupOptions = {
    * попадают в ~90% / ~60% — это ложные дубли.
    */
   skipDisjointEanGuard?: boolean;
+  /** Режим «Дубли: 2 рубрики, 1 сайт» — отсекать разные цвета в названии/атрибутах. */
+  crossRubric?: boolean;
 };
 
 function resolveTierForPair(
@@ -292,6 +296,12 @@ function resolveTierForPair(
     return null;
   }
   if (incompatibleBeautyTitles(na, nb)) return null;
+  if (
+    crossOpts?.crossRubric &&
+    crossRubricPairBlockedByColor(cI, cJ, na, nb, nameLocale)
+  ) {
+    return null;
+  }
 
   const { full, model: modelSim, modelA: mA, modelB: mB } = nameAndModelScore(
     na,

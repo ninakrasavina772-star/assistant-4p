@@ -129,10 +129,21 @@ function collectVolumeTextSources(p: FpProduct): string[] {
  * Плоские подсказки для сопоставления (не нормируем до физ. ед.).
  * Объём: сначала поля в JSON, иначе — эвристика по названию и описанию (50 мл / 30ml / …).
  */
+function applyFeedExtras(p: FpProduct, out: AttrOut): void {
+  const fe = (p as Record<string, unknown>).feedExtras as
+    | { volume?: string; color?: string; shade?: string }
+    | undefined;
+  if (!fe || typeof fe !== "object") return;
+  if (!out.vol && fe.volume?.trim()) out.vol = fe.volume.trim();
+  if (!out.col && fe.color?.trim()) out.col = fe.color.trim();
+  if (!out.sh && fe.shade?.trim()) out.sh = fe.shade.trim();
+}
+
 export function extractProductAttributes(
   p: FpProduct
 ): { attrVolume?: string; attrColor?: string; attrShade?: string } {
   const out: AttrOut = {};
+  applyFeedExtras(p, out);
   walk(p as unknown, 0, out);
   if (!out.vol) {
     for (const chunk of collectVolumeTextSources(p)) {

@@ -55,14 +55,31 @@ export type FpProduct = {
    * Вариации из CSV-фида (на каждую строку фида — свой артикул + EAN).
    * Используется для пометки «дубль по EAN — вариация ABC» в выгрузке чистого фида.
    */
-  feedVariants?: Array<{ article?: string; ean?: string }>;
+  feedVariants?: Array<{
+    article?: string;
+    ean?: string;
+    size?: string;
+    variationId?: string;
+  }>;
   /** Дополнительные поля из фида (объём, цена, остаток) для компактной Excel-выгрузки. */
-  feedExtras?: { volume?: string; price?: string; stock?: string };
+  feedExtras?: { volume?: string; color?: string; shade?: string; price?: string; stock?: string };
 };
 
 export type NameLocale = "en" | "ru";
 
 /** Учитывать при сопоставлении «название + фото» (и внутри одной витрины) */
+export type CrossRubricVariationRow = {
+  variationId: string;
+  article?: string;
+  ean?: string;
+  size?: string;
+};
+
+export type CrossRubricVariationCatalog = {
+  a: Record<number, CrossRubricVariationRow[]>;
+  b: Record<number, CrossRubricVariationRow[]>;
+};
+
 export type AttrMatchOptions = {
   volume?: boolean;
   shade?: boolean;
@@ -623,4 +640,6 @@ export type CompareResult = {
   crossRubricBatch?: CrossRubricBatchInfo;
   /** Каталоги A/B из CSV-фидов (не выгрузка по рубрикам API) */
   catalogFromFeeds?: boolean;
+  /** Вариации (SKU + размер) для товаров из пар дублей — для Excel «верный дубль». */
+  crossRubricVariationCatalog?: CrossRubricVariationCatalog;
 };

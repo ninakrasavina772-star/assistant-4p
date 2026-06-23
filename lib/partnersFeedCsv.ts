@@ -78,10 +78,12 @@ type Agg = {
   eans: Set<string>;
   images: string[];
   /** Сырые строки из CSV: каждая строка = одна вариация (свой артикул + EAN). */
-  variants: { article: string; ean: string }[];
+  variants: { article: string; ean: string; size: string; variationId: string }[];
   description: string;
   shortDescription: string;
   volume: string;
+  color: string;
+  shade: string;
   price: string;
   stock: string;
 };
@@ -118,7 +120,9 @@ function mergeAggs(aggs: Map<number, Agg>): FpProduct[] {
     const feedVariants = a.variants
       .map((v) => ({
         ...(v.article ? { article: v.article } : {}),
-        ...(v.ean ? { ean: v.ean } : {})
+        ...(v.ean ? { ean: v.ean } : {}),
+        ...(v.size ? { size: v.size } : {}),
+        ...(v.variationId ? { variationId: v.variationId } : {})
       }))
       .filter((v) => v.article || v.ean);
     list.push({
@@ -132,10 +136,12 @@ function mergeAggs(aggs: Map<number, Agg>): FpProduct[] {
       ...(feedVariants.length ? { feedVariants } : {}),
       ...(a.description ? { description: a.description } : {}),
       ...(a.shortDescription ? { short_description: a.shortDescription } : {}),
-      ...(a.volume || a.price || a.stock
+      ...(a.volume || a.color || a.shade || a.price || a.stock
         ? {
             feedExtras: {
               ...(a.volume ? { volume: a.volume } : {}),
+              ...(a.color ? { color: a.color } : {}),
+              ...(a.shade ? { shade: a.shade } : {}),
               ...(a.price ? { price: a.price } : {}),
               ...(a.stock ? { stock: a.stock } : {})
             }
@@ -211,9 +217,31 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
   const stockIdx = findColIdx(headers, "Остаток", "Stock", "Quantity");
   /** Объём может быть в нескольких колонках: Параметр/Свойство Volume или Property/Param Volume. */
   const volumeIdxs: number[] = [];
+  const colorIdxs: number[] = [];
+  const sizeIdxs: number[] = [];
+  const shadeIdxs: number[] = [];
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i] ?? "";
     if (/volume/i.test(h) || /объ[её]м/i.test(h)) volumeIdxs.push(i);
+    if (
+      /^(свойство|параметр|property|param)\s*:\s*(цвет|color|colour)\b/i.test(h) ||
+      (/^(цвет|color|colour)\b/i.test(h) && !/shade|оттенок/i.test(h))
+    ) {
+      colorIdxs.push(i);
+    }
+    if (
+      /^(свойство|параметр|property|param)\s*:\s*(оттенок|shade)\b/i.test(h) ||
+      /^(оттенок|shade)\b/i.test(h)
+    ) {
+      shadeIdxs.push(i);
+    }
+    if (
+      /размер/i.test(h) &&
+      !/габарит/i.test(h) &&
+      (/обув/i.test(h) || /^(свойство|параметр|property|param)\s*:\s*размер/i.test(h) || /^size\b/i.test(h))
+    ) {
+      sizeIdxs.push(i);
+    }
   }
 
   if (idIdx < 0) {
@@ -252,6 +280,25 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
       const v = normCell(row[vi]);
       if (v && (!volume || v.length > volume.length)) volume = v;
     }
+    let color = "";
+    for (const ci of colorIdxs) {
+      const v = normCell(row[ci]);
+      if (v && (!color || v.length > color.length)) color = v;
+    }
+    let shade = "";
+    for (const si of shadeIdxs) {
+      const v = normCell(row[si]);
+      if (v && (!shade || v.length > shade.length)) shade = v;
+    }
+    let size = "";
+    for (const zi of sizeIdxs) {
+      const v = normCell(row[zi]);
+      if (v && (!size || v.length > size.length)) size = v;
+    }
+    const variationId = (() => {
+      const m = url.match(/[?&]v=(\d+)/i);
+      return m ? m[1]! : article;
+    })();
 
     let agg = aggs.get(id);
     if (!agg) {
@@ -267,6 +314,8 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
         description: "",
         shortDescription: "",
         volume: "",
+        color: "",
+        shade: "",
         price: "",
         stock: ""
       };
@@ -281,6 +330,8 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
     if (desc && desc.length > agg.description.length) agg.description = desc;
     if (short && short.length > agg.shortDescription.length) agg.shortDescription = short;
     if (volume && !agg.volume) agg.volume = volume;
+    if (color && !agg.color) agg.color = color;
+    if (shade && !agg.shade) agg.shade = shade;
     if (price && !agg.price) agg.price = price;
     if (stock && !agg.stock) agg.stock = stock;
     /** Каждая строка фида — это вариант с собственным артикулом и EAN. Дубли (та же пара) не повторяем. */
@@ -288,7 +339,7 @@ export async function parsePartnersFeedCsv(csvText: string): Promise<FpProduct[]
       const exists = agg.variants.some(
         (v) => v.article === article && v.ean === ean
       );
-      if (!exists) agg.variants.push({ article, ean });
+      if (!exists) agg.variants.push({ article, ean, size, variationId });
     }
     for (const im of imgs) {
       if (!agg.images.includes(im)) agg.images.push(im);

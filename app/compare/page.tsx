@@ -162,6 +162,43 @@ function cleanProcessedStorageKey(siteA: string, siteB: string): string {
   return `fp_compare_clean_processed_${siteA}|${siteB}`;
 }
 
+function crossRubricProcessedStorageKey(siteA: string, siteB: string): string {
+  return `fp_compare_cross_rubric_processed_${siteA}|${siteB}`;
+}
+
+function crossRubricVerifiedStorageKey(siteA: string, siteB: string): string {
+  return `fp_compare_cross_rubric_verified_${siteA}|${siteB}`;
+}
+
+/** Галочка «верный дубль» — для выгрузки в Excel с вариациями. */
+function CrossRubricVerifiedCheckbox({
+  checked,
+  onChange
+}: {
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs cursor-pointer select-none shrink-0">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        className="rounded border-violet-500"
+      />
+      <span
+        className={
+          checked
+            ? "font-semibold text-violet-900"
+            : "text-slate-600 hover:text-slate-900"
+        }
+      >
+        {checked ? "Верный дубль" : "Отметить верный дубль"}
+      </span>
+    </label>
+  );
+}
+
 /** Галочка «обработано» для пары дублей (контент-менеджер). */
 function CleanPairProcessedCheckbox({
   checked,
@@ -692,6 +729,15 @@ export default function ComparePage() {
   );
   /** Скрывать уже обработанные пары в списках дублей / AI / B↔B. */
   const [cleanHideProcessed, setCleanHideProcessed] = useState(false);
+  /** Пары cross-rubric, отмеченные как просмотренные. */
+  const [crossRubricProcessedKeys, setCrossRubricProcessedKeys] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [crossRubricHideProcessed, setCrossRubricHideProcessed] = useState(false);
+  /** Пары, подтверждённые контентом как верные дубли (для Excel). */
+  const [crossRubricVerifiedKeys, setCrossRubricVerifiedKeys] = useState<Set<string>>(
+    () => new Set()
+  );
 
   /** AI-проверка чистых новинок (по фото + названию, БЕЗ EAN). */
   type CleanAiVerdict = {
@@ -985,6 +1031,61 @@ export default function ComparePage() {
     cleanNoveltiesData?.stats.noveltyCountById
   ]);
 
+  const crossRubricProcessedScope =
+    data && !("resultKind" in data) && data.crossRubricMode
+      ? { siteA: data.siteALabel, siteB: data.siteBLabel }
+      : null;
+
+  useEffect(() => {
+    if (!crossRubricProcessedScope) {
+      setCrossRubricProcessedKeys(new Set());
+      return;
+    }
+    const sk = crossRubricProcessedStorageKey(
+      crossRubricProcessedScope.siteA,
+      crossRubricProcessedScope.siteB
+    );
+    try {
+      const raw = sessionStorage.getItem(sk);
+      if (!raw) {
+        setCrossRubricProcessedKeys(new Set());
+        return;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        setCrossRubricProcessedKeys(new Set());
+        return;
+      }
+      setCrossRubricProcessedKeys(
+        new Set(parsed.filter((x): x is string => typeof x === "string"))
+      );
+    } catch {
+      setCrossRubricProcessedKeys(new Set());
+    }
+  }, [crossRubricProcessedScope?.siteA, crossRubricProcessedScope?.siteB]);
+
+  const toggleCrossRubricProcessed = useCallback(
+    (idA: number, idB: number) => {
+      if (!data || "resultKind" in data || !data.crossRubricMode) return;
+      const pk = dupPairKey(idA, idB);
+      setCrossRubricProcessedKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(pk)) next.delete(pk);
+        else next.add(pk);
+        try {
+          sessionStorage.setItem(
+            crossRubricProcessedStorageKey(data.siteALabel, data.siteBLabel),
+            JSON.stringify([...next])
+          );
+        } catch {
+          /** ignore */
+        }
+        return next;
+      });
+    },
+    [data]
+  );
+
   const toggleCleanProcessed = useCallback(
     (idA: number, idB: number) => {
       if (!cleanNoveltiesData) return;
@@ -1008,6 +1109,56 @@ export default function ComparePage() {
       });
     },
     [cleanNoveltiesData]
+  );
+
+  useEffect(() => {
+    if (!crossRubricProcessedScope) {
+      setCrossRubricVerifiedKeys(new Set());
+      return;
+    }
+    const sk = crossRubricVerifiedStorageKey(
+      crossRubricProcessedScope.siteA,
+      crossRubricProcessedScope.siteB
+    );
+    try {
+      const raw = sessionStorage.getItem(sk);
+      if (!raw) {
+        setCrossRubricVerifiedKeys(new Set());
+        return;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        setCrossRubricVerifiedKeys(new Set());
+        return;
+      }
+      setCrossRubricVerifiedKeys(
+        new Set(parsed.filter((x): x is string => typeof x === "string"))
+      );
+    } catch {
+      setCrossRubricVerifiedKeys(new Set());
+    }
+  }, [crossRubricProcessedScope?.siteA, crossRubricProcessedScope?.siteB]);
+
+  const toggleCrossRubricVerified = useCallback(
+    (idA: number, idB: number) => {
+      if (!data || "resultKind" in data || !data.crossRubricMode) return;
+      const pk = dupPairKey(idA, idB);
+      setCrossRubricVerifiedKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(pk)) next.delete(pk);
+        else next.add(pk);
+        try {
+          sessionStorage.setItem(
+            crossRubricVerifiedStorageKey(data.siteALabel, data.siteBLabel),
+            JSON.stringify([...next])
+          );
+        } catch {
+          /** ignore */
+        }
+        return next;
+      });
+    },
+    [data]
   );
 
   const scrollToCleanPairsList = useCallback(() => {
@@ -2477,10 +2628,24 @@ export default function ComparePage() {
 
   const crossBvsARowsDisplayed = useMemo(
     () =>
-      crossBvsARowsFiltered.filter((row) =>
-        aiDupPassesSoftDup(row.kind, row.onA.id, row.fromB.id)
-      ),
-    [crossBvsARowsFiltered, aiDupPassesSoftDup]
+      crossBvsARowsFiltered
+        .filter((row) =>
+          aiDupPassesSoftDup(row.kind, row.onA.id, row.fromB.id)
+        )
+        .filter((row) => {
+          if (!data || "resultKind" in data || !data.crossRubricMode) return true;
+          if (!crossRubricHideProcessed) return true;
+          return !crossRubricProcessedKeys.has(
+            dupPairKey(row.onA.id, row.fromB.id)
+          );
+        }),
+    [
+      crossBvsARowsFiltered,
+      aiDupPassesSoftDup,
+      data,
+      crossRubricHideProcessed,
+      crossRubricProcessedKeys
+    ]
   );
 
   const onlyBCrossWithADisplayed = useMemo(() => {
@@ -2689,6 +2854,46 @@ export default function ComparePage() {
       );
     }
   }, [data]);
+
+  const downloadVerifiedCrossRubricExcel = useCallback(async () => {
+    if (!data || "resultKind" in data || !data.crossRubricMode) return;
+    const catalog = data.crossRubricVariationCatalog;
+    if (!catalog) {
+      setError(
+        "Нет данных по вариациям для Excel. Перезапустите сравнение в режиме «2 рубрики»."
+      );
+      return;
+    }
+    const pairs = crossBvsARows
+      .filter((row) =>
+        crossRubricVerifiedKeys.has(dupPairKey(row.onA.id, row.fromB.id))
+      )
+      .map((row) => ({ idA: row.onA.id, idB: row.fromB.id }));
+    if (!pairs.length) {
+      setError("Отметьте хотя бы одну пару как «верный дубль».");
+      return;
+    }
+    setError(null);
+    try {
+      const { downloadVerifiedCrossRubricDupExcel } = await import(
+        "@/lib/exportCrossRubricVerified"
+      );
+      await downloadVerifiedCrossRubricDupExcel(
+        pairs,
+        catalog,
+        data.siteALabel || "A",
+        data.siteBLabel || "B",
+        `${data.siteBLabel || "B"}_верные_дубли`,
+        data.nameLocale
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Не удалось сформировать Excel (нужен пакет xlsx: npm install)"
+      );
+    }
+  }, [data, crossBvsARows, crossRubricVerifiedKeys]);
 
   const downloadCrossDupPairsExcel = useCallback(async () => {
     if (!data || "resultKind" in data) return;
@@ -7660,7 +7865,7 @@ export default function ComparePage() {
                   <strong>EAN или артикулу</strong>.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2 mb-4">
+              <div className="flex flex-wrap items-center gap-2 mb-4">
                 <button
                   type="button"
                   onClick={downloadCrossDupPairsExcel}
@@ -7669,27 +7874,93 @@ export default function ComparePage() {
                 >
                   Скачать пары дублей (Excel, {onlyBCrossWithADisplayed.length} строк)
                 </button>
-                <button
-                  type="button"
-                  onClick={downloadNoveltiesWithDupColsExcel}
-                  disabled={!noveltiesBList.length}
-                  className="rounded-lg bg-white border border-emerald-800 text-emerald-950 px-3 py-2 text-sm font-medium hover:bg-emerald-50 disabled:opacity-50"
-                >
-                  Скачать все новинки с колонкой «дубль да/нет»
-                </button>
+                {!data.crossRubricMode && (
+                  <button
+                    type="button"
+                    onClick={downloadNoveltiesWithDupColsExcel}
+                    disabled={!noveltiesBList.length}
+                    className="rounded-lg bg-white border border-emerald-800 text-emerald-950 px-3 py-2 text-sm font-medium hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    Скачать все новинки с колонкой «дубль да/нет»
+                  </button>
+                )}
+                {data.crossRubricMode && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={downloadVerifiedCrossRubricExcel}
+                      disabled={crossRubricVerifiedKeys.size === 0}
+                      className="rounded-lg bg-violet-800 text-white px-3 py-2 text-sm font-medium hover:bg-violet-950 disabled:opacity-50"
+                    >
+                      Скачать верные дубли (Excel, {crossRubricVerifiedKeys.size})
+                    </button>
+                    <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={crossRubricHideProcessed}
+                        onChange={(e) =>
+                          setCrossRubricHideProcessed(e.target.checked)
+                        }
+                      />
+                      Скрыть обработанные
+                      {crossRubricProcessedKeys.size > 0 && (
+                        <span className="text-emerald-800 font-medium">
+                          · обработано {crossRubricProcessedKeys.size}
+                        </span>
+                      )}
+                      {crossRubricVerifiedKeys.size > 0 && (
+                        <span className="text-violet-900 font-medium">
+                          · верных {crossRubricVerifiedKeys.size}
+                        </span>
+                      )}
+                    </label>
+                  </>
+                )}
               </div>
               {crossBvsARowsDisplayed.length === 0 && (
                 <p className="text-sm text-slate-500">Нет — по выбранному фильтру типа дубля.</p>
               )}
               <div className="space-y-3 max-h-[min(80vh,1600px)] overflow-y-auto pr-1">
-                {crossBvsARowsDisplayed.map((row, i) => (
+                {crossBvsARowsDisplayed.map((row, i) => {
+                  const crossPk = dupPairKey(row.onA.id, row.fromB.id);
+                  const crossProcessed =
+                    data.crossRubricMode &&
+                    crossRubricProcessedKeys.has(crossPk);
+                  const crossVerified =
+                    data.crossRubricMode &&
+                    crossRubricVerifiedKeys.has(crossPk);
+                  return (
                   <div
                     key={`${row.fromB.id}-${row.onA.id}-${i}`}
-                    className="p-4 rounded-xl border border-emerald-200 bg-white space-y-2"
+                    className={`p-4 rounded-xl border space-y-2 ${
+                      crossVerified
+                        ? "border-violet-400 bg-violet-50/40 ring-1 ring-violet-200"
+                        : crossProcessed
+                          ? "border-emerald-300 bg-emerald-50/25 opacity-75"
+                          : "border-emerald-200 bg-white"
+                    }`}
                   >
-                    <p className="text-[10px] uppercase text-emerald-800 font-medium">
-                      {onlyBCrossKindTitle(row.kind)}
-                    </p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="text-[10px] uppercase text-emerald-800 font-medium">
+                        {onlyBCrossKindTitle(row.kind)}
+                      </p>
+                      {data.crossRubricMode && (
+                        <div className="flex flex-wrap items-center gap-3 justify-end">
+                          <CrossRubricVerifiedCheckbox
+                            checked={Boolean(crossVerified)}
+                            onChange={() =>
+                              toggleCrossRubricVerified(row.onA.id, row.fromB.id)
+                            }
+                          />
+                          <CleanPairProcessedCheckbox
+                            checked={Boolean(crossProcessed)}
+                            onChange={() =>
+                              toggleCrossRubricProcessed(row.onA.id, row.fromB.id)
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
                     <div className="grid sm:grid-cols-2 gap-3">
                       <div>
                         <p className="text-[11px] text-slate-500 mb-0.5">
@@ -7699,7 +7970,9 @@ export default function ComparePage() {
                       </div>
                       <div>
                         <p className="text-[11px] text-slate-500 mb-0.5">
-                          Новинка {data.siteBLabel} (по артикулу)
+                          {data.crossRubricMode
+                            ? `Каталог ${data.siteBLabel}`
+                            : `Новинка ${data.siteBLabel} (по артикулу)`}
                         </p>
                         <ProductCell c={row.fromB} siteLabel={data.siteBLabel} />
                       </div>
@@ -7726,7 +7999,7 @@ export default function ComparePage() {
                       />
                     )}
                   </div>
-                ))}
+                );})}
               </div>
             </section>
           )}
