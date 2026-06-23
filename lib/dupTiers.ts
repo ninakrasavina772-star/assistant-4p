@@ -3,6 +3,7 @@ import { productBrandName } from "./brand-filter";
 import { firstImageRefEquivalent } from "./imageUrlMatch";
 import {
   DEFAULT_VISUAL_HAMMING_MAX,
+  MAX_PHASH_DOWNLOADS,
   prefetchPhashes,
   type PhashCache,
   visualSimilarFromPhash
@@ -840,6 +841,69 @@ function normBrandKey(p: FpProduct): string {
 }
 
 /** Предзагрузка phash для всех потенциальных пар (B × A в одной бренд-корзине). */
+function capPhashUrlsByScore(
+  scored: { score: number; urls: string[] }[]
+): string[] {
+  scored.sort((a, b) => b.score - a.score);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const row of scored) {
+    for (const raw of row.urls) {
+      const u = raw.trim();
+      if (!u || seen.has(u)) continue;
+      seen.add(u);
+      out.push(u);
+      if (out.length >= MAX_PHASH_DOWNLOADS) return out;
+    }
+  }
+  return out;
+}
+
+function collectScoredCrossPhashUrls(
+  listA: FpProduct[],
+  listB: FpProduct[],
+  nameLocale: NameLocale,
+  crossOpts?: CrossSoftDupOptions
+): { score: number; urls: string[] }[] {
+  const scored: { score: number; urls: string[] }[] = [];
+  for (const pA of listA) {
+    for (const pB of listB) {
+      if (pA.id === pB.id) continue;
+      const cA = toCompareProduct(pA);
+      const cB = toCompareProduct(pB);
+      if (!sameBrandForFuzzy(cA, cB)) continue;
+      const na = pickComparableName(cA, nameLocale);
+      const nb = pickComparableName(cB, nameLocale);
+      if (wordFollowedByConflictingDigit(na, nb)) continue;
+      if (
+        !crossOpts?.skipDisjointEanGuard &&
+        softDupBlockedByDisjointEans(cA, cB)
+      ) {
+        continue;
+      }
+      const { full, model } = nameAndModelScore(
+        na,
+        nb,
+        cA.brand,
+        cB.brand
+      );
+      const comb = Math.max(full, model);
+      const imgI = cA.firstImage || "";
+      const imgJ = cB.firstImage || "";
+      if (!imgI || !imgJ) continue;
+      if (firstImageRefEquivalent(imgI, imgJ)) continue;
+      const need60 =
+        brandsExactForDup(cA, cB) && comb >= SLIGHT_NAME_UNLIKELY;
+      const needUn =
+        sameBrandForFuzzy(cA, cB) && comb >= SLIGHT_NAME_UNLIKELY;
+      if (need60 || needUn) {
+        scored.push({ score: comb, urls: [...imagesOf(cA), ...imagesOf(cB)] });
+      }
+    }
+  }
+  return scored;
+}
+
 export async function prefetchOnlyBCrossPhashes(
   rawOnlyB: FpProduct[],
   byBrandA: Map<string, FpProduct[]>,
@@ -847,13 +911,13 @@ export async function prefetchOnlyBCrossPhashes(
   cache: PhashCache,
   crossOpts?: CrossSoftDupOptions
 ): Promise<void> {
-  const urls: string[] = [];
+  const scored: { score: number; urls: string[] }[] = [];
   for (const pB of rawOnlyB) {
     const keyB = normBrandKey(pB);
     const listA = byBrandA.get(keyB) || [];
-    urls.push(...collectCrossPhashUrls(listA, [pB], nameLocale, crossOpts));
+    scored.push(...collectScoredCrossPhashUrls(listA, [pB], nameLocale, crossOpts));
   }
-  await prefetchPhashes(urls, cache);
+  await prefetchPhashes(capPhashUrlsByScore(scored), cache);
 }
 
 export async function prefetchOnlyACrossPhashes(
@@ -863,11 +927,11 @@ export async function prefetchOnlyACrossPhashes(
   cache: PhashCache,
   crossOpts?: CrossSoftDupOptions
 ): Promise<void> {
-  const urls: string[] = [];
+  const scored: { score: number; urls: string[] }[] = [];
   for (const pA of rawOnlyA) {
     const keyA = normBrandKey(pA);
     const listB = byBrandB.get(keyA) || [];
-    urls.push(...collectCrossPhashUrls([pA], listB, nameLocale, crossOpts));
+    scored.push(...collectScoredCrossPhashUrls([pA], listB, nameLocale, crossOpts));
   }
-  await prefetchPhashes(urls, cache);
+  await prefetchPhashes(capPhashUrlsByScore(scored), cache);
 }

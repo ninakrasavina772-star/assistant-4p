@@ -11,6 +11,7 @@ import { type PhashCache } from "./imagePhash";
 import {
   collectArticleKeys,
   collectEanIndexKeys,
+  collectFactoryModelTokensFromName,
   toCompareProduct
 } from "./product";
 import { normBrand, sameBrandForFuzzy } from "./pairScoring";
@@ -41,10 +42,15 @@ export async function buildOnlyBCrossWithA(
   const eanToA = new Map<string, FpProduct[]>();
   const artToA = new Map<string, FpProduct[]>();
   const byBrandA = new Map<string, FpProduct[]>();
+  const factoryToA = new Map<string, FpProduct[]>();
   for (const pA of allA) {
     const bk = normBrandKeyStr(pA);
     if (!byBrandA.has(bk)) byBrandA.set(bk, []);
     byBrandA.get(bk)!.push(pA);
+    for (const tok of collectFactoryModelTokensFromName(pA.name)) {
+      if (!factoryToA.has(tok)) factoryToA.set(tok, []);
+      factoryToA.get(tok)!.push(pA);
+    }
     for (const e of collectEanIndexKeys(pA)) {
       if (!eanToA.has(e)) eanToA.set(e, []);
       eanToA.get(e)!.push(pA);
@@ -89,6 +95,19 @@ export async function buildOnlyBCrossWithA(
           productOnA: toCompareProduct(pA),
           productFromOnlyB: cB,
           article: art
+        });
+      }
+    }
+    for (const tok of collectFactoryModelTokensFromName(pB.name)) {
+      for (const pA of factoryToA.get(tok) || []) {
+        if (pA.id === pB.id) continue;
+        if (hitA.has(pA.id)) continue;
+        hitA.add(pA.id);
+        rows.push({
+          kind: "article",
+          productOnA: toCompareProduct(pA),
+          productFromOnlyB: cB,
+          article: tok
         });
       }
     }
@@ -156,10 +175,15 @@ export async function buildOnlyACrossWithB(
   const eanToB = new Map<string, FpProduct[]>();
   const artToB = new Map<string, FpProduct[]>();
   const byBrandB = new Map<string, FpProduct[]>();
+  const factoryToB = new Map<string, FpProduct[]>();
   for (const pB of allB) {
     const bk = normBrandKeyStr(pB);
     if (!byBrandB.has(bk)) byBrandB.set(bk, []);
     byBrandB.get(bk)!.push(pB);
+    for (const tok of collectFactoryModelTokensFromName(pB.name)) {
+      if (!factoryToB.has(tok)) factoryToB.set(tok, []);
+      factoryToB.get(tok)!.push(pB);
+    }
     for (const e of collectEanIndexKeys(pB)) {
       if (!eanToB.has(e)) eanToB.set(e, []);
       eanToB.get(e)!.push(pB);

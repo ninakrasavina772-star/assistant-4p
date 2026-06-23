@@ -83,7 +83,7 @@ export async function phash64FromUrl(
  * при превышении prefetch не загружает ничего и ветка «похоже фото (phash)» молча отключается —
  * остаётся только сравнение по эквивалентному URL.
  */
-const MAX_PHASH_DOWNLOADS = 800;
+export const MAX_PHASH_DOWNLOADS = 800;
 
 export async function prefetchPhashes(
   urls: Iterable<string>,
@@ -91,10 +91,10 @@ export async function prefetchPhashes(
   batchSize = 8
 ): Promise<void> {
   const uniq = [...new Set([...urls].map((s) => s.trim()).filter(Boolean))];
-  // Skip downloading entirely if too many images — gracefully falls back to URL-only matching
-  if (uniq.length > MAX_PHASH_DOWNLOADS) return;
-  for (let i = 0; i < uniq.length; i += batchSize) {
-    const chunk = uniq.slice(i, i + batchSize);
+  const toFetch =
+    uniq.length > MAX_PHASH_DOWNLOADS ? uniq.slice(0, MAX_PHASH_DOWNLOADS) : uniq;
+  for (let i = 0; i < toFetch.length; i += batchSize) {
+    const chunk = toFetch.slice(i, i + batchSize);
     await Promise.all(chunk.map((u) => phash64FromUrl(u, cache)));
   }
 }

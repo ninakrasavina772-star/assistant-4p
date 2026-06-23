@@ -23,6 +23,22 @@ export function productBaseKeyFromLink(link: string | undefined | null): string 
   return null;
 }
 
+
+/** Заводской код модели в названии (61GB2438, 50SMA0147) — часто совпадает между поставщиками при разных артикулах. */
+const FACTORY_MODEL_TOKEN_RE = /\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,20}\b/gi;
+
+export function collectFactoryModelTokensFromName(name: string | undefined | null): string[] {
+  if (!name || typeof name !== "string") return [];
+  const set = new Set<string>();
+  const re = new RegExp(FACTORY_MODEL_TOKEN_RE.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(name.toUpperCase())) !== null) {
+    const tok = m[0].replace(/\s+/g, "").toLowerCase();
+    if (tok.length >= 5) set.add(tok);
+  }
+  return [...set];
+}
+
 export function collectArticleKeys(p: FpProduct): string[] {
   const set = new Set<string>();
   for (const x of [p.article, p.code, p.vendor_code] as (string | undefined)[]) {
