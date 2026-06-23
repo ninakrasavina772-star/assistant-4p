@@ -476,6 +476,8 @@ const EMPTY_INTRA = {
   unlikelyPairs: []
 };
 
+const CROSS_RUBRIC_MATCH = { crossRubric: true as const };
+
 /** Две рубрики одного сайта (разные поставщики): полный кросс по названию+фото, без этапа «новинки». */
 export async function runCrossRubricCompare(
   productsA: FpProduct[],
@@ -489,13 +491,15 @@ export async function runCrossRubricCompare(
     productsB,
     productsA,
     nameLocale,
-    attrOpts
+    attrOpts,
+    CROSS_RUBRIC_MATCH
   );
   const onlyACrossWithB = await buildOnlyACrossWithB(
     productsA,
     productsB,
     nameLocale,
-    attrOpts
+    attrOpts,
+    CROSS_RUBRIC_MATCH
   );
 
   return {

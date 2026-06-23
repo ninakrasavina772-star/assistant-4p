@@ -911,6 +911,39 @@ export async function prefetchOnlyBCrossPhashes(
   cache: PhashCache,
   crossOpts?: CrossSoftDupOptions
 ): Promise<void> {
+  const urls: string[] = [];
+  for (const pB of rawOnlyB) {
+    const keyB = normBrandKey(pB);
+    const listA = byBrandA.get(keyB) || [];
+    urls.push(...collectCrossPhashUrls(listA, [pB], nameLocale, crossOpts));
+  }
+  await prefetchPhashes(urls, cache);
+}
+
+export async function prefetchOnlyACrossPhashes(
+  rawOnlyA: FpProduct[],
+  byBrandB: Map<string, FpProduct[]>,
+  nameLocale: NameLocale,
+  cache: PhashCache,
+  crossOpts?: CrossSoftDupOptions
+): Promise<void> {
+  const urls: string[] = [];
+  for (const pA of rawOnlyA) {
+    const keyA = normBrandKey(pA);
+    const listB = byBrandB.get(keyA) || [];
+    urls.push(...collectCrossPhashUrls([pA], listB, nameLocale, crossOpts));
+  }
+  await prefetchPhashes(urls, cache);
+}
+
+/** Режим «Дубли: 2 рубрики, 1 сайт» — приоритетный prefetch при больших каталогах. */
+export async function prefetchCrossRubricBCrossPhashes(
+  rawOnlyB: FpProduct[],
+  byBrandA: Map<string, FpProduct[]>,
+  nameLocale: NameLocale,
+  cache: PhashCache,
+  crossOpts?: CrossSoftDupOptions
+): Promise<void> {
   const scored: { score: number; urls: string[] }[] = [];
   for (const pB of rawOnlyB) {
     const keyB = normBrandKey(pB);
@@ -920,7 +953,7 @@ export async function prefetchOnlyBCrossPhashes(
   await prefetchPhashes(capPhashUrlsByScore(scored), cache);
 }
 
-export async function prefetchOnlyACrossPhashes(
+export async function prefetchCrossRubricACrossPhashes(
   rawOnlyA: FpProduct[],
   byBrandB: Map<string, FpProduct[]>,
   nameLocale: NameLocale,

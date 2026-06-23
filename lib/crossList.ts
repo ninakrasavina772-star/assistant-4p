@@ -4,6 +4,8 @@ import {
   combinedNameSimilarity,
   computeIntraSoftDupTiers,
   pairKeyIds,
+  prefetchCrossRubricACrossPhashes,
+  prefetchCrossRubricBCrossPhashes,
   prefetchOnlyACrossPhashes,
   prefetchOnlyBCrossPhashes
 } from "./dupTiers";
@@ -24,6 +26,11 @@ import type {
   OnlyBInternalDupRow
 } from "./types";
 
+/** Параметры только для режима «Дубли: 2 рубрики, 1 сайт». */
+export type BuildCrossMatchOpts = {
+  crossRubric?: boolean;
+};
+
 function normBrandKeyStr(p: FpProduct): string {
   const n = normBrand(productBrandName(p));
   return n || "__no_brand__";
@@ -36,20 +43,24 @@ export async function buildOnlyBCrossWithA(
   rawOnlyB: FpProduct[],
   allA: FpProduct[],
   nameLocale: NameLocale,
-  attrOpts?: AttrMatchOptions
+  attrOpts?: AttrMatchOptions,
+  matchOpts?: BuildCrossMatchOpts
 ): Promise<OnlyBCrossWithARow[]> {
   const rows: OnlyBCrossWithARow[] = [];
   const eanToA = new Map<string, FpProduct[]>();
   const artToA = new Map<string, FpProduct[]>();
   const byBrandA = new Map<string, FpProduct[]>();
   const factoryToA = new Map<string, FpProduct[]>();
+  const crossRubric = matchOpts?.crossRubric === true;
   for (const pA of allA) {
     const bk = normBrandKeyStr(pA);
     if (!byBrandA.has(bk)) byBrandA.set(bk, []);
     byBrandA.get(bk)!.push(pA);
-    for (const tok of collectFactoryModelTokensFromName(pA.name)) {
-      if (!factoryToA.has(tok)) factoryToA.set(tok, []);
-      factoryToA.get(tok)!.push(pA);
+    if (crossRubric) {
+      for (const tok of collectFactoryModelTokensFromName(pA.name)) {
+        if (!factoryToA.has(tok)) factoryToA.set(tok, []);
+        factoryToA.get(tok)!.push(pA);
+      }
     }
     for (const e of collectEanIndexKeys(pA)) {
       if (!eanToA.has(e)) eanToA.set(e, []);
@@ -62,12 +73,21 @@ export async function buildOnlyBCrossWithA(
   }
 
   const phashCache: PhashCache = new Map();
-  await prefetchOnlyBCrossPhashes(
-    rawOnlyB,
-    byBrandA,
-    nameLocale,
-    phashCache,
-  );
+  if (crossRubric) {
+    await prefetchCrossRubricBCrossPhashes(
+      rawOnlyB,
+      byBrandA,
+      nameLocale,
+      phashCache
+    );
+  } else {
+    await prefetchOnlyBCrossPhashes(
+      rawOnlyB,
+      byBrandA,
+      nameLocale,
+      phashCache
+    );
+  }
 
   for (const pB of rawOnlyB) {
     const cB = toCompareProduct(pB);
@@ -98,17 +118,19 @@ export async function buildOnlyBCrossWithA(
         });
       }
     }
-    for (const tok of collectFactoryModelTokensFromName(pB.name)) {
-      for (const pA of factoryToA.get(tok) || []) {
-        if (pA.id === pB.id) continue;
-        if (hitA.has(pA.id)) continue;
-        hitA.add(pA.id);
-        rows.push({
-          kind: "article",
-          productOnA: toCompareProduct(pA),
-          productFromOnlyB: cB,
-          article: tok
-        });
+    if (crossRubric) {
+      for (const tok of collectFactoryModelTokensFromName(pB.name)) {
+        for (const pA of factoryToA.get(tok) || []) {
+          if (pA.id === pB.id) continue;
+          if (hitA.has(pA.id)) continue;
+          hitA.add(pA.id);
+          rows.push({
+            kind: "article",
+            productOnA: toCompareProduct(pA),
+            productFromOnlyB: cB,
+            article: tok
+          });
+        }
       }
     }
     const keyB = normBrandKeyStr(pB);
@@ -169,20 +191,24 @@ export async function buildOnlyACrossWithB(
   rawOnlyA: FpProduct[],
   allB: FpProduct[],
   nameLocale: NameLocale,
-  attrOpts?: AttrMatchOptions
+  attrOpts?: AttrMatchOptions,
+  matchOpts?: BuildCrossMatchOpts
 ): Promise<OnlyACrossWithBRow[]> {
   const rows: OnlyACrossWithBRow[] = [];
   const eanToB = new Map<string, FpProduct[]>();
   const artToB = new Map<string, FpProduct[]>();
   const byBrandB = new Map<string, FpProduct[]>();
   const factoryToB = new Map<string, FpProduct[]>();
+  const crossRubric = matchOpts?.crossRubric === true;
   for (const pB of allB) {
     const bk = normBrandKeyStr(pB);
     if (!byBrandB.has(bk)) byBrandB.set(bk, []);
     byBrandB.get(bk)!.push(pB);
-    for (const tok of collectFactoryModelTokensFromName(pB.name)) {
-      if (!factoryToB.has(tok)) factoryToB.set(tok, []);
-      factoryToB.get(tok)!.push(pB);
+    if (crossRubric) {
+      for (const tok of collectFactoryModelTokensFromName(pB.name)) {
+        if (!factoryToB.has(tok)) factoryToB.set(tok, []);
+        factoryToB.get(tok)!.push(pB);
+      }
     }
     for (const e of collectEanIndexKeys(pB)) {
       if (!eanToB.has(e)) eanToB.set(e, []);
@@ -195,12 +221,21 @@ export async function buildOnlyACrossWithB(
   }
 
   const phashCache: PhashCache = new Map();
-  await prefetchOnlyACrossPhashes(
-    rawOnlyA,
-    byBrandB,
-    nameLocale,
-    phashCache,
-  );
+  if (crossRubric) {
+    await prefetchCrossRubricACrossPhashes(
+      rawOnlyA,
+      byBrandB,
+      nameLocale,
+      phashCache
+    );
+  } else {
+    await prefetchOnlyACrossPhashes(
+      rawOnlyA,
+      byBrandB,
+      nameLocale,
+      phashCache
+    );
+  }
 
   for (const pA of rawOnlyA) {
     const cA = toCompareProduct(pA);
