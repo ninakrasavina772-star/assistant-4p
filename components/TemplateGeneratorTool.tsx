@@ -937,7 +937,7 @@ export function TemplateGeneratorTool() {
           (withPrices > 0 ? `, цена USD: ${withPrices}` : "") +
           (groupCount > 0 ? ` и найдено ${groupCount} групп дублей` : "") +
           (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "") +
-          (mbJson.missingPrices?.length ? `. Нет цены (RUB→USD): ${mbJson.missingPrices.join(", ")}` : "")
+          (mbJson.missingPrices?.length ? `. Нет в калькуляторе Яндекс Маркет: ${mbJson.missingPrices.join(", ")}` : "")
       );
       void eventReply(`Добавили в шаблон ${products.length} позиций из Metabase по variation_id.`);
     } catch (e) {
@@ -1156,13 +1156,13 @@ export function TemplateGeneratorTool() {
         if (missing.length) {
           const preview = missing.slice(0, 8).join(", ");
           setBatchNotice(
-            `Цены USD: ${filled}. Нет цены (RUB→USD): ${preview}${missing.length > 8 ? "…" : ""}`
+            `Цены USD: ${filled}. Нет в калькуляторе Яндекс Маркет: ${preview}${missing.length > 8 ? "…" : ""}`
           );
         } else if (filled > 0) {
           setBatchNotice(`Цены USD из калькулятора Яндекс Маркет: ${filled}`);
         } else if (fillableContexts.length) {
           setError(
-            "Не удалось подтянуть цены USD — для этих variation_id нет цены в RUB (yandex_market / letual)"
+            "Не удалось подтянуть цены USD — для этих variation_id нет данных в yandex_market.product (калькулятор Яндекс Маркет)"
           );
           setBusy(false);
           return;

@@ -3,13 +3,10 @@ import {
   type MetabaseCredentials
 } from "@/lib/letualMetabaseConfig";
 
-export type YandexMarketPriceSource = "yandex_market" | "letual_rub";
-
 export type YandexMarketPriceRow = {
   variationId: number;
   price: number;
   currency: string;
-  source?: YandexMarketPriceSource;
 };
 
 async function metabaseQuery<T = Record<string, unknown>>(
@@ -55,17 +52,10 @@ function formatPrice(value: unknown): number | null {
   return Math.round(n * 100) / 100;
 }
 
-function parseSource(value: unknown): YandexMarketPriceSource | undefined {
-  const s = String(value ?? "").trim().toLowerCase();
-  if (s === "yandex_market" || s === "letual_rub") return s;
-  return undefined;
-}
-
 /**
  * Цены калькулятора Яндекс Маркет (https://4stand.com/yandex-market/calculator/price).
- * Калькулятор показывает RUB; в шаблон пишем USD:
- * 1) yandex_market.product — уже выгруженные (USD или RUB → USD по курсу)
- * 2) letual.product — цена в RUB для SKU без выгрузки → USD по курсу RUB→USD
+ * Источник в Metabase: yandex_market.product (выгруженные на Маркет позиции).
+ * Если price_currency = RUB — конвертируем в USD по курсу RUB→USD.
  */
 export async function fetchYandexMarketPrices(
   ids: number[],
@@ -84,62 +74,29 @@ export async function fetchYandexMarketPrices(
       WHERE original = 'RUB' AND destination = 'USD'
       ORDER BY date DESC
       LIMIT 1
-    ),
-    ym AS (
-      SELECT DISTINCT ON (product_variation_id)
-        product_variation_id,
-        CASE
-          WHEN UPPER(COALESCE(NULLIF(TRIM(price_currency), ''), 'USD')) = 'RUB'
-            THEN ROUND((price * rate.rub_usd)::numeric, 2)
-          ELSE ROUND(price::numeric, 2)
-        END AS price,
-        'USD' AS price_currency,
-        'yandex_market' AS price_source
-      FROM yandex_market.product
-      CROSS JOIN rate
-      WHERE product_variation_id IN (${inList})
-        AND price IS NOT NULL
-        AND price > 0
-        AND rate.rub_usd IS NOT NULL
-        AND rate.rub_usd > 0
-      ORDER BY product_variation_id, stock_price_date DESC NULLS LAST, id DESC
-    ),
-    letual AS (
-      SELECT
-        lp.product_variation_id,
-        ROUND((lp.price * rate.rub_usd)::numeric, 2) AS price,
-        'USD' AS price_currency,
-        'letual_rub' AS price_source
-      FROM letual.product lp
-      CROSS JOIN rate
-      WHERE lp.product_variation_id IN (${inList})
-        AND lp.product_variation_id NOT IN (SELECT product_variation_id FROM ym)
-        AND lp.price IS NOT NULL
-        AND lp.price > 0
-        AND rate.rub_usd IS NOT NULL
-        AND rate.rub_usd > 0
-    ),
-    picked AS (
-      SELECT * FROM ym
-      UNION ALL
-      SELECT * FROM letual
     )
     SELECT DISTINCT ON (product_variation_id)
       product_variation_id,
-      price,
-      price_currency,
-      price_source
-    FROM picked
-    WHERE price IS NOT NULL AND price > 0
-    ORDER BY product_variation_id,
-      CASE price_source WHEN 'yandex_market' THEN 1 ELSE 2 END
+      CASE
+        WHEN UPPER(COALESCE(NULLIF(TRIM(price_currency), ''), 'USD')) = 'RUB'
+          THEN ROUND((price * rate.rub_usd)::numeric, 2)
+        ELSE ROUND(price::numeric, 2)
+      END AS price,
+      'USD' AS price_currency
+    FROM yandex_market.product
+    CROSS JOIN rate
+    WHERE product_variation_id IN (${inList})
+      AND price IS NOT NULL
+      AND price > 0
+      AND rate.rub_usd IS NOT NULL
+      AND rate.rub_usd > 0
+    ORDER BY product_variation_id, stock_price_date DESC NULLS LAST, id DESC
   `;
 
   const rows = await metabaseQuery<{
     product_variation_id: number;
     price: number;
     price_currency: string | null;
-    price_source: string | null;
   }>(sql, creds);
 
   const out = new Map<number, YandexMarketPriceRow>();
@@ -150,8 +107,7 @@ export async function fetchYandexMarketPrices(
     out.set(variationId, {
       variationId,
       price,
-      currency: "USD",
-      source: parseSource(r.price_source)
+      currency: "USD"
     });
   }
   return out;
