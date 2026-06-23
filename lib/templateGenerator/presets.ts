@@ -61,7 +61,9 @@ const CONTENT_DEFAULT_HEADERS = new Set(
   ].map(normHeader)
 );
 
-const SKU_HEADERS = ["артикул товара (sku)", "ваш sku"].map(normHeader);
+const SKU_HEADERS = ["артикул товара (sku)", "ваш sku", "артикул", "sku", "shop-sku", "shop sku"].map(
+  normHeader
+);
 
 const IMAGE_HEADERS = ["ссылка на изображение", "изображение для миниатюры"].map(normHeader);
 
@@ -108,7 +110,11 @@ export function isCoreContentColumn(header: string): boolean {
 
 export function isSkuHeader(header: string): boolean {
   const h = normHeader(header);
-  return SKU_HEADERS.some((x) => h === x || h.includes("артикул товара"));
+  if (SKU_HEADERS.some((x) => h === x || h.includes("артикул товара"))) return true;
+  if (h === "sku" || h === "артикул" || h.includes("shop sku") || h.includes("shop-sku")) return true;
+  if (/^ваш\s+sku/.test(h)) return true;
+  if (h.includes("артикул") && !/маркет|market|csku|на\s+маркете/.test(h)) return true;
+  return false;
 }
 
 export function isImageHeader(header: string): boolean {

@@ -15,6 +15,7 @@ import {
 } from "@/lib/templateGenerator/imageUrlDedupe";
 import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
+import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 
 const MAX_PACKSHOT_PROCESS = 5;
 const MAX_BACKGROUND = 4;
@@ -251,6 +252,11 @@ export async function resolveYandexRowPhotos(
   }
 
   sourceUrls = sourceUrls.filter((u) => !isThumbOrSmallUrl(u));
+
+  const rehostCache: RehostCache = new Map();
+  if (sourceUrls.length) {
+    sourceUrls = await rehostImageUrls(sourceUrls, opts.sku, rehostCache);
+  }
 
   if (!sourceUrls.length && !alreadyDone.length) {
     return { imageUrls: [], processed: [], note: "нет исходных foto" };

@@ -3,7 +3,9 @@ import { cellPlainValue } from "@/lib/ozonImageExcel";
 import { collectRowContexts } from "@/lib/templateGenerator/scan";
 import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
 import { sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
-import { formatImageCellValue } from "@/lib/templateGenerator/photos";
+import { formatImageCellValue, parseImageUrls } from "@/lib/templateGenerator/photos";
+import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
+import { findEanHeader } from "@/lib/templateGenerator/templateDuplicates";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import type { TemplateSheetScan } from "@/lib/templateGenerator/types";
 
@@ -64,11 +66,11 @@ function setCell(ws: ExcelJS.Worksheet, row: number, col: number | null, value: 
 }
 
 /** Записать variation_id в шаблон и вернуть контексты строк для заполнения */
-export function injectVariationProducts(
+export async function injectVariationProducts(
   ws: ExcelJS.Worksheet,
   scan: TemplateSheetScan,
   products: MetabaseProductRow[]
-): { row: number; sku: string; cells: Record<string, string> }[] {
+): Promise<{ row: number; sku: string; cells: Record<string, string> }[]> {
   if (!products.length) return [];
 
   const skuCol = scan.skuCol ?? 1;
@@ -79,6 +81,8 @@ export function injectVariationProducts(
   const nameCol = colForHeader(scan, nameHeader);
   const brandCol = colForHeader(scan, brandHeader);
   const imageCol = scan.imageCol;
+  const eanHeader = findEanHeader(scan);
+  const eanCol = colForHeader(scan, eanHeader);
 
   const existing = collectRowContexts(ws, scan);
   const byId = new Map<number, { row: number; sku: string; cells: Record<string, string> }>();
@@ -90,10 +94,14 @@ export function injectVariationProducts(
   const emptyRows = findEmptyRows(ws, scan, products.length);
   let emptyIdx = 0;
   let appendRow = lastDataRow(ws, scan) + 1;
+  const rehostCache: RehostCache = new Map();
 
   for (const p of products) {
     const sku = String(p.variationId);
-    const images = sortImagesForComposite(p.imageUrls);
+    let images = sortImagesForComposite(p.imageUrls);
+    if (images.length) {
+      images = await rehostImageUrls(images, sku, rehostCache);
+    }
     const imageText = images.length ? formatImageCellValue(images) : "";
 
     let row: number;
@@ -111,6 +119,7 @@ export function injectVariationProducts(
     setCell(ws, row, skuCol, sku);
     setCell(ws, row, nameCol, p.productName);
     setCell(ws, row, brandCol, p.brandName);
+    if (p.ean) setCell(ws, row, eanCol, p.ean);
     if (imageText && imageCol) setCell(ws, row, imageCol, imageText);
   }
 

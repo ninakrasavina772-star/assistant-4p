@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type ExcelJS from "exceljs";
 import { readWorkbookFromBuffer, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
-import { applyFillResults } from "@/lib/templateGenerator/apply";
+import { applyFillResults, prefillPhotoReviewColumn } from "@/lib/templateGenerator/apply";
 import type { FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
 import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
 import {
@@ -247,6 +247,7 @@ export function TemplateGeneratorTool() {
   const [photosFillOffset, setPhotosFillOffset] = useState(0);
 
   const step2Ref = useRef<HTMLElement>(null);
+  const scanRef = useRef<TemplateSheetScan | null>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
   const columnPrefsKeyRef = useRef("");
   const [columnPrefsRestored, setColumnPrefsRestored] = useState(false);
@@ -300,20 +301,39 @@ export function TemplateGeneratorTool() {
     }
   }, [marketplace]);
 
-  const refreshDupGroups = useCallback(() => {
+  useEffect(() => {
+    scanRef.current = scan;
+  }, [scan]);
+
+  const bumpSheetScan = useCallback((): TemplateSheetScan | null => {
     const wb = wbRef.current;
-    if (!wb || !scan) {
-      setDupGroups([]);
-      return;
+    if (!wb || !scan) return null;
+    const newScan = scanTemplateSheet(wb, scan.sheetName, listValuesRef.current);
+    if (newScan) {
+      scanRef.current = newScan;
+      setScan(newScan);
+      return newScan;
     }
-    const ws = wb.getWorksheet(scan.sheetName);
+    return scanRef.current;
+  }, [scan]);
+
+  const refreshDupGroups = useCallback((activeScan?: TemplateSheetScan | null): number => {
+    const wb = wbRef.current;
+    const s = activeScan ?? scanRef.current ?? scan;
+    if (!wb || !s) {
+      setDupGroups([]);
+      return 0;
+    }
+    const ws = wb.getWorksheet(s.sheetName);
     if (!ws) {
       setDupGroups([]);
-      return;
+      return 0;
     }
-    const contexts = collectRowContexts(ws, scan);
-    const eanHeader = findEanHeader(scan);
-    setDupGroups(findTemplateDuplicateGroups(contexts, eanHeader));
+    const contexts = collectRowContexts(ws, s);
+    const eanHeader = findEanHeader(s);
+    const groups = findTemplateDuplicateGroups(contexts, eanHeader);
+    setDupGroups(groups);
+    return groups.length;
   }, [scan]);
 
   useEffect(() => {
@@ -368,15 +388,17 @@ export function TemplateGeneratorTool() {
 
   const finishDupPhase = useCallback(() => {
     const wb = wbRef.current;
-    if (!wb || !scan) return;
+    if (!wb || !scan) {
+      setError("Загрузите шаблон Excel — без него этап дублей недоступен.");
+      return;
+    }
     const removed = rowsMarkedForRemoval.size;
     if (removed > 0) {
       deleteWorksheetRows(wb, scan, [...rowsMarkedForRemoval]);
-      const newScan = scanTemplateSheet(wb, scan.sheetName, listValuesRef.current);
-      if (newScan) setScan(newScan);
       setRowsMarkedForRemoval(new Set());
-      refreshDupGroups();
     }
+    bumpSheetScan();
+    const groupCount = refreshDupGroups(scanRef.current);
     setDupsPhaseDone(true);
     setPipelineStep(2);
     setFillRowOffset(0);
@@ -386,12 +408,13 @@ export function TemplateGeneratorTool() {
     setBatchNotice(
       removed > 0
         ? `Этап 1: удалено ${removed} строк-дублей. Можно запускать контент.`
-        : dupGroups.length > 0
-          ? `Этап 1: ${dupGroups.length} групп дублей просмотрены — дубли оставлены в шаблоне.`
-          : "Этап 1: дублей по EAN не найдено."
+        : groupCount > 0
+          ? `Этап 1: ${groupCount} групп дублей просмотрены — дубли оставлены в шаблоне.`
+          : "Этап 1: дублей не найдено (по EAN и артикулу)."
     );
     setProgress("Этап 2: отметьте столбцы и нажмите «Заполнить контент».");
-  }, [scan, rowsMarkedForRemoval, dupGroups.length, refreshDupGroups]);
+    setError("");
+  }, [scan, rowsMarkedForRemoval, refreshDupGroups, bumpSheetScan]);
 
   const chatContext = useMemo((): TemplateChatContext => {
     const selected = scan
@@ -782,6 +805,7 @@ export function TemplateGeneratorTool() {
         setFileName(file.name);
         setSheetName(preferred);
         setScan(sheetScan);
+        scanRef.current = sheetScan;
         initColumns(sheetScan, preferred);
         setStep(2);
         requestAnimationFrame(() => {
@@ -856,13 +880,17 @@ export function TemplateGeneratorTool() {
         );
       }
       const ws = wb.getWorksheet(scan.sheetName)!;
-      injectVariationProducts(ws, scan, products);
-      refreshDupGroups();
+      await injectVariationProducts(ws, scan, products);
+      setDupsPhaseDone(false);
+      setPipelineStep(1);
+      const newScan = bumpSheetScan();
+      const groupCount = refreshDupGroups(newScan);
       const { samples, brands } = buildProductSamples(wb, scan);
       setProductSamples(samples);
       setUniqueBrands(brands);
       setBatchNotice(
         `Подтянуто ${products.length} товаров из Metabase` +
+          (groupCount > 0 ? ` · найдено ${groupCount} групп дублей` : "") +
           (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "")
       );
       void eventReply(`Добавила в шаблон ${products.length} позиций из Metabase по variation_id.`);
@@ -871,7 +899,7 @@ export function TemplateGeneratorTool() {
     } finally {
       setVariationInjecting(false);
     }
-  }, [scan, variationIdsText, refreshDupGroups, eventReply]);
+  }, [scan, variationIdsText, refreshDupGroups, bumpSheetScan, eventReply]);
 
   const onExampleFile = useCallback(
     async (file: File) => {
@@ -998,6 +1026,9 @@ export function TemplateGeneratorTool() {
     if (fillStage === "photos_only") setPipelineStep(3);
 
     const ws = wb.getWorksheet(scan.sheetName)!;
+    const imageHeader =
+      scan.columns.find((c) => c.header.toLowerCase().includes("ссылка на изображение"))?.header ??
+      null;
     let allContexts = collectRowContexts(ws, scan);
     const selectedHeaders = activeSelection.map((s) => s.header);
     const csvMapResolved = feedEnabled
@@ -1046,7 +1077,15 @@ export function TemplateGeneratorTool() {
               (mbJson.missing?.length ? ` (пропущены: ${mbJson.missing.join(", ")})` : "")
           );
         }
-        fillableContexts = injectVariationProducts(ws, scan, products);
+        fillableContexts = await injectVariationProducts(ws, scan, products);
+        const newScan = bumpSheetScan();
+        refreshDupGroups(newScan);
+        if (imageHeader) {
+          await prefillPhotoReviewColumn(ws, scan, fillableContexts, {
+            minCount: photoMin,
+            targetCount: photoTarget
+          }, imageHeader);
+        }
         allContexts = collectRowContexts(ws, scan);
         if (mbJson.missing?.length) {
           setBatchNotice(`Не найдены в Metabase: ${mbJson.missing.join(", ")}`);
@@ -1111,10 +1150,6 @@ export function TemplateGeneratorTool() {
           : "Этап 2: заполнение контента через AI (без фото)…"
       );
     }
-
-    const imageHeader =
-      scan.columns.find((c) => c.header.toLowerCase().includes("ссылка на изображение"))?.header ??
-      null;
 
     const keepCell = (header: string) =>
       activeSelection.some((s) => s.header === header) ||
@@ -1247,6 +1282,15 @@ export function TemplateGeneratorTool() {
           applyOverwrite,
           scan.imageCol
         );
+        if (!isPhotosStage && imageHeader) {
+          await prefillPhotoReviewColumn(
+            ws,
+            scan,
+            contexts.slice(0, doneRows),
+            { minCount: photoMin, targetCount: photoTarget },
+            imageHeader
+          );
+        }
         setPreview([...allResults]);
         setProgress(`${stageLabel}: готово ${doneRows} / ${contexts.length} (${batchLabel})`);
       }
@@ -1429,18 +1473,30 @@ export function TemplateGeneratorTool() {
     [enabledCols]
   );
 
+  const liveRowCount = useMemo(() => {
+    const activeScan = scanRef.current ?? scan;
+    if (!activeScan || !hasWb) return activeScan?.dataRowCount ?? 0;
+    const wb = wbRef.current;
+    if (!wb) return activeScan.dataRowCount;
+    const ws = wb.getWorksheet(activeScan.sheetName);
+    if (!ws) return activeScan.dataRowCount;
+    const n = collectRowContexts(ws, activeScan).filter((c) => !rowsMarkedForRemoval.has(c.row))
+      .length;
+    return Math.max(n, activeScan.dataRowCount);
+  }, [scan, hasWb, sheetName, rowsMarkedForRemoval, dupGroups]);
+
   const fillStats = useMemo(() => {
-    const total = scan?.dataRowCount ?? 0;
+    const total = liveRowCount;
     const remaining = Math.max(0, total - fillRowOffset);
     const nextBatch = Math.min(Math.max(1, fillBatchSize), remaining || fillBatchSize);
-    const rangeFrom = fillRowOffset + 1;
-    const rangeTo = fillRowOffset + nextBatch;
+    const rangeFrom = total > 0 ? fillRowOffset + 1 : 0;
+    const rangeTo = total > 0 ? Math.min(fillRowOffset + nextBatch, total) : 0;
     const allDone = total > 0 && fillRowOffset >= total;
     return { total, remaining, nextBatch, rangeFrom, rangeTo, allDone };
-  }, [scan?.dataRowCount, fillRowOffset, fillBatchSize]);
+  }, [liveRowCount, fillRowOffset, fillBatchSize]);
 
   const photosFillStats = useMemo(() => {
-    const total = scan?.dataRowCount ?? 0;
+    const total = liveRowCount;
     const batchCap = Math.min(PHOTOS_BATCH_SIZE_DEFAULT, fillBatchSize);
     const remaining = Math.max(0, total - photosFillOffset);
     const nextBatch = Math.min(Math.max(1, batchCap), remaining || batchCap);
@@ -1448,7 +1504,7 @@ export function TemplateGeneratorTool() {
     const rangeTo = photosFillOffset + nextBatch;
     const allDone = total > 0 && photosFillOffset >= total;
     return { total, remaining, nextBatch, rangeFrom, rangeTo, allDone };
-  }, [scan?.dataRowCount, photosFillOffset, fillBatchSize]);
+  }, [liveRowCount, photosFillOffset, fillBatchSize]);
 
   const csvCoverage = useMemo(() => {
     if (!feedEnabled || !csvTable || !scan || !hasWb) return null;
@@ -2235,7 +2291,9 @@ export function TemplateGeneratorTool() {
                   <p className="mt-1 text-xs text-slate-600">
                     {dupGroups.length > 0
                       ? `Найдено ${dupGroups.length} групп. Отметьте лишние артикулы и удалите из шаблона.`
-                      : "Дублей по EAN пока не найдено — можно сразу перейти к контенту."}
+                      : scan && liveRowCount === 0
+                        ? "В шаблоне пока нет строк с артикулом — подтяните variation_id из Metabase или заполните SKU в Excel."
+                        : "Дублей по EAN и артикулу не найдено — можно перейти к контенту."}
                   </p>
                   {dupGroups.length > 0 ? (
                     <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
@@ -2278,14 +2336,33 @@ export function TemplateGeneratorTool() {
                     <button
                       type="button"
                       className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold"
-                      disabled={busy}
+                      disabled={busy || !scan}
                       onClick={() => {
-                        refreshDupGroups();
-                        setProgress(
-                          dupGroups.length
-                            ? `Пересканировано: ${dupGroups.length} групп дублей`
-                            : "Дублей по EAN не найдено"
+                        const newScan = bumpSheetScan();
+                        const s = newScan ?? scanRef.current ?? scan;
+                        const rowCount = s && wbRef.current
+                          ? collectRowContexts(
+                              wbRef.current.getWorksheet(s.sheetName)!,
+                              s
+                            ).length
+                          : 0;
+                        const count = refreshDupGroups(s);
+                        const skuColName =
+                          s?.columns.find((c) => c.col === s.skuCol)?.header ?? "не найден";
+                        setBatchNotice(
+                          rowCount > 0
+                            ? `Строк с артикулом: ${rowCount} (колонка «${skuColName}»).` +
+                                (count > 0 ? ` Групп дублей: ${count}.` : " Дублей не найдено.")
+                            : "Строк с артикулом нет — введите variation_id выше и нажмите «Подтянуть из Metabase в шаблон»."
                         );
+                        setProgress(
+                          count > 0
+                            ? `Пересканировано: ${count} групп дублей`
+                            : rowCount > 0
+                              ? `Проверено ${rowCount} строк — дублей нет`
+                              : "Нет данных для проверки"
+                        );
+                        setError("");
                       }}
                     >
                       Пересканировать дубли

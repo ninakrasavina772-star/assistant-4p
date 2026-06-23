@@ -1,5 +1,7 @@
 import type ExcelJS from "exceljs";
 import { expandEanDigitsForIndex } from "@/lib/product";
+import { normSku } from "@/lib/templateGenerator/csvIndex";
+import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import type { TemplateRowContext, TemplateSheetScan } from "@/lib/templateGenerator/types";
 
 export type TemplateDuplicateGroup = {
@@ -17,44 +19,72 @@ export function findEanHeader(scan: TemplateSheetScan): string | null {
   return null;
 }
 
-/** Группы строк шаблона с одинаковым EAN (как в «Сравнение витрин») */
+function skuIndexKey(raw: string): string | null {
+  const variation = normVariationSku(raw);
+  if (variation != null) return `v:${variation}`;
+  const norm = normSku(raw);
+  return norm ? `s:${norm}` : null;
+}
+
+/** Группы строк шаблона с одинаковым EAN или SKU (как в «Сравнение витрин») */
 export function findTemplateDuplicateGroups(
   contexts: TemplateRowContext[],
   eanHeader: string | null
 ): TemplateDuplicateGroup[] {
-  if (!eanHeader) return [];
-
   type Ref = { row: number; sku: string };
-  const keyToRefs = new Map<string, Ref[]>();
-
-  for (const ctx of contexts) {
-    const sku = ctx.sku.trim();
-    const digits = String(ctx.cells[eanHeader] ?? "").replace(/\D/g, "");
-    const keys = expandEanDigitsForIndex(digits);
-    if (!sku || keys.length === 0) continue;
-    for (const key of keys) {
-      if (!keyToRefs.has(key)) keyToRefs.set(key, []);
-      keyToRefs.get(key)!.push({ row: ctx.row, sku });
-    }
-  }
-
   const groups: TemplateDuplicateGroup[] = [];
   const seenRowSets = new Set<string>();
 
-  for (const [eanKey, refs] of keyToRefs) {
+  const pushGroup = (key: string, refs: Ref[], reason: string) => {
     const byRow = new Map<number, string>();
     for (const r of refs) byRow.set(r.row, r.sku);
-    if (byRow.size < 2) continue;
+    if (byRow.size < 2) return;
     const rowNumbers = [...byRow.keys()].sort((a, b) => a - b);
     const rowKey = rowNumbers.join(",");
-    if (seenRowSets.has(rowKey)) continue;
+    if (seenRowSets.has(rowKey)) return;
     seenRowSets.add(rowKey);
     groups.push({
-      key: eanKey,
+      key,
       rowNumbers,
       skus: rowNumbers.map((n) => byRow.get(n)!),
-      reason: `Дубль по EAN ${eanKey}`
+      reason
     });
+  };
+
+  if (eanHeader) {
+    const keyToRefs = new Map<string, Ref[]>();
+    for (const ctx of contexts) {
+      const sku = ctx.sku.trim();
+      const digits = String(ctx.cells[eanHeader] ?? "").replace(/\D/g, "");
+      const keys = expandEanDigitsForIndex(digits);
+      if (!sku || keys.length === 0) continue;
+      for (const key of keys) {
+        if (!keyToRefs.has(key)) keyToRefs.set(key, []);
+        keyToRefs.get(key)!.push({ row: ctx.row, sku });
+      }
+    }
+    for (const [eanKey, refs] of keyToRefs) {
+      pushGroup(eanKey, refs, `Дубль по EAN ${eanKey}`);
+    }
+  }
+
+  const skuToRefs = new Map<string, Ref[]>();
+  for (const ctx of contexts) {
+    const sku = ctx.sku.trim();
+    const key = skuIndexKey(sku);
+    if (!key) continue;
+    if (!skuToRefs.has(key)) skuToRefs.set(key, []);
+    skuToRefs.get(key)!.push({ row: ctx.row, sku });
+  }
+  for (const [skuKey, refs] of skuToRefs) {
+    const label = skuKey.startsWith("v:") ? skuKey.slice(2) : skuKey.slice(2);
+    pushGroup(
+      skuKey,
+      refs,
+      skuKey.startsWith("v:")
+        ? `Дубль: один variation_id (${label}) в нескольких строках`
+        : `Дубль: один артикул (${label}) в нескольких строках`
+    );
   }
 
   return groups.sort((a, b) => b.rowNumbers.length - a.rowNumbers.length);

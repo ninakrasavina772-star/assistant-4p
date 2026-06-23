@@ -1,9 +1,16 @@
 import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
-import type { ColumnSelection, FillRowResult, TemplateSheetScan } from "@/lib/templateGenerator/types";
-import { ensurePhotoReviewColumn, formatImageCellValue, formatPhotoReviewValue } from "@/lib/templateGenerator/photos";
+import type { ColumnSelection, FillRowResult, TemplateSheetScan, TemplateRowContext } from "@/lib/templateGenerator/types";
+import {
+  collectReviewPhotosFromImageCell,
+  ensurePhotoReviewColumn,
+  formatImageCellValue,
+  formatPhotoReviewValue
+} from "@/lib/templateGenerator/photos";
 import { uniqueUrlsForImageCell } from "@/lib/templateGenerator/imageUrlDedupe";
-import { DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
+import { DEFAULT_PHOTO_REVIEW_COLUMN, normHeader } from "@/lib/templateGenerator/presets";
+import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
+import { parseImageUrls } from "@/lib/templateGenerator/photos";
 
 export function applyFillResults(
   ws: ExcelJS.Worksheet,
@@ -46,4 +53,50 @@ export function applyFillResults(
     }
   }
   return filled;
+}
+
+function findPhotoReviewCol(scan: TemplateSheetScan, header = DEFAULT_PHOTO_REVIEW_COLUMN): number | null {
+  const want = normHeader(header);
+  for (const c of scan.columns) {
+    if (normHeader(c.header) === want) return c.col;
+  }
+  return null;
+}
+
+/**
+ * До этапа Letual: rehost приватных URL и заполнить «Доп. фото (проверка)».
+ */
+export async function prefillPhotoReviewColumn(
+  ws: ExcelJS.Worksheet,
+  scan: TemplateSheetScan,
+  contexts: TemplateRowContext[],
+  opts: { minCount: number; targetCount: number },
+  imageHeader: string | null,
+  reviewHeader = DEFAULT_PHOTO_REVIEW_COLUMN
+): Promise<number> {
+  if (!imageHeader || !contexts.length) return 0;
+  let reviewCol = findPhotoReviewCol(scan, reviewHeader);
+  if (!reviewCol) {
+    reviewCol = ensurePhotoReviewColumn(ws, scan.headerRow, reviewHeader);
+  }
+  const rehostCache: RehostCache = new Map();
+  let n = 0;
+  for (const ctx of contexts) {
+    const imageText =
+      ctx.cells[imageHeader] ??
+      (scan.imageCol ? cellPlainValue(ws.getCell(ctx.row, scan.imageCol).value) : "");
+    const parsed = parseImageUrls(imageText);
+    if (!parsed.length) continue;
+
+    const rehosted = await rehostImageUrls(parsed, ctx.sku, rehostCache);
+    if (scan.imageCol && rehosted.join(",") !== parsed.join(",")) {
+      ws.getCell(ctx.row, scan.imageCol).value = formatImageCellValue(rehosted);
+    }
+
+    const extras = collectReviewPhotosFromImageCell(formatImageCellValue(rehosted), opts);
+    if (!extras.length) continue;
+    ws.getCell(ctx.row, reviewCol).value = formatPhotoReviewValue(uniqueUrlsForImageCell(extras));
+    n++;
+  }
+  return n;
 }

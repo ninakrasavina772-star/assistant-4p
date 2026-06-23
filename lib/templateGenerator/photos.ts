@@ -61,19 +61,19 @@ export function countRowPhotos(cells: Record<string, string>, imageHeader: strin
 }
 
 /**
- * Доп. фото для колонки проверки — только из уже имеющихся ссылок в шаблоне/CSV.
- * AI не умеет искать картинки в интернете; здесь собираем URL из ячейки «Ссылка на изображение».
+ * Доп. фото для колонки проверки — из ячейки «Ссылка на изображение» (до Letual-обработки).
+ * Главное фото остаётся в основной колонке, сюда — остальные уникальные URL.
  */
 export function collectReviewPhotosFromImageCell(
   imageText: string,
   opts: { minCount: number; targetCount: number }
 ): string[] {
-  const urls = parseImageUrls(imageText);
+  const urls = uniqueUrlsForImageCell(parseImageUrls(imageText));
   if (!urls.length) return [];
   if (urls.length >= opts.minCount) {
     return urls.slice(1, opts.targetCount + 1);
   }
-  return urls.slice(0, opts.targetCount);
+  return urls.slice(1);
 }
 
 export function ensurePhotoReviewColumn(

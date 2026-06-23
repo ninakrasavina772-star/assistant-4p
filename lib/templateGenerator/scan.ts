@@ -18,15 +18,30 @@ function findHeaderRow(ws: ExcelJS.Worksheet): { headerRow: number; hintRow: num
   const maxRow = Math.min(ws.rowCount || 20, 20);
   const maxCol = Math.min(ws.columnCount || 80, 80);
 
+  const isHeaderMarker = (v: string): boolean =>
+    /ваш\s*sku|артикул\s*товара|^артикул$|^sku$|shop.?sku|название\s*товара|наименование/i.test(v);
+
   for (let r = 1; r <= maxRow; r++) {
     for (let c = 1; c <= maxCol; c++) {
       const v = normHeader(cellPlainValue(ws.getCell(r, c).value));
-      if (v.includes("ваш sku") || v.includes("название товара")) {
-        return { headerRow: r, hintRow: r + 2 };
+      if (isHeaderMarker(v)) {
+        return { headerRow: r, hintRow: r + 1 };
       }
     }
   }
   return { headerRow: 1, hintRow: 2 };
+}
+
+function looksLikeHintRow(ws: ExcelJS.Worksheet, row: number, maxCol: number): boolean {
+  let hintish = 0;
+  let filled = 0;
+  for (let c = 1; c <= maxCol; c++) {
+    const v = cellPlainValue(ws.getCell(row, c).value).trim();
+    if (!v) continue;
+    filled++;
+    if (/значение поля|обязательн|укажите|пример|не\s+более/i.test(v)) hintish++;
+  }
+  return filled > 0 && hintish >= Math.max(1, Math.floor(filled / 3));
 }
 
 function readRowHeaders(ws: ExcelJS.Worksheet, row: number, maxCol: number): Map<number, string> {
@@ -40,18 +55,31 @@ function readRowHeaders(ws: ExcelJS.Worksheet, row: number, maxCol: number): Map
 
 function detectDataStartRow(
   ws: ExcelJS.Worksheet,
+  headerRow: number,
   hintRow: number,
-  skuCol: number | null
+  skuCol: number | null,
+  maxCol: number
 ): number {
   const col = skuCol ?? 1;
   const last = ws.rowCount || hintRow + 1;
+  const startScan = headerRow + 1;
+  const endScan = Math.min(last, hintRow + 4);
+
+  for (let r = startScan; r <= endScan; r++) {
+    if (looksLikeHintRow(ws, r, maxCol)) continue;
+    const v = cellPlainValue(ws.getCell(r, col).value);
+    if (!v || v === "-") continue;
+    if (/^значение поля/i.test(v)) continue;
+    if (v.length > 0 && v.length < 120) return r;
+  }
+
   for (let r = hintRow + 1; r <= last; r++) {
     const v = cellPlainValue(ws.getCell(r, col).value);
     if (!v || v === "-") continue;
     if (/^значение поля/i.test(v)) continue;
     if (v.length > 0 && v.length < 120) return r;
   }
-  return hintRow + 2;
+  return hintRow + 1;
 }
 
 function effectiveLastRow(ws: ExcelJS.Worksheet, startRow: number, skuCol: number | null): number {
@@ -157,8 +185,16 @@ export function scanTemplateSheet(
       }
     }
   }
+  if (!skuCol) {
+    for (const c of columns) {
+      if (isSkuHeader(c.header)) {
+        skuCol = c.col;
+        break;
+      }
+    }
+  }
 
-  const dataStartRow = detectDataStartRow(ws, hintRow, skuCol);
+  const dataStartRow = detectDataStartRow(ws, headerRow, hintRow, skuCol, maxCol);
   const validationSampleRow = dataStartRow;
 
   for (const col of columns) {
@@ -226,10 +262,19 @@ export function scanTemplateWorkbook(
 
 function sheetLooksLikeProductData(ws: ExcelJS.Worksheet): boolean {
   const { headerRow } = findHeaderRow(ws);
-  const headers = readRowHeaders(ws, headerRow, 30);
+  const headers = readRowHeaders(ws, headerRow, 40);
   for (const h of headers.values()) {
     const n = normHeader(h);
-    if (n.includes("название товара") || n.includes("артикул товара")) return true;
+    if (
+      n.includes("название товара") ||
+      n.includes("наименование") ||
+      n.includes("артикул товара") ||
+      n.includes("ваш sku") ||
+      n === "артикул" ||
+      n === "sku"
+    ) {
+      return true;
+    }
   }
   return false;
 }

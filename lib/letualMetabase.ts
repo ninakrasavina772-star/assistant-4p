@@ -260,4 +260,43 @@ export async function fetchLetualVariations(
   });
 }
 
+
+
+export type VariationProductIdRow = {
+  variationId: number;
+  productId: number;
+};
+
+/** variation_id (SKU) → product_id для загрузки карточек через Partner API */
+export async function fetchProductIdsByVariationIds(
+  ids: number[],
+  metabaseApiKey?: string
+): Promise<VariationProductIdRow[]> {
+  const creds = resolveMetabaseCredentials(metabaseApiKey);
+  if (!creds) {
+    throw new Error(
+      "Metabase не настроен: нужен METABASE_API_KEY на сервере для поиска по id вариации"
+    );
+  }
+  if (!ids.length) return [];
+  const inList = [...new Set(ids.filter((id) => id > 0))].join(",");
+  if (!inList) return [];
+
+  const sql = `
+    SELECT pv.id AS variation_id, pv.product_id
+    FROM public.product_variation pv
+    WHERE pv.id IN (${inList})
+  `;
+
+  const rows = await metabaseQuery<{
+    variation_id: number;
+    product_id: number;
+  }>(sql, creds);
+
+  return rows.map((r) => ({
+    variationId: Number(r.variation_id),
+    productId: Number(r.product_id)
+  }));
+}
+
 export { metabaseIsConfigured, DEFAULT_METABASE_URL, DEFAULT_METABASE_DB_ID };

@@ -8,8 +8,9 @@ import {
 export function isYandexProcessedStorageUrl(url: string): boolean {
   const u = url.toLowerCase();
   return (
-    /template-generator\/yandex\//i.test(u) ||
+    /template-generator\/(?:yandex|rehost)\//i.test(u) ||
     /\/ym-[^/]+\.jpg(?:\?|$)/i.test(u) ||
+    /\/rehost-[^/]+\.jpg(?:\?|$)/i.test(u) ||
     /storage\.yandexcloud\.net.*template-generator/i.test(u)
   );
 }
