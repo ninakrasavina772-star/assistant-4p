@@ -18,8 +18,10 @@ export function applyFillResults(
   let filled = 0;
 
   for (const res of results) {
-    const hasValues = res.ok || Object.keys(res.values).length > 0;
-    if (!hasValues) continue;
+    const hasValues = Object.keys(res.values).length > 0;
+    const hasPhotos =
+      (res.extraPhotos?.length ?? 0) > 0 || (res.imageUrls?.length ?? 0) > 0;
+    if (!res.ok && !hasValues && !hasPhotos) continue;
     for (const [header, value] of Object.entries(res.values)) {
       const col = colByHeader.get(header);
       if (!col || !value) continue;

@@ -52,6 +52,8 @@ export type FillBatchIn = {
   overwriteFilled?: boolean;
   /** Ветка маркетплейса — разная логика фото и контента */
   marketplace?: MarketplaceId;
+  /** Поэтапно: только контент, только фото, или всё сразу */
+  fillStage?: "full" | "content_only" | "photos_only";
 };
 
 type AiFieldSpec = {
@@ -390,6 +392,9 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
   const workMode = batch.workMode ?? "supplement";
   const keepTemplateFilled = workMode === "supplement" && batch.overwriteFilled !== true;
   const isYandex = batch.marketplace === "yandex";
+  const fillStage = batch.fillStage ?? "full";
+  const photosOnly = fillStage === "photos_only";
+  const contentOnly = fillStage === "content_only";
   const out: FillRowResult[] = [];
   const brandSnippetCache = new Map<string, string>();
 
@@ -397,10 +402,32 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
     const brand = pickBrand(row);
     const domain = guessBrandDomain(brand);
 
-    const photoResolved = await resolveExtraPhotos(row, batch);
-    const extraPhotos = photoResolved.extraPhotos;
-    const imageUrls = photoResolved.imageUrls;
-    const photoSources = photoResolved.sources;
+    let extraPhotos: string[] = [];
+    let imageUrls: string[] | undefined;
+    let photoSources: string[] = [];
+
+    if (!contentOnly) {
+      const photoResolved = await resolveExtraPhotos(row, batch);
+      extraPhotos = photoResolved.extraPhotos;
+      imageUrls = photoResolved.imageUrls;
+      photoSources = photoResolved.sources;
+    }
+
+    if (photosOnly) {
+      out.push({
+        row: row.row,
+        ok: extraPhotos.length > 0 || Boolean(imageUrls?.length),
+        values: {},
+        extraPhotos,
+        imageUrls,
+        sources: photoSources,
+        error:
+          extraPhotos.length || imageUrls?.length
+            ? undefined
+            : "Нет обработанных foto"
+      });
+      continue;
+    }
 
     try {
       const csvPrefill = prefillFromCsvData(row.csvData, fields, row.cells, {

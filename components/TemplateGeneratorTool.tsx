@@ -80,11 +80,15 @@ const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
 const FILL_REQUEST_MS = 280_000;
 const FILL_BATCH_SIZE_DEFAULT = 50;
+const PHOTOS_BATCH_SIZE_DEFAULT = 3;
+
+type PipelineStep = 1 | 2 | 3;
 
 type RunFillOptions = {
   variationIds?: number[];
   strictExample?: boolean;
   selectionOverride?: ColumnSelection[];
+  fillStage?: "full" | "content_only" | "photos_only";
 };
 
 function buildDefaultSelection(scan: TemplateSheetScan): ColumnSelection[] {
@@ -237,6 +241,10 @@ export function TemplateGeneratorTool() {
   const [rowsMarkedForRemoval, setRowsMarkedForRemoval] = useState<Set<number>>(
     () => new Set()
   );
+  const [pipelineStep, setPipelineStep] = useState<PipelineStep>(1);
+  const [dupsPhaseDone, setDupsPhaseDone] = useState(false);
+  const [contentPhaseDone, setContentPhaseDone] = useState(false);
+  const [photosFillOffset, setPhotosFillOffset] = useState(0);
 
   const step2Ref = useRef<HTMLElement>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
@@ -353,6 +361,37 @@ export function TemplateGeneratorTool() {
     if (!k || !chatMessages.length) return;
     sessionStorage.setItem(chatStorageKey(k), JSON.stringify(chatMessages));
   }, [chatMessages, openaiKey]);
+
+  useEffect(() => {
+    if (step === 2 && scan && hasWb) refreshDupGroups();
+  }, [step, scan, hasWb, refreshDupGroups]);
+
+  const finishDupPhase = useCallback(() => {
+    const wb = wbRef.current;
+    if (!wb || !scan) return;
+    const removed = rowsMarkedForRemoval.size;
+    if (removed > 0) {
+      deleteWorksheetRows(wb, scan, [...rowsMarkedForRemoval]);
+      const newScan = scanTemplateSheet(wb, scan.sheetName, listValuesRef.current);
+      if (newScan) setScan(newScan);
+      setRowsMarkedForRemoval(new Set());
+      refreshDupGroups();
+    }
+    setDupsPhaseDone(true);
+    setPipelineStep(2);
+    setFillRowOffset(0);
+    setPhotosFillOffset(0);
+    setContentPhaseDone(false);
+    setBatchesCompleted(0);
+    setBatchNotice(
+      removed > 0
+        ? `Этап 1: удалено ${removed} строк-дублей. Можно запускать контент.`
+        : dupGroups.length > 0
+          ? `Этап 1: ${dupGroups.length} групп дублей просмотрены — дубли оставлены в шаблоне.`
+          : "Этап 1: дублей по EAN не найдено."
+    );
+    setProgress("Этап 2: отметьте столбцы и нажмите «Заполнить контент».");
+  }, [scan, rowsMarkedForRemoval, dupGroups.length, refreshDupGroups]);
 
   const chatContext = useMemo((): TemplateChatContext => {
     const selected = scan
@@ -704,6 +743,10 @@ export function TemplateGeneratorTool() {
       setBatchNotice("");
       setRowsMarkedForRemoval(new Set());
       setDupGroups([]);
+      setPipelineStep(1);
+      setDupsPhaseDone(false);
+      setContentPhaseDone(false);
+      setPhotosFillOffset(0);
       setTplLoading(true);
       try {
         if (!/\.xlsx?$/i.test(file.name)) {
@@ -906,8 +949,25 @@ export function TemplateGeneratorTool() {
   const runFill = useCallback(async (opts?: RunFillOptions) => {
     const wb = wbRef.current;
     if (!wb || !scan) return;
+    const fillStage = opts?.fillStage ?? "content_only";
+    const isPhotosStage = fillStage === "photos_only";
+    const byVariationIds = Boolean(opts?.variationIds?.length);
+
+    if (!byVariationIds && !dupsPhaseDone && fillStage !== "full") {
+      setError("Сначала завершите этап 1 — проверка дублей (кнопка внизу блока «Поэтапная обработка»).");
+      return;
+    }
+    if (isPhotosStage && !photoEnabled) {
+      setError("Обработка фото выключена — включите в настройках или пропустите этап 3.");
+      return;
+    }
+    if (isPhotosStage && !contentPhaseDone && !byVariationIds) {
+      setError("Сначала завершите этап 2 — контент для всех строк шаблона.");
+      return;
+    }
+
     const key = openaiKey.trim();
-    if (!key && !serverStatus?.openai) {
+    if (!isPhotosStage && !key && !serverStatus?.openai) {
       setError("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
       return;
     }
@@ -917,7 +977,6 @@ export function TemplateGeneratorTool() {
       setError("Выберите хотя бы один столбец (или загрузите шаблон с контентными полями)");
       return;
     }
-    const byVariationIds = Boolean(opts?.variationIds?.length);
     if (!byVariationIds && workMode === "from_scratch" && marketplace === "ozon" && (!feedEnabled || !csvTable)) {
       setError("Режим «С нуля» для Ozon требует включённый и загруженный CSV-фид");
       return;
@@ -935,6 +994,8 @@ export function TemplateGeneratorTool() {
     setBusy(true);
     setError("");
     setBatchNotice("");
+    if (fillStage === "content_only") setPipelineStep(2);
+    if (fillStage === "photos_only") setPipelineStep(3);
 
     const ws = wb.getWorksheet(scan.sheetName)!;
     let allContexts = collectRowContexts(ws, scan);
@@ -959,6 +1020,10 @@ export function TemplateGeneratorTool() {
       feedSkuSet,
       overwriteFilled: byVariationIds ? true : overwriteFilled
     });
+
+    if (rowsMarkedForRemoval.size > 0) {
+      fillableContexts = fillableContexts.filter((c) => !rowsMarkedForRemoval.has(c.row));
+    }
 
     if (byVariationIds && opts?.variationIds) {
       try {
@@ -1003,16 +1068,30 @@ export function TemplateGeneratorTool() {
       setBusy(false);
       return;
     }
-    if (!byVariationIds && fillRowOffset >= totalRows) {
-      setError("Все строки уже обработаны — загрузите шаблон заново или скачайте файл.");
-      setBusy(false);
-      return;
+    if (!byVariationIds) {
+      const activeOffset = isPhotosStage ? photosFillOffset : fillRowOffset;
+      if (activeOffset >= totalRows) {
+        setError(
+          isPhotosStage
+            ? "Все фото уже обработаны — скачайте файл или загрузите шаблон заново."
+            : "Все строки уже обработаны — загрузите шаблон заново или скачайте файл."
+        );
+        setBusy(false);
+        return;
+      }
     }
 
     const batchSize = byVariationIds
       ? totalRows
-      : Math.max(1, Math.min(fillBatchSize, 200));
-    const batchStart = byVariationIds ? 0 : fillRowOffset;
+      : Math.max(
+          1,
+          Math.min(
+            isPhotosStage ? Math.min(PHOTOS_BATCH_SIZE_DEFAULT, fillBatchSize) : fillBatchSize,
+            200
+          )
+        );
+    const activeOffset = isPhotosStage ? photosFillOffset : fillRowOffset;
+    const batchStart = byVariationIds ? 0 : activeOffset;
     const contexts = fillableContexts.slice(batchStart, batchStart + batchSize);
     const batchEnd = batchStart + contexts.length;
     const batchLabel = `строки ${batchStart + 1}–${batchEnd} из ${totalRows}`;
@@ -1026,7 +1105,11 @@ export function TemplateGeneratorTool() {
         `Фид: ${feedHits} из ${templateSkuSet.size} артикулов · режим «${workMode === "from_scratch" ? "с нуля" : "дополнить"}»…`
       );
     } else if (!feedEnabled) {
-      setProgress("Без фида — заполнение через AI (название, бренд, сайт производителя)…");
+      setProgress(
+        isPhotosStage
+          ? "Этап 3: обработка фото (без AI-текста)…"
+          : "Этап 2: заполнение контента через AI (без фото)…"
+      );
     }
 
     const imageHeader =
@@ -1090,11 +1173,16 @@ export function TemplateGeneratorTool() {
     const applyOverwrite =
       byVariationIds || workMode === "from_scratch" || overwriteFilled;
 
+    const stageLabel = isPhotosStage ? "Фото" : "Контент";
+
     let doneRows = 0;
     try {
       for (let i = 0; i < chunks.length; i += FILL_PARALLEL) {
         const wave = chunks.slice(i, i + FILL_PARALLEL);
-        setProgress(`AI: ${doneRows} / ${contexts.length} (${batchLabel})…`);
+        const nextSku = wave[0]?.[0]?.sku ?? "";
+        setProgress(
+          `${stageLabel}: ${doneRows + 1} / ${contexts.length} · SKU ${nextSku} (${batchLabel})…`
+        );
 
         const waveResults = await Promise.all(
           wave.map(async (rows) => {
@@ -1115,8 +1203,9 @@ export function TemplateGeneratorTool() {
                   contentFocus: true,
                   workMode,
                   overwriteFilled: applyOverwrite,
+                  fillStage,
                   photoSettings: {
-                    enabled: photoEnabled,
+                    enabled: isPhotosStage ? true : fillStage === "content_only" ? false : photoEnabled,
                     generateBackgrounds:
                       marketplace === "yandex" ? false : photoGenerateBackgrounds,
                     photoStyle,
@@ -1159,40 +1248,64 @@ export function TemplateGeneratorTool() {
           scan.imageCol
         );
         setPreview([...allResults]);
-        setProgress(`AI: ${doneRows} / ${contexts.length} (${batchLabel})…`);
+        setProgress(`${stageLabel}: готово ${doneRows} / ${contexts.length} (${batchLabel})`);
       }
 
       const batchNum = batchesCompleted + 1;
       const blob = await writeWorkbookToBlob(wb);
-      downloadBlob(blob, filledDownloadName(fileName, batchNum));
+      const partSuffix = isPhotosStage ? `-photos-part` : `-filled-part`;
+      downloadBlob(
+        blob,
+        fileName.replace(/\.xlsx?$/i, "") + `${partSuffix}${String(batchNum).padStart(2, "0")}.xlsx`
+      );
 
       const modes = countFillModes(allResults);
       const modeLine =
-        feedEnabled && csvTable && allResults.length
+        !isPhotosStage && feedEnabled && csvTable && allResults.length
           ? ` CSV: ${modes.csvOnly} строк · смешанно: ${modes.mixed} · только AI: ${modes.aiOnly}.`
           : "";
 
       const newOffset = batchEnd;
-      setFillRowOffset(newOffset);
+      if (isPhotosStage) {
+        setPhotosFillOffset(newOffset);
+      } else {
+        setFillRowOffset(newOffset);
+      }
       setBatchesCompleted(batchNum);
       const okCount = allResults.filter((r) => r.ok).length;
       const remaining = totalRows - newOffset;
 
       if (remaining <= 0) {
-        setProgress(`Готово: ${okCount} / ${allResults.length} в последней партии, всего ${totalRows} строк`);
-        setDone(true);
-        setStep(3);
-        void eventReply(
-          `Все ${totalRows} строк обработаны (${batchNum} партий). Файл part${String(batchNum).padStart(2, "0")} скачан.`
-        );
+        if (isPhotosStage) {
+          setProgress(`Этап 3 готов: фото для ${totalRows} строк`);
+          setDone(true);
+          setStep(3);
+          void eventReply(`Фото обработаны для всех ${totalRows} строк.`);
+        } else {
+          setProgress(`Этап 2 готов: контент для ${totalRows} строк`);
+          setContentPhaseDone(true);
+          if (photoEnabled) {
+            setPipelineStep(3);
+            setPhotosFillOffset(0);
+            setBatchesCompleted(0);
+            setBatchNotice(
+              `Контент заполнен (${totalRows} строк). Запустите этап 3 — обработка фото (по ${PHOTOS_BATCH_SIZE_DEFAULT} строк за раз).`
+            );
+            void eventReply(
+              `Контент готов для ${totalRows} строк. Дальше — этап 3 (фото), без повторной генерации текста.`
+            );
+          } else {
+            setDone(true);
+            setStep(3);
+            void eventReply(`Все ${totalRows} строк обработаны (контент, без фото).`);
+          }
+        }
       } else {
-        setProgress(`Партия ${batchNum}: ${contexts.length} строк. Осталось ${remaining}.`);
-        setBatchNotice(
-          `Партия ${batchNum} готова (${batchLabel}) — файл part${String(batchNum).padStart(2, "0")} скачан.` +
-            ` Осталось ${remaining} строк.${modeLine} Нажмите «Следующие» для продолжения.`
+        setProgress(
+          `${stageLabel}: партия ${batchNum} — ${contexts.length} строк. Осталось ${remaining}.`
         );
-        void eventReply(
-          `Партия ${batchNum}: ${okCount} из ${allResults.length} строк (${batchLabel}). Скачайте уже есть — можно запускать следующую партию.`
+        setBatchNotice(
+          `Партия ${batchNum} (${batchLabel}) скачана.${modeLine} Осталось ${remaining} строк.`
         );
       }
     } catch (e) {
@@ -1207,7 +1320,8 @@ export function TemplateGeneratorTool() {
         const blob = await writeWorkbookToBlob(wb);
         downloadBlob(blob, filledDownloadName(fileName, batchNum));
         setBatchesCompleted(batchNum);
-        setFillRowOffset(batchStart + doneRows);
+        if (isPhotosStage) setPhotosFillOffset(batchStart + doneRows);
+        else setFillRowOffset(batchStart + doneRows);
         setBatchNotice(
           `Ошибка в партии, но ${doneRows} строк записаны — скачан part${String(batchNum).padStart(2, "0")}. Можно продолжить с оставшихся.`
         );
@@ -1234,6 +1348,7 @@ export function TemplateGeneratorTool() {
     strictDropdown,
     dropdownSource,
     fillRowOffset,
+    photosFillOffset,
     fillBatchSize,
     batchesCompleted,
     fileName,
@@ -1242,7 +1357,10 @@ export function TemplateGeneratorTool() {
     overwriteFilled,
     exampleSamples,
     serverStatus,
-    marketplace
+    marketplace,
+    dupsPhaseDone,
+    rowsMarkedForRemoval,
+    contentPhaseDone
   ]);
 
   const handleAssistantAction = useCallback(
@@ -1320,6 +1438,17 @@ export function TemplateGeneratorTool() {
     const allDone = total > 0 && fillRowOffset >= total;
     return { total, remaining, nextBatch, rangeFrom, rangeTo, allDone };
   }, [scan?.dataRowCount, fillRowOffset, fillBatchSize]);
+
+  const photosFillStats = useMemo(() => {
+    const total = scan?.dataRowCount ?? 0;
+    const batchCap = Math.min(PHOTOS_BATCH_SIZE_DEFAULT, fillBatchSize);
+    const remaining = Math.max(0, total - photosFillOffset);
+    const nextBatch = Math.min(Math.max(1, batchCap), remaining || batchCap);
+    const rangeFrom = photosFillOffset + 1;
+    const rangeTo = photosFillOffset + nextBatch;
+    const allDone = total > 0 && photosFillOffset >= total;
+    return { total, remaining, nextBatch, rangeFrom, rangeTo, allDone };
+  }, [scan?.dataRowCount, photosFillOffset, fillBatchSize]);
 
   const csvCoverage = useMemo(() => {
     if (!feedEnabled || !csvTable || !scan || !hasWb) return null;
@@ -2083,8 +2212,167 @@ export function TemplateGeneratorTool() {
               </p>
             </fieldset>
 
+            <fieldset className="rounded-lg border-2 border-slate-300 bg-slate-50 p-4 text-sm">
+              <legend className="px-2 text-base font-bold text-slate-900">Поэтапная обработка</legend>
+              <p className="text-xs text-slate-600">
+                Сначала дубли, затем контент (быстро, без фото), затем фото отдельно. Так виден
+                прогресс и не ждёте минуты на первой строке.
+              </p>
+              <ol className="mt-3 space-y-3">
+                <li
+                  className={`rounded-lg border p-3 ${
+                    pipelineStep === 1 ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <p className="font-semibold">
+                    Этап 1 — Дубли по EAN{" "}
+                    {dupsPhaseDone ? (
+                      <span className="text-green-700">✓ готово</span>
+                    ) : (
+                      <span className="text-amber-700">текущий</span>
+                    )}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    {dupGroups.length > 0
+                      ? `Найдено ${dupGroups.length} групп. Отметьте лишние артикулы и удалите из шаблона.`
+                      : "Дублей по EAN пока не найдено — можно сразу перейти к контенту."}
+                  </p>
+                  {dupGroups.length > 0 ? (
+                    <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
+                      {dupGroups.map((g) => (
+                        <div
+                          key={g.key + g.rowNumbers.join("-")}
+                          className="rounded border border-orange-200 bg-orange-50/50 p-2 text-xs"
+                        >
+                          <p className="font-medium">{g.reason}</p>
+                          <ul className="mt-1 space-y-1">
+                            {g.rowNumbers.map((rowNum, idx) => {
+                              const sku = g.skus[idx] ?? "";
+                              const marked = rowsMarkedForRemoval.has(rowNum);
+                              return (
+                                <li
+                                  key={rowNum}
+                                  className={`flex flex-wrap items-center justify-between gap-2 ${
+                                    marked ? "text-red-700 line-through" : ""
+                                  }`}
+                                >
+                                  <span>
+                                    стр. {rowNum} · {sku}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-slate-300 bg-white px-2 py-0.5 font-semibold"
+                                    onClick={() => toggleRowRemoval(rowNum)}
+                                  >
+                                    {marked ? "Вернуть" : "Удалить из шаблона"}
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold"
+                      disabled={busy}
+                      onClick={() => {
+                        refreshDupGroups();
+                        setProgress(
+                          dupGroups.length
+                            ? `Пересканировано: ${dupGroups.length} групп дублей`
+                            : "Дублей по EAN не найдено"
+                        );
+                      }}
+                    >
+                      Пересканировать дубли
+                    </button>
+                    <button
+                      type="button"
+                      className={homeBtnPrimary}
+                      disabled={busy || dupsPhaseDone}
+                      onClick={finishDupPhase}
+                    >
+                      {dupsPhaseDone ? "Этап 1 завершён" : "Дубли проверены → к контенту"}
+                    </button>
+                  </div>
+                </li>
+
+                <li
+                  className={`rounded-lg border p-3 ${
+                    pipelineStep === 2 ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"
+                  } ${!dupsPhaseDone ? "opacity-60" : ""}`}
+                >
+                  <p className="font-semibold">
+                    Этап 2 — Контент (AI, без фото){" "}
+                    {contentPhaseDone ? (
+                      <span className="text-green-700">✓ готово</span>
+                    ) : dupsPhaseDone ? (
+                      <span className="text-amber-700">текущий</span>
+                    ) : null}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Название, описание, характеристики — ~20–40 сек на строку. Фото на этом этапе не
+                    трогаем.
+                  </p>
+                  <button
+                    type="button"
+                    className={`${homeBtnPrimary} mt-2`}
+                    disabled={busy || !dupsPhaseDone || fillStats.allDone}
+                    onClick={() => void runFill({ fillStage: "content_only" })}
+                  >
+                    {busy
+                      ? "Обработка…"
+                      : fillStats.allDone
+                        ? "Контент заполнен"
+                        : fillRowOffset > 0
+                          ? `Следующие ${fillStats.nextBatch} (${fillStats.rangeFrom}–${fillStats.rangeTo})`
+                          : `Заполнить контент (${fillStats.rangeFrom}–${fillStats.rangeTo} из ${fillStats.total})`}
+                  </button>
+                </li>
+
+                {photoEnabled ? (
+                  <li
+                    className={`rounded-lg border p-3 ${
+                      pipelineStep === 3 ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"
+                    } ${!contentPhaseDone ? "opacity-60" : ""}`}
+                  >
+                    <p className="font-semibold">
+                      Этап 3 — Фото{" "}
+                      {photosFillStats.allDone && contentPhaseDone ? (
+                        <span className="text-green-700">✓ готово</span>
+                      ) : contentPhaseDone ? (
+                        <span className="text-amber-700">текущий</span>
+                      ) : null}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Packshot на белом + lifestyle из админки в конец. ~1–3 мин на строку — идёт
+                      партиями по {PHOTOS_BATCH_SIZE_DEFAULT} шт.
+                    </p>
+                    <button
+                      type="button"
+                      className={`${homeBtnPrimary} mt-2`}
+                      disabled={busy || !contentPhaseDone || photosFillStats.allDone}
+                      onClick={() => void runFill({ fillStage: "photos_only" })}
+                    >
+                      {busy
+                        ? "Обработка фото…"
+                        : photosFillStats.allDone
+                          ? "Фото готовы"
+                          : photosFillOffset > 0
+                            ? `Следующие фото ${photosFillStats.nextBatch} (${photosFillStats.rangeFrom}–${photosFillStats.rangeTo})`
+                            : `Обработать фото (${photosFillStats.rangeFrom}–${photosFillStats.rangeTo})`}
+                    </button>
+                  </li>
+                ) : null}
+              </ol>
+            </fieldset>
+
             <fieldset className="rounded-lg border border-slate-200 p-3 text-sm">
-              <legend className="px-1 font-semibold">Партиями</legend>
+              <legend className="px-1 font-semibold">Партиями (этап 2)</legend>
               <p className="text-xs text-slate-500">
                 Обрабатываем файл частями: после каждой партии Excel скачивается автоматически, затем
                 нажмите кнопку для следующих строк.
@@ -2116,20 +2404,6 @@ export function TemplateGeneratorTool() {
               </div>
             </fieldset>
 
-            <button
-              type="button"
-              className={`${homeBtnPrimary} w-full max-w-md py-3 text-base`}
-              disabled={busy || fillStats.allDone}
-              onClick={() => void runFill()}
-            >
-              {busy
-                ? "Обработка…"
-                : fillStats.allDone
-                  ? "Все строки обработаны"
-                  : fillRowOffset > 0
-                    ? `Следующие ${fillStats.nextBatch} (${fillStats.rangeFrom}–${fillStats.rangeTo} из ${fillStats.total})`
-                    : `Запустить AI (${fillStats.rangeFrom}–${fillStats.rangeTo} из ${fillStats.total})`}
-            </button>
             {batchNotice ? (
               <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
                 {batchNotice}
@@ -2138,9 +2412,8 @@ export function TemplateGeneratorTool() {
             {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
             {busy ? (
               <p className="text-xs text-slate-500">
-                Около 20–40 сек на строку. Счётчик обновляется после каждой строки. Партия из{" "}
-                {fillStats.nextBatch} строк ≈ {Math.round((fillStats.nextBatch * 30) / 60)}–
-                {Math.round((fillStats.nextBatch * 40) / 60)} мин.
+                Контент: ~20–40 сек/строка · фото: ~1–3 мин/строка. Счётчик обновляется перед
+                каждой строкой.
               </p>
             ) : null}
             {fillRowOffset > 0 && !fillStats.allDone && !busy ? (
