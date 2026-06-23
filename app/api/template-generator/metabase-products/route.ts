@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import {
   fetchMetabaseProductsByIds,
   metabaseProductIsConfigured
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Metabase не настроен на сервере" }, { status: 503 });
   }
 
-  let body: { variationIds?: unknown };
+  let body: { variationIds?: unknown; includeYandexPrices?: boolean };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -24,11 +24,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Передайте variationIds — массив числовых ID" }, { status: 400 });
   }
 
+  const includeYandexPrices = body.includeYandexPrices !== false;
+
   try {
-    const products = await fetchMetabaseProductsByIds(ids);
+    const products = await fetchMetabaseProductsByIds(ids, undefined, {
+      includeYandexPrices
+    });
     const found = new Set(products.map((p) => p.variationId));
     const missing = ids.filter((id) => !found.has(id));
-    return NextResponse.json({ products, missing });
+    const missingPrices = includeYandexPrices
+      ? products.filter((p) => p.priceUsd == null).map((p) => p.variationId)
+      : [];
+    return NextResponse.json({ products, missing, missingPrices });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Ошибка Metabase";
     return NextResponse.json({ error: msg }, { status: 502 });

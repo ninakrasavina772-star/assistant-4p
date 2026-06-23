@@ -1,5 +1,6 @@
-import { fetchLetualVariations } from "@/lib/letualMetabase";
+﻿import { fetchLetualVariations } from "@/lib/letualMetabase";
 import { metabaseIsConfigured } from "@/lib/letualMetabaseConfig";
+import { fetchYandexMarketPrices } from "@/lib/templateGenerator/yandexMarketPrices";
 
 export type MetabaseProductRow = {
   variationId: number;
@@ -8,6 +9,8 @@ export type MetabaseProductRow = {
   ean: string | null;
   mainImageUrl: string | null;
   imageUrls: string[];
+  priceUsd?: number | null;
+  priceCurrency?: string | null;
 };
 
 function parseVariationId(sku: string): number | null {
@@ -17,10 +20,26 @@ function parseVariationId(sku: string): number | null {
   return id > 0 ? id : null;
 }
 
+function attachPrices(
+  products: MetabaseProductRow[],
+  prices: Map<number, { price: number; currency: string }>
+): MetabaseProductRow[] {
+  return products.map((p) => {
+    const row = prices.get(p.variationId);
+    if (!row) return p;
+    return {
+      ...p,
+      priceUsd: row.price,
+      priceCurrency: row.currency
+    };
+  });
+}
+
 /** Все foto вариации из Metabase (4Partners DB) по SKU = variation_id */
 export async function fetchMetabaseProductBySku(
   sku: string,
-  metabaseApiKey?: string
+  metabaseApiKey?: string,
+  opts?: { includeYandexPrices?: boolean }
 ): Promise<MetabaseProductRow | null> {
   if (!metabaseIsConfigured(metabaseApiKey)) return null;
   const id = parseVariationId(sku);
@@ -30,7 +49,7 @@ export async function fetchMetabaseProductBySku(
   const row = rows[0];
   if (!row) return null;
 
-  return {
+  let product: MetabaseProductRow = {
     variationId: row.variationId,
     productName: row.productName,
     brandName: row.brandName,
@@ -38,9 +57,16 @@ export async function fetchMetabaseProductBySku(
     mainImageUrl: row.mainImageUrl,
     imageUrls: row.imageUrls
   };
+
+  if (opts?.includeYandexPrices) {
+    const prices = await fetchYandexMarketPrices([id], metabaseApiKey);
+    [product] = attachPrices([product], prices);
+  }
+
+  return product;
 }
 
-/** Lifestyle / крупные кадры — приоритет для композита */
+/** Lifestyle / вторичные кадры — приоритет для композита */
 export function sortImagesForComposite(urls: string[]): string[] {
   const score = (u: string): number => {
     const l = u.toLowerCase();
@@ -63,7 +89,8 @@ export function metabaseProductIsConfigured(): boolean {
 /** Пакетная загрузка товаров по variation_id */
 export async function fetchMetabaseProductsByIds(
   ids: number[],
-  metabaseApiKey?: string
+  metabaseApiKey?: string,
+  opts?: { includeYandexPrices?: boolean }
 ): Promise<MetabaseProductRow[]> {
   if (!ids.length) return [];
   const unique = [...new Set(ids.filter((id) => id > 0))];
@@ -81,5 +108,15 @@ export async function fetchMetabaseProductsByIds(
       } satisfies MetabaseProductRow
     ])
   );
-  return unique.map((id) => byId.get(id)).filter((x): x is MetabaseProductRow => Boolean(x));
+  let products = unique.map((id) => byId.get(id)).filter((x): x is MetabaseProductRow => Boolean(x));
+
+  if (opts?.includeYandexPrices && products.length) {
+    const prices = await fetchYandexMarketPrices(
+      products.map((p) => p.variationId),
+      metabaseApiKey
+    );
+    products = attachPrices(products, prices);
+  }
+
+  return products;
 }

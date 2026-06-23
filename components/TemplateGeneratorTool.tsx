@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type ExcelJS from "exceljs";
 import { readWorkbookFromBuffer, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 import { applyFillResults, prefillPhotoReviewColumn } from "@/lib/templateGenerator/apply";
-import type { FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
+import type { FillRowInput, FillRowResult, TemplateRowContext } from "@/lib/templateGenerator/types";
 import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
 import {
   buildCsvIndex,
@@ -46,6 +46,7 @@ import {
   buildExampleReferenceText,
   loadExampleTemplateSamples
 } from "@/lib/templateGenerator/exampleTemplate";
+import { applyYandexPricesToWorksheet } from "@/lib/templateGenerator/applyYandexPrices";
 import { injectVariationProducts } from "@/lib/templateGenerator/injectVariationRows";
 import { normVariationSku, parseVariationIdsFromText } from "@/lib/templateGenerator/parseVariationIds";
 import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
@@ -238,6 +239,7 @@ export function TemplateGeneratorTool() {
   const [ozonApiKey, setOzonApiKey] = useState("");
   const [variationIdsText, setVariationIdsText] = useState("");
   const [variationInjecting, setVariationInjecting] = useState(false);
+  const [yandexFillPrices, setYandexFillPrices] = useState(true);
   const [dupGroups, setDupGroups] = useState<TemplateDuplicateGroup[]>([]);
   const [rowsMarkedForRemoval, setRowsMarkedForRemoval] = useState<Set<number>>(
     () => new Set()
@@ -848,6 +850,40 @@ export function TemplateGeneratorTool() {
     [initColumns, eventReply, refreshDupGroups]
   );
 
+
+  const applyYandexPricesBeforeFill = useCallback(
+    async (contexts: TemplateRowContext[]) => {
+      if (marketplace !== "yandex" || !yandexFillPrices || !contexts.length) return 0;
+      const ids = contexts
+        .map((c) => normVariationSku(c.sku))
+        .filter((id): id is number => id != null);
+      if (!ids.length) return 0;
+      const res = await fetch("/api/template-generator/yandex-prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variationIds: ids, includeYandexPrices: marketplace === "yandex" && yandexFillPrices })
+      });
+      const json = (await res.json()) as {
+        prices?: { variationId: number; price: number; currency: string }[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(json.error ?? `Цены HTTP ${res.status}`);
+      const map = new Map(
+        (json.prices ?? []).map((p) => [
+          p.variationId,
+          { variationId: p.variationId, price: p.price, currency: p.currency }
+        ])
+      );
+      const wb = wbRef.current;
+      if (!wb || !scan) return 0;
+      const ws = wb.getWorksheet(scan.sheetName)!;
+      return applyYandexPricesToWorksheet(ws, scan, contexts, map, {
+        overwrite: overwriteFilled
+      }).filled;
+    },
+    [marketplace, yandexFillPrices, scan, overwriteFilled]
+  );
+
   const onInjectVariationIds = useCallback(async () => {
     const wb = wbRef.current;
     if (!wb || !scan) {
@@ -856,7 +892,7 @@ export function TemplateGeneratorTool() {
     }
     const ids = parseVariationIdsFromText(variationIdsText, 50);
     if (!ids.length) {
-      setError("Вставьте артикулы вариаций (variation_id) — по одному в строке или через запятую");
+      setError("Вставьте артикулы вариации (variation_id) — по одному в строке или через запятую");
       return;
     }
     setVariationInjecting(true);
@@ -865,11 +901,12 @@ export function TemplateGeneratorTool() {
       const mbRes = await fetch("/api/template-generator/metabase-products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variationIds: ids })
+        body: JSON.stringify({ variationIds: ids, includeYandexPrices: marketplace === "yandex" && yandexFillPrices })
       });
       const mbJson = (await mbRes.json()) as {
         products?: MetabaseProductRow[];
         missing?: number[];
+        missingPrices?: number[];
         error?: string;
       };
       if (!mbRes.ok) throw new Error(mbJson.error ?? `Metabase HTTP ${mbRes.status}`);
@@ -880,6 +917,7 @@ export function TemplateGeneratorTool() {
             (mbJson.missing?.length ? ` (пропущены: ${mbJson.missing.join(", ")})` : "")
         );
       }
+      const withPrices = products.filter((p) => p.priceUsd != null).length;
       const ws = wb.getWorksheet(scan.sheetName)!;
       await injectVariationProducts(ws, scan, products);
       setDupsPhaseDone(false);
@@ -891,16 +929,18 @@ export function TemplateGeneratorTool() {
       setUniqueBrands(brands);
       setBatchNotice(
         `Подтянуто ${products.length} товаров из Metabase` +
-          (groupCount > 0 ? ` · найдено ${groupCount} групп дублей` : "") +
-          (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "")
+          (withPrices > 0 ? `, цена USD: ${withPrices}` : "") +
+          (groupCount > 0 ? ` и найдено ${groupCount} групп дублей` : "") +
+          (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "") +
+          (mbJson.missingPrices?.length ? `. Без цены: ${mbJson.missingPrices.join(", ")}` : "")
       );
-      void eventReply(`Добавила в шаблон ${products.length} позиций из Metabase по variation_id.`);
+      void eventReply(`Добавили в шаблон ${products.length} позиций из Metabase по variation_id.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка Metabase");
     } finally {
       setVariationInjecting(false);
     }
-  }, [scan, variationIdsText, refreshDupGroups, bumpSheetScan, eventReply]);
+  }, [scan, variationIdsText, refreshDupGroups, bumpSheetScan, eventReply, marketplace, yandexFillPrices]);
 
   const onExampleFile = useCallback(
     async (file: File) => {
@@ -1093,6 +1133,23 @@ export function TemplateGeneratorTool() {
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Ошибка Metabase");
+        setBusy(false);
+        return;
+      }
+    }
+
+    if (
+      marketplace === "yandex" &&
+      yandexFillPrices &&
+      fillStage === "content_only" &&
+      fillableContexts.length
+    ) {
+      try {
+        setProgress("Калькулятор 4stand: подтягиваем цены USD…");
+        const priced = await applyYandexPricesBeforeFill(fillableContexts);
+        if (priced > 0) bumpSheetScan();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка загрузки цен");
         setBusy(false);
         return;
       }
@@ -1703,6 +1760,14 @@ export function TemplateGeneratorTool() {
                 >
                   {variationInjecting ? "Metabase…" : "Подтянуть из Metabase в шаблон"}
                 </button>
+                <label className="flex items-center gap-2 text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={yandexFillPrices}
+                    onChange={(e) => setYandexFillPrices(e.target.checked)}
+                  />
+                  Подтягивать цену из калькулятора 4stand (USD) — колонки «Цена» и «Валюта»
+                </label>
               </div>
             ) : null}
 

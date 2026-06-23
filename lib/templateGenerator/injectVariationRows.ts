@@ -1,4 +1,4 @@
-import type ExcelJS from "exceljs";
+﻿import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
 import { collectRowContexts } from "@/lib/templateGenerator/scan";
 import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
@@ -8,6 +8,7 @@ import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehos
 import { findEanHeader } from "@/lib/templateGenerator/templateDuplicates";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import type { TemplateSheetScan } from "@/lib/templateGenerator/types";
+import { findYandexPriceHeaders } from "@/lib/templateGenerator/applyYandexPrices";
 
 function headerMatch(header: string, patterns: RegExp[]): boolean {
   const h = header.toLowerCase();
@@ -65,6 +66,11 @@ function setCell(ws: ExcelJS.Worksheet, row: number, col: number | null, value: 
   ws.getCell(row, col).value = value;
 }
 
+function formatPriceCell(price: number): string {
+  if (Number.isInteger(price)) return String(price);
+  return String(price);
+}
+
 /** Записать variation_id в шаблон и вернуть контексты строк для заполнения */
 export async function injectVariationProducts(
   ws: ExcelJS.Worksheet,
@@ -83,6 +89,7 @@ export async function injectVariationProducts(
   const imageCol = scan.imageCol;
   const eanHeader = findEanHeader(scan);
   const eanCol = colForHeader(scan, eanHeader);
+  const { priceCol, currencyCol } = findYandexPriceHeaders(scan);
 
   const existing = collectRowContexts(ws, scan);
   const byId = new Map<number, { row: number; sku: string; cells: Record<string, string> }>();
@@ -121,6 +128,13 @@ export async function injectVariationProducts(
     setCell(ws, row, brandCol, p.brandName);
     if (p.ean) setCell(ws, row, eanCol, p.ean);
     if (imageText && imageCol) setCell(ws, row, imageCol, imageText);
+
+    if (p.priceUsd != null && p.priceUsd > 0 && priceCol) {
+      setCell(ws, row, priceCol, formatPriceCell(p.priceUsd));
+      if (currencyCol) {
+        setCell(ws, row, currencyCol, p.priceCurrency?.trim() || "USD");
+      }
+    }
   }
 
   const idSet = new Set(products.map((p) => p.variationId));
