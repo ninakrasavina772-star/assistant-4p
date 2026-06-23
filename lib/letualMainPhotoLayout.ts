@@ -84,6 +84,35 @@ export async function compositeLetualMainPhoto(
     .toBuffer();
 }
 
+/**
+ * Фото уже на белом (CDN /huge/) — без cutout pipeline, только вписать в квадрат 1000×1000.
+ * Для Яндекс Маркета, если полный pipeline Летуаль не сработал.
+ */
+export async function compositeFlatImageToLetualCanvas(
+  raw: Buffer,
+  canvas = LETUAL_CANVAS_SIZE
+): Promise<Buffer> {
+  const meta = await sharp(raw).metadata();
+  const pw = meta.width ?? 1;
+  const ph = meta.height ?? 1;
+  const placement = computeLetualPlacement(pw, ph, canvas, canvas);
+  const resized = await sharp(raw)
+    .resize(placement.width, placement.height, { fit: "fill" })
+    .toBuffer();
+
+  return sharp({
+    create: {
+      width: canvas,
+      height: canvas,
+      channels: 3,
+      background: { r: 255, g: 255, b: 255 }
+    }
+  })
+    .composite([{ input: resized, left: placement.left, top: placement.top }])
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toBuffer();
+}
+
 export async function measureProductSilhouette(
   png: Buffer
 ): Promise<{ width: number; height: number; layout: LetualLayoutType }> {
