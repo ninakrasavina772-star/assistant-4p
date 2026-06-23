@@ -1214,7 +1214,7 @@ export default function ComparePage() {
               : undefined,
           feedUrlB:
             catalogSource === "feeds" &&
-            compareMode === "twoSite" &&
+            (compareMode === "twoSite" || compareMode === "crossRubric") &&
             feedUrlB.trim()
               ? feedUrlB.trim()
               : undefined,
@@ -1226,7 +1226,7 @@ export default function ComparePage() {
               : undefined,
           feedCsvTextB:
             catalogSource === "feeds" &&
-            compareMode === "twoSite" &&
+            (compareMode === "twoSite" || compareMode === "crossRubric") &&
             !feedUrlB.trim() &&
             feedCsvTextB.trim()
               ? feedCsvTextB
@@ -1356,7 +1356,9 @@ export default function ComparePage() {
     feedUrlB,
     feedCsvTextA,
     feedCsvTextB,
-    crossRubricBatchLimit
+    crossRubricBatchLimit,
+    metabaseApiKey,
+    rememberMetabaseKey
   ]);
 
   const brandListCount = useMemo(
@@ -1430,7 +1432,9 @@ export default function ComparePage() {
           ? "Режим фидов: загрузите CSV сайта A или вставьте ссылку https://….4partners.io/my/feed/….csv"
           : null
         : !feedReadyA || !feedReadyB
-          ? "Режим фидов: для A и B нужны ссылки на фиды или загруженные CSV (по одному источнику на сторону)."
+          ? compareMode === "crossRubric"
+            ? "Режим фидов: для рубрик A и B нужны ссылки на фиды или загруженные CSV (по одному источнику на сторону)."
+            : "Режим фидов: для A и B нужны ссылки на фиды или загруженные CSV (по одному источнику на сторону)."
           : null
       : !brandsRequiredForTwoSite && compareMode === "twoSite"
         ? false
@@ -2187,9 +2191,11 @@ export default function ComparePage() {
         title: catalogSource === "feeds" ? "CSV-фиды" : "Рубрики",
         hint:
           catalogSource === "feeds"
-            ? compareMode === "twoSite"
-              ? "Два экспортных CSV (ссылка https://….4partners.io/my/feed/….csv или тот же файл с компьютера). Один источник на сторону: не заполняйте одновременно и ссылку, и файл."
-              : "Один фид или файл — внутренние дубли по отобранным строкам."
+            ? compareMode === "crossRubric"
+              ? "Два фида одного сайта (две рубрики): ссылки https://….4partners.io/my/feed/….csv или файлы. Один источник на сторону."
+              : compareMode === "twoSite"
+                ? "Два экспортных CSV (ссылка https://….4partners.io/my/feed/….csv или тот же файл с компьютера). Один источник на сторону: не заполняйте одновременно и ссылку, и файл."
+                : "Один фид или файл — внутренние дубли по отобранным строкам."
             : compareMode === "twoSite"
               ? noveltiesByIdUsesStoredList
                 ? "A — одна рубрика (для каталога A и синего шага 1). Для жёлтого «Найти новинки» витрина B берётся только из сохранённого списка id; поля рубрик B нужны для шага 1 и если список id очищен."
@@ -3768,7 +3774,7 @@ export default function ComparePage() {
               </p>
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
                 <span className="text-[10px] uppercase tracking-wide text-violet-700 font-semibold">
-                  Через Metabase
+                  CSV-фиды или Metabase
                 </span>
                 <br />
                 Разные поставщики в двух рубриках одной витрины. Сопоставление по{" "}
@@ -3888,7 +3894,9 @@ export default function ComparePage() {
           <h2 className={homeCardTitle}>Параметры выгрузки</h2>
           <p className="mt-2 text-sm text-slate-600 leading-relaxed max-w-xl">
             {catalogSource === "feeds"
-              ? "Два CSV-фида 4Partners (ссылка или файл на каждую витрину). Фильтры по брендам, моделям и исключению id на A те же, что для API."
+              ? compareMode === "crossRubric"
+                ? "Два CSV-фида одного сайта (две рубрики): ссылка или файл на каждую сторону. Исключение id действует на обе рубрики."
+                : "Два CSV-фида 4Partners (ссылка или файл на каждую витрину). Фильтры по брендам, моделям и исключению id на A те же, что для API."
               : "Ключи, рубрики и фильтры — здесь задаётся, что именно загрузится из API."}
           </p>
         </div>
@@ -3945,7 +3953,9 @@ export default function ComparePage() {
             </p>
             <div className="space-y-2 rounded-lg border border-emerald-200 bg-white/80 px-3 py-3">
               <span className="text-xs font-semibold text-slate-800">
-                Сайт A ({siteLabelA.trim() || "A"})
+                {compareMode === "crossRubric"
+                  ? `Рубрика A (${siteLabelA.trim() || "A"})`
+                  : `Сайт A (${siteLabelA.trim() || "A"})`}
               </span>
               <input
                 type="url"
@@ -3980,7 +3990,9 @@ export default function ComparePage() {
             {(compareMode === "twoSite" || compareMode === "crossRubric") && (
               <div className="space-y-2 rounded-lg border border-emerald-200 bg-white/80 px-3 py-3">
                 <span className="text-xs font-semibold text-slate-800">
-                  Сайт B ({siteLabelB.trim() || "B"})
+                  {compareMode === "crossRubric"
+                    ? `Рубрика B (${siteLabelB.trim() || "B"})`
+                    : `Сайт B (${siteLabelB.trim() || "B"})`}
                 </span>
                 <input
                   type="url"
@@ -4013,6 +4025,33 @@ export default function ComparePage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {compareMode === "crossRubric" && catalogSource === "feeds" && (
+          <div className="mb-4 rounded-xl border border-violet-200 bg-violet-50/40 px-4 py-3 space-y-2">
+            <p className="text-sm font-semibold text-violet-950">
+              Партийный поиск дублей (два CSV-фида одного сайта)
+            </p>
+            <p className="text-xs text-slate-700 leading-relaxed">
+              Каталог берётся из фидов A и B. После схлопывания добавьте id обеих карточек в «Исключить id» и перезапустите.
+              Ключ API опционален — для обогащения фото из каталога.
+            </p>
+            <label className="flex flex-wrap items-center gap-2 text-sm mt-2">
+              <span className="text-slate-700">Карточек на рубрику за запуск:</span>
+              <input
+                type="number"
+                min={50}
+                max={2000}
+                step={50}
+                className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-sm font-mono"
+                value={crossRubricBatchLimit}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n) && n > 0) setCrossRubricBatchLimit(Math.min(2000, Math.floor(n)));
+                }}
+              />
+            </label>
           </div>
         )}
 
