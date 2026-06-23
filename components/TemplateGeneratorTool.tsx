@@ -55,6 +55,7 @@ import {
   findTemplateDuplicateGroups,
   type TemplateDuplicateGroup
 } from "@/lib/templateGenerator/templateDuplicates";
+import { TemplateDuplicatesPanel } from "@/components/TemplateDuplicatesPanel";
 import type { MarketplaceId } from "@/lib/marketplace/types";
 import { MARKETPLACE_LABELS } from "@/lib/marketplace/types";
 import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
@@ -331,7 +332,7 @@ export function TemplateGeneratorTool() {
     }
     const contexts = collectRowContexts(ws, s);
     const eanHeader = findEanHeader(s);
-    const groups = findTemplateDuplicateGroups(contexts, eanHeader);
+    const groups = findTemplateDuplicateGroups(contexts, eanHeader, s);
     setDupGroups(groups);
     return groups.length;
   }, [scan]);
@@ -1921,56 +1922,14 @@ export function TemplateGeneratorTool() {
             {scan && dupGroups.length > 0 ? (
               <div className="space-y-3 rounded-lg border border-orange-300 bg-orange-50/60 p-3">
                 <p className="text-sm font-semibold text-orange-900">
-                  Дубли в шаблоне ({dupGroups.length} групп по EAN)
+                  Дубли в шаблоне ({dupGroups.length} групп)
                 </p>
-                <p className="text-xs text-slate-600">
-                  Как в «Сравнение витрин»: одинаковый штрихкод у разных артикулов. Отметьте лишние
-                  позиции — они не попадут в Excel при скачивании «без дублей».
-                </p>
-                <div className="max-h-64 space-y-2 overflow-y-auto">
-                  {dupGroups.map((g) => (
-                    <div
-                      key={g.key + g.rowNumbers.join("-")}
-                      className="rounded border border-orange-200 bg-white p-2 text-sm"
-                    >
-                      <p className="font-medium text-slate-800">{g.reason}</p>
-                      <ul className="mt-1 space-y-1">
-                        {g.rowNumbers.map((rowNum, idx) => {
-                          const sku = g.skus[idx] ?? "";
-                          const marked = rowsMarkedForRemoval.has(rowNum);
-                          return (
-                            <li
-                              key={rowNum}
-                              className={`flex flex-wrap items-center justify-between gap-2 rounded px-1 ${
-                                marked ? "bg-red-100 line-through" : ""
-                              }`}
-                            >
-                              <span>
-                                строка {rowNum} · SKU {sku}
-                              </span>
-                              <button
-                                type="button"
-                                className="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold hover:bg-slate-50"
-                                onClick={() => toggleRowRemoval(rowNum)}
-                              >
-                                {marked ? "Вернуть в шаблон" : "Удалить товар из шаблона"}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-                {rowsMarkedForRemoval.size > 0 ? (
-                  <button
-                    type="button"
-                    className={homeBtnPrimary}
-                    onClick={() => void downloadWithoutRemoved()}
-                  >
-                    Скачать шаблон без удалённых дублей ({rowsMarkedForRemoval.size})
-                  </button>
-                ) : null}
+                <TemplateDuplicatesPanel
+                  groups={dupGroups}
+                  rowsMarkedForRemoval={rowsMarkedForRemoval}
+                  onToggleRemoval={toggleRowRemoval}
+                  onDownloadWithoutRemoved={() => void downloadWithoutRemoved()}
+                />
               </div>
             ) : null}
 
@@ -2296,40 +2255,14 @@ export function TemplateGeneratorTool() {
                         : "Дублей по EAN и артикулу не найдено — можно перейти к контенту."}
                   </p>
                   {dupGroups.length > 0 ? (
-                    <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
-                      {dupGroups.map((g) => (
-                        <div
-                          key={g.key + g.rowNumbers.join("-")}
-                          className="rounded border border-orange-200 bg-orange-50/50 p-2 text-xs"
-                        >
-                          <p className="font-medium">{g.reason}</p>
-                          <ul className="mt-1 space-y-1">
-                            {g.rowNumbers.map((rowNum, idx) => {
-                              const sku = g.skus[idx] ?? "";
-                              const marked = rowsMarkedForRemoval.has(rowNum);
-                              return (
-                                <li
-                                  key={rowNum}
-                                  className={`flex flex-wrap items-center justify-between gap-2 ${
-                                    marked ? "text-red-700 line-through" : ""
-                                  }`}
-                                >
-                                  <span>
-                                    стр. {rowNum} · {sku}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="rounded border border-slate-300 bg-white px-2 py-0.5 font-semibold"
-                                    onClick={() => toggleRowRemoval(rowNum)}
-                                  >
-                                    {marked ? "Вернуть" : "Удалить из шаблона"}
-                                  </button>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      ))}
+                    <div className="mt-2">
+                      <TemplateDuplicatesPanel
+                        groups={dupGroups}
+                        rowsMarkedForRemoval={rowsMarkedForRemoval}
+                        onToggleRemoval={toggleRowRemoval}
+                        onDownloadWithoutRemoved={() => void downloadWithoutRemoved()}
+                        compact
+                      />
                     </div>
                   ) : null}
                   <div className="mt-2 flex flex-wrap gap-2">

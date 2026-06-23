@@ -1,14 +1,26 @@
 import type ExcelJS from "exceljs";
 import { expandEanDigitsForIndex } from "@/lib/product";
 import { normSku } from "@/lib/templateGenerator/csvIndex";
+import { parseImageUrls } from "@/lib/templateGenerator/photos";
+import { isImageHeader } from "@/lib/templateGenerator/presets";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import type { TemplateRowContext, TemplateSheetScan } from "@/lib/templateGenerator/types";
+
+export type TemplateDuplicateItem = {
+  row: number;
+  sku: string;
+  productName: string;
+  brand: string;
+  ean: string | null;
+  imageUrl: string | null;
+};
 
 export type TemplateDuplicateGroup = {
   key: string;
   rowNumbers: number[];
   skus: string[];
   reason: string;
+  items: TemplateDuplicateItem[];
 };
 
 export function findEanHeader(scan: TemplateSheetScan): string | null {
@@ -17,6 +29,58 @@ export function findEanHeader(scan: TemplateSheetScan): string | null {
     if (/штрих|barcode|ean|gtin/i.test(h)) return c.header;
   }
   return null;
+}
+
+function pickCell(cells: Record<string, string>, patterns: RegExp[]): string {
+  for (const [header, raw] of Object.entries(cells)) {
+    const h = header.toLowerCase();
+    if (patterns.some((p) => p.test(h)) && raw.trim()) return raw.trim();
+  }
+  return "";
+}
+
+function buildDuplicateItem(
+  row: number,
+  sku: string,
+  ctx: TemplateRowContext | undefined,
+  eanHeader: string | null,
+  imageHeader: string | null
+): TemplateDuplicateItem {
+  const cells = ctx?.cells ?? {};
+  const eanRaw = eanHeader ? String(cells[eanHeader] ?? "").trim() : "";
+  const imageText = imageHeader ? cells[imageHeader] ?? "" : pickCell(cells, [/ссылка на изображение/i]);
+  return {
+    row,
+    sku,
+    productName:
+      pickCell(cells, [/название товара/i, /^наименование/i, /^name$/i]) || "—",
+    brand: pickCell(cells, [/^бренд/i, /^brand$/i]) || "",
+    ean: eanRaw || null,
+    imageUrl: parseImageUrls(imageText)[0] ?? null
+  };
+}
+
+function imageHeaderFromScan(scan: TemplateSheetScan | null | undefined): string | null {
+  if (!scan) return null;
+  const hit = scan.columns.find((c) => isImageHeader(c.header));
+  return hit?.header ?? null;
+}
+
+export function enrichTemplateDuplicateGroups(
+  groups: Omit<TemplateDuplicateGroup, "items">[],
+  contexts: TemplateRowContext[],
+  scan: TemplateSheetScan | null
+): TemplateDuplicateGroup[] {
+  const byRow = new Map(contexts.map((c) => [c.row, c]));
+  const eanHeader = scan ? findEanHeader(scan) : null;
+  const imageHeader = imageHeaderFromScan(scan);
+
+  return groups.map((g) => ({
+    ...g,
+    items: g.rowNumbers.map((row, idx) =>
+      buildDuplicateItem(row, g.skus[idx] ?? byRow.get(row)?.sku ?? "", byRow.get(row), eanHeader, imageHeader)
+    )
+  }));
 }
 
 function skuIndexKey(raw: string): string | null {
@@ -29,10 +93,11 @@ function skuIndexKey(raw: string): string | null {
 /** Группы строк шаблона с одинаковым EAN или SKU (как в «Сравнение витрин») */
 export function findTemplateDuplicateGroups(
   contexts: TemplateRowContext[],
-  eanHeader: string | null
+  eanHeader: string | null,
+  scan?: TemplateSheetScan | null
 ): TemplateDuplicateGroup[] {
   type Ref = { row: number; sku: string };
-  const groups: TemplateDuplicateGroup[] = [];
+  const bareGroups: Omit<TemplateDuplicateGroup, "items">[] = [];
   const seenRowSets = new Set<string>();
 
   const pushGroup = (key: string, refs: Ref[], reason: string) => {
@@ -43,7 +108,7 @@ export function findTemplateDuplicateGroups(
     const rowKey = rowNumbers.join(",");
     if (seenRowSets.has(rowKey)) return;
     seenRowSets.add(rowKey);
-    groups.push({
+    bareGroups.push({
       key,
       rowNumbers,
       skus: rowNumbers.map((n) => byRow.get(n)!),
@@ -87,7 +152,11 @@ export function findTemplateDuplicateGroups(
     );
   }
 
-  return groups.sort((a, b) => b.rowNumbers.length - a.rowNumbers.length);
+  return enrichTemplateDuplicateGroups(
+    bareGroups.sort((a, b) => b.rowNumbers.length - a.rowNumbers.length),
+    contexts,
+    scan ?? null
+  );
 }
 
 /** Удалить строки из листа (снизу вверх, чтобы не сбивать индексы) */
