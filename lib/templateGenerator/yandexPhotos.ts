@@ -20,7 +20,7 @@ import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehos
 
 const MAX_PACKSHOT_PROCESS = 5;
 const MAX_BACKGROUND = 4;
-const PACKSHOT_CONCURRENCY = 2;
+const PACKSHOT_CONCURRENCY = 3;
 
 function isThumbOrSmallUrl(url: string): boolean {
   const u = url.toLowerCase();

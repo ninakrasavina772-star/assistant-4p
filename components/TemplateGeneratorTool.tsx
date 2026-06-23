@@ -80,7 +80,9 @@ const SK_MARKETPLACE = "fp_template_gen_marketplace";
 const SK_OZON_CLIENT = "fp_template_gen_ozon_client";
 const SK_OZON_API = "fp_template_gen_ozon_api";
 const FILL_CHUNK = 1;
-const FILL_PARALLEL = 1;
+/** Concurrent /api/template-generator/fill requests (content vs heavy photo stage). */
+const FILL_PARALLEL_CONTENT = 4;
+const FILL_PARALLEL_PHOTOS = 2;
 const FILL_REQUEST_MS = 280_000;
 const FILL_BATCH_SIZE_DEFAULT = 50;
 const PHOTOS_BATCH_SIZE_DEFAULT = 5;
@@ -1161,11 +1163,9 @@ export function TemplateGeneratorTool() {
         } else if (filled > 0) {
           setBatchNotice(`Цены USD из калькулятора Яндекс Маркет: ${filled}`);
         } else if (fillableContexts.length) {
-          setError(
-            "Не удалось подтянуть цены USD — для этих variation_id нет данных в yandex_market.product (калькулятор Яндекс Маркет)"
+          setBatchNotice(
+            "Цены USD не найдены — продолжаем заполнение контента без автоподстановки цены"
           );
-          setBusy(false);
-          return;
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Ошибка загрузки цен");
@@ -1289,8 +1289,9 @@ export function TemplateGeneratorTool() {
 
     let doneRows = 0;
     try {
-      for (let i = 0; i < chunks.length; i += FILL_PARALLEL) {
-        const wave = chunks.slice(i, i + FILL_PARALLEL);
+      const fillParallel = isPhotosStage ? FILL_PARALLEL_PHOTOS : FILL_PARALLEL_CONTENT;
+      for (let i = 0; i < chunks.length; i += fillParallel) {
+        const wave = chunks.slice(i, i + fillParallel);
         const nextSku = wave[0]?.[0]?.sku ?? "";
         setProgress(
           `${stageLabel}: ${doneRows + 1} / ${contexts.length} · SKU ${nextSku} (${batchLabel})…`
