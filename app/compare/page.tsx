@@ -524,6 +524,11 @@ export default function ComparePage() {
   const noveltyPreviewAbortRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
 
+  const rubricAParsedIds = useMemo(
+    () => parseRubricIdsFromText(rubricA),
+    [rubricA]
+  );
+
   const rubricBParsedIds = useMemo(
     () => parseRubricIdsFromText(rubricsBText),
     [rubricsBText]
@@ -1197,7 +1202,8 @@ export default function ComparePage() {
             feedCsvTextB.trim()
               ? feedCsvTextB
               : undefined,
-          rubricA: Number(rubricA),
+          rubricA: rubricAParsedIds[0] ?? 0,
+          rubricsA: rubricAParsedIds,
           ...(compareMode === "twoSite" &&
           !fetchSiteBOnlyByNoveltyIds &&
           rubricBParsedIds.length > 0
@@ -1340,7 +1346,8 @@ export default function ComparePage() {
     return "";
   }, [tokenA, tokenB]);
 
-  const rubricAOk = Number(rubricA) > 0;
+  const rubricACountOk = rubricAParsedIds.length <= MAX_RUBRICS_B;
+  const rubricAOk = rubricAParsedIds.length >= 1 && rubricACountOk;
   const rubricBCountOk = rubricBParsedIds.length <= MAX_RUBRICS_B;
   const rubricBOk =
     compareMode !== "twoSite" ||
@@ -1433,7 +1440,8 @@ export default function ComparePage() {
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
 
       const baseBody = {
-        rubricA: Number(rubricA),
+        rubricA: rubricAParsedIds[0] ?? 0,
+          rubricsA: rubricAParsedIds,
         rubricsB: rubricBParsedIds,
         nameLocale,
         siteVariation,
@@ -1497,7 +1505,7 @@ export default function ComparePage() {
         mnB = 0;
 
       for (let page = 1; ; page++) {
-        const sl = await fetchSlice("A", Number(rubricA), page);
+        const sl = await fetchSlice("A", (rubricAParsedIds[0] ?? 0), page);
         for (const id of sl.ids) idsA.add(id);
         for (const id of sl.rawCatalogIdsBeforeExclude) rawCatalogA.add(id);
         bmA += sl.statsSlice.brandExcludedMissing;
@@ -1640,7 +1648,8 @@ export default function ComparePage() {
         body: JSON.stringify({
           wizardTask: "noveltiesFullExport",
           noveltyIdsB: noveltyIdsStored,
-          rubricA: Number(rubricA),
+          rubricA: rubricAParsedIds[0] ?? 0,
+          rubricsA: rubricAParsedIds,
           nameLocale,
           siteVariation,
           tokenA: tokenA.trim() || undefined,
@@ -1793,7 +1802,8 @@ export default function ComparePage() {
         body: JSON.stringify({
           wizardTask: "noveltyIdsNoEanOnA",
           noveltyIdsB: noveltyIdsStored,
-          rubricA: Number(rubricA),
+          rubricA: rubricAParsedIds[0] ?? 0,
+          rubricsA: rubricAParsedIds,
           nameLocale,
           siteVariation,
           tokenA: tokenA.trim() || undefined,
@@ -1900,7 +1910,8 @@ export default function ComparePage() {
         headers: { "Content-Type": "application/json" },
         signal: ac.signal,
         body: JSON.stringify({
-          rubricA: Number(rubricA),
+          rubricA: rubricAParsedIds[0] ?? 0,
+          rubricsA: rubricAParsedIds,
           siteBFetchMode: "noveltyIds",
           noveltyIdsB: noveltyIdsStored,
           nameLocale,
@@ -4109,22 +4120,63 @@ export default function ComparePage() {
                       : "Из каталога (каскад), сайт A"
                   }
                   token={tokenA}
-                  value={rubricA}
-                  onChange={setRubricA}
+                  value=""
+                  onChange={(idStr) => {
+                    const id = Number(String(idStr).replace(/\D/g, ""));
+                    if (id > 0) {
+                      setRubricA((prev) => {
+                        const r = mergeUniqueSortedRubricId(prev, id, {
+                          max: MAX_RUBRICS_B
+                        });
+                        if (r.limitReached) {
+                          setError(
+                            `На сайте A не более ${MAX_RUBRICS_B} рубрик — удалите лишние id из списка.`
+                          );
+                        }
+                        return r.text;
+                      });
+                    }
+                  }}
                 />
+                {rubricAParsedIds.length > 0 && (
+                  <div>
+                    <span className="text-xs text-slate-600">
+                      Выбранные id ({rubricAParsedIds.length}/{MAX_RUBRICS_B}) — нажмите × чтобы убрать
+                    </span>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {rubricAParsedIds.map((rid) => (
+                        <button
+                          key={rid}
+                          type="button"
+                          onClick={() =>
+                            setRubricA((prev) => removeRubricIdFromText(prev, rid))
+                          }
+                          className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-mono text-slate-800 hover:bg-slate-100"
+                          title={`Убрать рубрику ${rid}`}
+                        >
+                          {rid}
+                          <span className="text-slate-500" aria-hidden>
+                            ×
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <label className="block">
                   <span className="text-xs text-slate-600">
-                    Или id рубрики вручную (если уже знаете число)
+                    Или id рубрик вручную — с новой строки или через запятую (до {MAX_RUBRICS_B})
                   </span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
+                  <textarea
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono min-h-[88px]"
                     value={rubricA}
-                    onChange={(e) => setRubricA(e.target.value.replace(/\D/g, ""))}
-                    placeholder="только цифры, например 12345"
+                    onChange={(e) => {
+                      const xs = parseRubricIdsFromText(e.target.value);
+                      setRubricA(xs.join("\n"));
+                      setError(null);
+                    }}
+                    placeholder={"152320740\n222032431\n247882900"}
                     spellCheck={false}
-                    autoComplete="off"
                   />
                 </label>
               </div>
@@ -4200,7 +4252,11 @@ export default function ComparePage() {
             <p className="text-[11px] text-slate-600 rounded-lg border border-slate-100 bg-slate-50/80 px-3 py-2">
               Статус: A —{" "}
               <strong className={rubricAOk ? "text-emerald-700" : "text-amber-800"}>
-                {rubricAOk ? `готово (id ${rubricA})` : "нужен id > 0"}
+                {rubricAOk
+                  ? `${rubricAParsedIds.length} рубр.: ${rubricAParsedIds.join(", ")}`
+                  : rubricAParsedIds.length > MAX_RUBRICS_B
+                    ? `слишком много (макс. ${MAX_RUBRICS_B}): ${rubricAParsedIds.length} id`
+                    : "нужен хотя бы один id"}
               </strong>
               {compareMode === "twoSite" && (
                 <>

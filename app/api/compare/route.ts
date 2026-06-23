@@ -74,6 +74,27 @@ function parseStringArray(raw: unknown): string[] {
   return out;
 }
 
+
+function parseRubricAIds(body: Record<string, unknown>): number[] {
+  if (Array.isArray(body.rubricsA)) {
+    const seen = new Set<number>();
+    const out: number[] = [];
+    for (const x of body.rubricsA) {
+      const n = typeof x === "number" ? x : typeof x === "string" ? Number(x.trim()) : NaN;
+      if (!Number.isFinite(n) || n < 1) continue;
+      const id = Math.floor(n);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+      if (out.length >= MAX_RUBRICS_B) break;
+    }
+    if (out.length) return out;
+  }
+  const n = Number(body.rubricA);
+  if (Number.isFinite(n) && n >= 1) return [Math.floor(n)];
+  return [];
+}
+
 function parseRubricBIds(body: Record<string, unknown>): number[] {
   if (Array.isArray(body.rubricsB)) {
     const seen = new Set<number>();
@@ -439,10 +460,18 @@ export async function POST(req: NextRequest) {
       if (tokenB.length < MIN_TOKEN_LEN) {
         return NextResponse.json({ error: "Нужен ключ API для сайта B" }, { status: 400 });
       }
-      const rubricA = Number(body.rubricA);
-      if (!Number.isFinite(rubricA) || rubricA < 1) {
-        return NextResponse.json({ error: "Некорректная rubricA" }, { status: 400 });
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
       }
+      const rubricAErrWizard = rubricBCountError(rubricAIds);
+      if (rubricAErrWizard) {
+        return NextResponse.json(
+          { error: rubricAErrWizard.replace("сайт B", "сайт A") },
+          { status: 400 }
+        );
+      }
+      const rubricA = rubricAIds[0]!;
       const noveltyIds = parseNoveltyIdsFromBody(body.noveltyIdsB);
       if (!noveltyIds.length) return NextResponse.json({ error: "Пустой noveltyIdsB" }, { status: 400 });
       void rubricA;
@@ -462,14 +491,22 @@ export async function POST(req: NextRequest) {
       if (tokenA.length < MIN_TOKEN_LEN || tokenB.length < MIN_TOKEN_LEN) {
         return NextResponse.json({ error: "Нужны ключи API для сайтов A и B" }, { status: 400 });
       }
-      const rubricA = Number(body.rubricA);
-      if (!Number.isFinite(rubricA) || rubricA < 1) {
-        return NextResponse.json({ error: "Некорректная rubricA" }, { status: 400 });
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
       }
+      const rubricAErrWizard = rubricBCountError(rubricAIds);
+      if (rubricAErrWizard) {
+        return NextResponse.json(
+          { error: rubricAErrWizard.replace("сайт B", "сайт A") },
+          { status: 400 }
+        );
+      }
+      const rubricA = rubricAIds[0]!;
       const noveltyIds = parseNoveltyIdsFromBody(body.noveltyIdsB);
       if (!noveltyIds.length) return NextResponse.json({ error: "Пустой noveltyIdsB" }, { status: 400 });
 
-      const mergedA = await fetchMergedRubricsProducts(tokenA, siteVariation, [rubricA], pipeA);
+      const mergedA = await fetchMergedRubricsProducts(tokenA, siteVariation, rubricAIds, pipeA);
       const eanOnA = new Set<string>();
       for (const p of mergedA.products) {
         for (const k of collectEanIndexKeys(p)) {
@@ -507,17 +544,25 @@ export async function POST(req: NextRequest) {
       if (tokenA.length < MIN_TOKEN_LEN || tokenB.length < MIN_TOKEN_LEN) {
         return NextResponse.json({ error: "Нужны ключи API для сайтов A и B" }, { status: 400 });
       }
-      const rubricA = Number(body.rubricA);
-      if (!Number.isFinite(rubricA) || rubricA < 1) {
-        return NextResponse.json({ error: "Некорректная rubricA" }, { status: 400 });
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
       }
+      const rubricAErrWizard = rubricBCountError(rubricAIds);
+      if (rubricAErrWizard) {
+        return NextResponse.json(
+          { error: rubricAErrWizard.replace("сайт B", "сайт A") },
+          { status: 400 }
+        );
+      }
+      const rubricA = rubricAIds[0]!;
       const rubricBIds = parseRubricBIds(body);
       if (!rubricBIds.length) return NextResponse.json({ error: "Укажите rubricsB" }, { status: 400 });
       const rubricBErr = rubricBCountError(rubricBIds);
       if (rubricBErr) return NextResponse.json({ error: rubricBErr }, { status: 400 });
 
       const [resA, resB] = await Promise.all([
-        fetchMergedRubricsProductIds(tokenA, siteVariation, [rubricA], pipeA, "A"),
+        fetchMergedRubricsProductIds(tokenA, siteVariation, rubricAIds, pipeA, "A"),
         fetchMergedRubricsProductIds(tokenB, siteVariation, rubricBIds, pipeShared, "B")
       ]);
 
@@ -802,17 +847,31 @@ export async function POST(req: NextRequest) {
     if (singleDupsMode) {
       const token = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
       if (token.length < MIN_TOKEN_LEN) return NextResponse.json({ error: "Нужен ключ API" }, { status: 400 });
-      const rubricA = Number(body.rubricA);
-      if (!Number.isFinite(rubricA) || rubricA < 1) {
-        return NextResponse.json({ error: "Некорректная rubricA" }, { status: 400 });
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
       }
-      const merged = await fetchAllProductsInRubricTree(
-        token,
-        siteVariation,
-        rubricA,
-        pipeA,
-        "full_catalog"
-      );
+      const rubricAErr = rubricBCountError(rubricAIds);
+      if (rubricAErr) {
+        return NextResponse.json({ error: rubricAErr.replace("сайт B", "сайт A") }, { status: 400 });
+      }
+      const rubricA = rubricAIds[0]!;
+      const merged =
+        rubricAIds.length === 1
+          ? await fetchAllProductsInRubricTree(
+              token,
+              siteVariation,
+              rubricA,
+              pipeA,
+              "full_catalog"
+            )
+          : await fetchMergedRubricsProducts(
+              token,
+              siteVariation,
+              rubricAIds,
+              pipeA,
+              "full_catalog"
+            );
       const dups = await findIntraSiteDuplicates(merged.products, nameLocale, attrMatch);
       const fd = merged.fetchDiagnostics;
       const single: SingleSiteDupsResult = {
@@ -853,10 +912,18 @@ export async function POST(req: NextRequest) {
     if (tokenA.length < MIN_TOKEN_LEN || tokenB.length < MIN_TOKEN_LEN) {
       return NextResponse.json({ error: "Нужны ключи API для сайтов A и B" }, { status: 400 });
     }
-    const rubricA = Number(body.rubricA);
-    if (!Number.isFinite(rubricA) || rubricA < 1) {
-      return NextResponse.json({ error: "Некорректная rubricA" }, { status: 400 });
+    const rubricAIds = parseRubricAIds(body);
+    if (!rubricAIds.length) {
+      return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
     }
+    const rubricAErrMain = rubricBCountError(rubricAIds);
+    if (rubricAErrMain) {
+      return NextResponse.json(
+        { error: rubricAErrMain.replace("сайт B", "сайт A") },
+        { status: 400 }
+      );
+    }
+    const rubricA = rubricAIds[0]!;
 
     const siteBFetchMode = body.siteBFetchMode;
     const noveltyIdsB = parseNoveltyIdsFromBody(body.noveltyIdsB);
@@ -877,7 +944,7 @@ export async function POST(req: NextRequest) {
       productsB = mergedBForMeta.products;
     }
 
-    const mergedA = await fetchMergedRubricsProducts(tokenA, siteVariation, [rubricA], pipeA);
+    const mergedA = await fetchMergedRubricsProducts(tokenA, siteVariation, rubricAIds, pipeA);
     const cmp = await runCompare(mergedA.products, productsB, nameLocale, siteALabel, siteBLabel, attrMatch);
 
     let brandFilter: CompareBrandFilterInfo | undefined;
