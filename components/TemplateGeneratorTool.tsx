@@ -47,6 +47,7 @@ import {
   loadExampleTemplateSamples
 } from "@/lib/templateGenerator/exampleTemplate";
 import { applyYandexPricesToWorksheet } from "@/lib/templateGenerator/applyYandexPrices";
+import { filterHumanDropdownValues } from "@/lib/templateGenerator/fieldValues";
 import { injectVariationProducts } from "@/lib/templateGenerator/injectVariationRows";
 import { normVariationSku, parseVariationIdsFromText } from "@/lib/templateGenerator/parseVariationIds";
 import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
@@ -121,7 +122,7 @@ function resolveDropdownValues(
   c: TemplateSheetScan["columns"][number],
   source: DropdownSource
 ): string[] {
-  if (source === "template_validation") return c.templateValidationValues;
+  if (source === "template_validation") return filterHumanDropdownValues(c.templateValidationValues);
   return c.dropdownValues;
 }
 

@@ -1,3 +1,4 @@
+import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
 import { normHeader } from "@/lib/templateGenerator/presets";
 import type { CsvColumnMap, FillRowResult } from "@/lib/templateGenerator/types";
 import {
@@ -109,14 +110,11 @@ function findCsvKeyForTemplate(
   return null;
 }
 
-function applyDropdownValue(value: string, allowed?: string[]): string | null {
-  if (!allowed?.length) return value;
-  const exact = allowed.find((a) => a.toLowerCase() === value.toLowerCase());
-  if (exact) return exact;
-  const partial = allowed.find(
-    (a) => a.toLowerCase().includes(value.toLowerCase()) || value.toLowerCase().includes(a.toLowerCase())
-  );
-  return partial ?? null;
+function applyDropdownValue(value: string, allowed?: string[], header = ""): string | null {
+  return sanitizeTemplateFieldValue(header, value, {
+    allowed,
+    dropdownStrict: true
+  });
 }
 
 /** Попытка вытащить ноты из одного текстового поля (описание в фиде) */
@@ -172,7 +170,7 @@ export function prefillFromCsvData(
       if (raw) {
         const v =
           field.mode === "dropdown_strict"
-            ? applyDropdownValue(raw, field.allowed) ?? ""
+            ? applyDropdownValue(raw, field.allowed, field.header) ?? ""
             : raw;
         if (v) {
           values[field.header] = v;

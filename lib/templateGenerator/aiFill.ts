@@ -17,6 +17,7 @@ import {
   YANDEX_SYSTEM_APPEND,
   yandexDescriptionTooShort
 } from "@/lib/templateGenerator/yandexRules";
+import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
 import { resolveYandexRowPhotos } from "@/lib/templateGenerator/yandexPhotos";
 
 export type FillBatchIn = {
@@ -123,8 +124,8 @@ function buildUserMessage(
     "Текущие данные в шаблоне:",
     JSON.stringify(row.cells, null, 0),
     "",
-    "Данные из CSV (если есть):",
-    JSON.stringify(row.csvData, null, 0),
+    "Данные из CSV (если есть; числовые ID параметров игнорируй — не подставляй в поля):",
+    JSON.stringify(sanitizeCsvDataForPrompt(row.csvData), null, 0),
     ""
   ];
 
@@ -175,7 +176,7 @@ function buildSystem(marketplace?: MarketplaceId): string {
 Правила:
 1. Приоритет — официальный сайт бренда (если фрагмент передан), затем CSV, затем логический вывод из названия товара.
 2. Контентные поля (название, описание, тип, пол, семейство, ноты, объём) — заполняй по возможности полностью. Не оставляй пустыми ноты и семейство, если аромат узнаваем по названию.
-3. Не выдумывай штрихкоды, артикулы, цены, вес, габариты.
+3. Не выдумывай штрихкоды, артикулы, цены, вес, габариты. НИКОГДА не подставляй артикул SKU, variation_id и числовые ID параметров (например 27141391) в характеристики — только человекочитаемый текст из списка значений или описания товара.
 4. dropdown_strict — значение СТРОГО из переданного списка. Если нет точного — выбери ближайшее по смыслу из списка.
 5. Описание — до 6000 символов, информативное, без КАПСА целиком.
 6. Ноты парфюма — на русском, конкретные (цитрус, жасмин, амбра…), не выдумывай несуществующие термины.
@@ -248,7 +249,17 @@ function pickBrand(row: FillRowInput): string {
   return row.cells["Бренд *"] ?? row.cells["Бренд"] ?? row.brand ?? "";
 }
 
-function parseAiFields(json: AiJson, fields: AiFieldSpec[]): Record<string, string> {
+function sanitizeCsvDataForPrompt(csvData: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(csvData)) {
+    const t = String(v ?? "").trim();
+    if (!t || /^\d{4,}$/.test(t)) continue;
+    out[k] = t;
+  }
+  return out;
+}
+
+function parseAiFields(json: AiJson, fields: AiFieldSpec[], sku = ""): Record<string, string> {
   const values: Record<string, string> = {};
   for (const f of fields) {
     const v = String(json.fields?.[f.header] ?? "").trim();
@@ -473,7 +484,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         yandex: isYandex
       });
       const json = await callOpenAi(batch.openaiApiKey, user, batch.model, batch.marketplace);
-      Object.assign(values, parseAiFields(json, fields));
+      Object.assign(values, parseAiFields(json, fields, row.sku));
       applyYandexPostProcess(values);
       sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
@@ -515,7 +526,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           batch.model,
           batch.marketplace
         );
-        Object.assign(values, parseAiFields(json2, fields));
+        Object.assign(values, parseAiFields(json2, fields, row.sku));
         applyYandexPostProcess(values);
         sources.push(...(json2.sources ?? []).map((s) => `AI retry: ${s}`));
       }

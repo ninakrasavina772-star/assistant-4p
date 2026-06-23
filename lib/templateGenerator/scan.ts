@@ -12,7 +12,15 @@ import {
 } from "@/lib/templateGenerator/presets";
 import type { WorkbookListValidations } from "@/lib/templateGenerator/xlsxValidations";
 import type { TemplateColumnMeta, TemplateSheetScan } from "@/lib/templateGenerator/types";
+import { findListSheetValues } from "@/lib/templateGenerator/fieldValues";
 import { extractListValidationValues } from "@/lib/templateGenerator/validation";
+
+function resolveHintRow(ws: ExcelJS.Worksheet, headerRow: number, maxCol: number): number {
+  for (let r = headerRow + 1; r <= headerRow + 5; r++) {
+    if (looksLikeHintRow(ws, r, maxCol)) return r;
+  }
+  return headerRow + 1;
+}
 
 function findHeaderRow(ws: ExcelJS.Worksheet): { headerRow: number; hintRow: number } {
   const maxRow = Math.min(ws.rowCount || 20, 20);
@@ -25,7 +33,7 @@ function findHeaderRow(ws: ExcelJS.Worksheet): { headerRow: number; hintRow: num
     for (let c = 1; c <= maxCol; c++) {
       const v = normHeader(cellPlainValue(ws.getCell(r, c).value));
       if (isHeaderMarker(v)) {
-        return { headerRow: r, hintRow: r + 1 };
+        return { headerRow: r, hintRow: resolveHintRow(ws, r, maxCol) };
       }
     }
   }
@@ -39,7 +47,13 @@ function looksLikeHintRow(ws: ExcelJS.Worksheet, row: number, maxCol: number): b
     const v = cellPlainValue(ws.getCell(row, c).value).trim();
     if (!v) continue;
     filled++;
-    if (/значение поля|обязательн|укажите|пример|не\s+более/i.test(v)) hintish++;
+    if (
+      /значение поля|обязатель|укажите|пример|не будет изменено|заполняется автоматически|можно указать|уникальный идентификатор|скачайте|перечислите|не более/i.test(
+        v
+      )
+    ) {
+      hintish++;
+    }
   }
   return filled > 0 && hintish >= Math.max(1, Math.floor(filled / 3));
 }
@@ -53,6 +67,38 @@ function readRowHeaders(ws: ExcelJS.Worksheet, row: number, maxCol: number): Map
   return out;
 }
 
+function looksLikeHintSkuCell(value: string): boolean {
+  const v = String(value ?? "").trim();
+  if (!v) return true;
+  if (v.length > 72) return true;
+  return /уникальный идентификатор|заполняется автоматически|значение поля|не будет изменено|можно указать|ссылка \(url\)|скачайте|перечислите через запятую/i.test(
+    v
+  );
+}
+
+function isPlausibleProductSku(value: string): boolean {
+  if (looksLikeHintSkuCell(value)) return false;
+  const v = String(value ?? "").trim();
+  if (!v || v === "-") return false;
+  if (/^-\d+$/.test(v)) return false;
+  if (/^\d{6,}$/.test(v.replace(/\s/g, ""))) return true;
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{2,}$/.test(v)) return true;
+  return v.length >= 4;
+}
+
+/** Строка-пример Яндекс-шаблона между заголовком и подсказками (часто ID параметров) */
+function looksLikeYandexExampleRow(ws: ExcelJS.Worksheet, row: number, maxCol: number): boolean {
+  let numericIds = 0;
+  let filled = 0;
+  for (let c = 1; c <= maxCol; c++) {
+    const v = cellPlainValue(ws.getCell(row, c).value).trim();
+    if (!v) continue;
+    filled++;
+    if (/^\d{5,}$/.test(v)) numericIds++;
+  }
+  return filled >= 4 && numericIds >= 3;
+}
+
 function detectDataStartRow(
   ws: ExcelJS.Worksheet,
   headerRow: number,
@@ -62,23 +108,18 @@ function detectDataStartRow(
 ): number {
   const col = skuCol ?? 1;
   const last = ws.rowCount || hintRow + 1;
-  const startScan = headerRow + 1;
-  const endScan = Math.min(last, hintRow + 4);
 
-  for (let r = startScan; r <= endScan; r++) {
+  for (let r = headerRow + 1; r <= last; r++) {
     if (looksLikeHintRow(ws, r, maxCol)) continue;
+    if (looksLikeYandexExampleRow(ws, r, maxCol)) continue;
     const v = cellPlainValue(ws.getCell(r, col).value);
     if (!v || v === "-") continue;
     if (/^значение поля/i.test(v)) continue;
+    if (looksLikeHintSkuCell(v)) continue;
+    if (!isPlausibleProductSku(v)) continue;
     if (v.length > 0 && v.length < 120) return r;
   }
 
-  for (let r = hintRow + 1; r <= last; r++) {
-    const v = cellPlainValue(ws.getCell(r, col).value);
-    if (!v || v === "-") continue;
-    if (/^значение поля/i.test(v)) continue;
-    if (v.length > 0 && v.length < 120) return r;
-  }
   return hintRow + 1;
 }
 

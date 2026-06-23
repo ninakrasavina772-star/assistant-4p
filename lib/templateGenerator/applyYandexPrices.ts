@@ -1,12 +1,13 @@
 ﻿import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
+import { normHeader } from "@/lib/templateGenerator/presets";
 import type { TemplateSheetScan, TemplateRowContext } from "@/lib/templateGenerator/types";
 import type { YandexMarketPriceRow } from "@/lib/templateGenerator/yandexMarketPrices";
 
 function findHeader(scan: TemplateSheetScan, patterns: RegExp[]): string | null {
   for (const c of scan.columns) {
-    const h = c.header.toLowerCase();
+    const h = normHeader(c.header);
     if (patterns.some((p) => p.test(h))) return c.header;
   }
   return null;
@@ -38,7 +39,7 @@ function formatPriceCell(price: number): string {
   return String(price);
 }
 
-/** Записать цену USD из калькулятора в строки шаблона */
+/** Записать цену USD из калькулятора в колонку «Цена *» шаблона */
 export function applyYandexPricesToWorksheet(
   ws: ExcelJS.Worksheet,
   scan: TemplateSheetScan,
