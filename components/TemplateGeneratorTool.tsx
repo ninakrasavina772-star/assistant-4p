@@ -80,7 +80,7 @@ const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
 const FILL_REQUEST_MS = 280_000;
 const FILL_BATCH_SIZE_DEFAULT = 50;
-const PHOTOS_BATCH_SIZE_DEFAULT = 3;
+const PHOTOS_BATCH_SIZE_DEFAULT = 5;
 
 type PipelineStep = 1 | 2 | 3;
 

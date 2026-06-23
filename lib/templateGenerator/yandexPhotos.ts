@@ -1,24 +1,23 @@
+import { createHash } from "crypto";
 import sharp from "sharp";
 import { fetchSiblingVariationPhotos } from "@/lib/letualMetabase";
 import { LETUAL_CANVAS_SIZE, LETUAL_JPEG_QUALITY } from "@/lib/letualMainPhotoConstants";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
-import {
-  fetchLetualImageDetailed,
-  normalizeLetualFotoUrls,
-  rankLetualUrlsByTechnicalQuality
-} from "@/lib/letualFotoQuality";
+import { fetchLetualImageDetailed } from "@/lib/letualFotoQuality";
 import { getOzonStorageBackend, uploadOzonImage, uploadOzonImageAtKey } from "@/lib/ozonImageStorage";
 import { fetchMetabaseProductBySku } from "@/lib/templateGenerator/metabaseProduct";
 import {
-  formatImageCellValue,
-  mergeImageUrls,
-  parseImageUrls
-} from "@/lib/templateGenerator/photos";
+  dedupeImageUrlsSemantic,
+  imageUrlIdentityKey,
+  isYandexProcessedStorageUrl,
+  uniqueUrlsForImageCell
+} from "@/lib/templateGenerator/imageUrlDedupe";
+import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 
-const MIN_PIXELS = 250_000;
-const MAX_PACKSHOT_PROCESS = 10;
-const MAX_BACKGROUND = 6;
+const MAX_PACKSHOT_PROCESS = 5;
+const MAX_BACKGROUND = 4;
+const PACKSHOT_CONCURRENCY = 2;
 
 function isThumbOrSmallUrl(url: string): boolean {
   const u = url.toLowerCase();
@@ -27,16 +26,10 @@ function isThumbOrSmallUrl(url: string): boolean {
   );
 }
 
-/** CDN packshot из hash (4stand /huge/) — кандидат на белый фон Летуаль */
 function isCdnPackshotUrl(url: string): boolean {
-  const u = url.toLowerCase();
-  return /cdnru\.4stand\.com\/huge\/|\/huge\/[0-9a-f]{40,}/i.test(u);
+  return /cdnru\.4stand\.com\/huge\/|\/huge\/[0-9a-f]{40,}/i.test(url);
 }
 
-/**
- * Фото с фоном из админки (image_load.url): lifestyle, сцены, внешние ссылки.
- * На Летуаль такие не идут — на Яндекс Маркет добавляем в конец как есть.
- */
 function isAdminBackgroundUrl(url: string): boolean {
   if (isThumbOrSmallUrl(url)) return false;
   if (isCdnPackshotUrl(url)) return false;
@@ -48,7 +41,6 @@ function isAdminBackgroundUrl(url: string): boolean {
   ) {
     return true;
   }
-  // Внешняя ссылка из админки, не CDN каталога
   if (!/4stand|cdnru\.4partners|deloox\.com|ozon\.ru|goldapple|letu\.ru/i.test(u)) {
     return true;
   }
@@ -63,7 +55,7 @@ function splitYandexImageUrls(urls: string[]): { packshots: string[]; background
   for (const raw of urls) {
     const u = raw.trim();
     if (!/^https?:\/\//i.test(u)) continue;
-    const key = u.toLowerCase();
+    const key = imageUrlIdentityKey(u);
     if (seen.has(key)) continue;
     seen.add(key);
 
@@ -76,16 +68,14 @@ function splitYandexImageUrls(urls: string[]): { packshots: string[]; background
 
 function prioritizeMainPackshot(packshots: string[], mainImageUrl: string | null): string[] {
   if (!mainImageUrl?.trim()) return packshots;
-  const main = mainImageUrl.trim();
-  const rest = packshots.filter((u) => u.toLowerCase() !== main.toLowerCase());
+  const mainKey = imageUrlIdentityKey(mainImageUrl);
+  const rest = packshots.filter((u) => imageUrlIdentityKey(u) !== mainKey);
+  const main =
+    packshots.find((u) => imageUrlIdentityKey(u) === mainKey) ?? mainImageUrl.trim();
   return [main, ...rest];
 }
 
-async function uploadYandexPhoto(
-  buf: Buffer,
-  sku: string,
-  tag: string
-): Promise<string> {
+async function uploadYandexPhoto(buf: Buffer, sku: string, tag: string): Promise<string> {
   const safeSku = sku.replace(/[^\w.-]+/g, "_").slice(0, 48) || "sku";
   const safeTag = tag.replace(/[^\w.-]+/g, "_").slice(0, 32);
   const fileName = `ym-${safeSku}-${safeTag}.jpg`;
@@ -100,7 +90,6 @@ async function uploadYandexPhoto(
   return uploadOzonImage(buf, fileName);
 }
 
-/** Улучшить до ~1000×1000 без снятия фона (для lifestyle из админки) */
 async function enhanceBackgroundPhotoTo1000(buf: Buffer): Promise<Buffer> {
   const meta = await sharp(buf).metadata();
   const w = meta.width ?? 0;
@@ -125,7 +114,7 @@ async function downloadBackgroundImage(url: string): Promise<Buffer | null> {
   if (fetched?.buf?.length) return fetched.buf;
   try {
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(25_000),
+      signal: AbortSignal.timeout(20_000),
       headers: { Accept: "image/*", "User-Agent": "assistant-4p-yandex-photos/1.0" }
     });
     if (!res.ok) return null;
@@ -134,6 +123,56 @@ async function downloadBackgroundImage(url: string): Promise<Buffer | null> {
   } catch {
     return null;
   }
+}
+
+type PackshotState = {
+  sourceKeys: Set<string>;
+  contentHashes: Set<string>;
+  results: string[];
+};
+
+async function processOnePackshot(
+  src: string,
+  sku: string,
+  state: PackshotState
+): Promise<void> {
+  const srcKey = imageUrlIdentityKey(src);
+  if (state.sourceKeys.has(srcKey)) return;
+  state.sourceKeys.add(srcKey);
+
+  try {
+    const buf = await processLetualMainPhotoFromUrl(src);
+    const contentHash = createHash("sha256").update(buf).digest("hex").slice(0, 24);
+    if (state.contentHashes.has(contentHash)) return;
+    state.contentHashes.add(contentHash);
+
+    const url = await uploadYandexPhoto(buf, sku, `p${state.results.length + 1}`);
+    state.results.push(url);
+  } catch {
+    /* skip failed source */
+  }
+}
+
+async function processPackshotsParallel(
+  urls: string[],
+  sku: string,
+  maxUnique: number
+): Promise<string[]> {
+  const state: PackshotState = {
+    sourceKeys: new Set(),
+    contentHashes: new Set(),
+    results: []
+  };
+
+  let cursor = 0;
+  const workers = Array.from({ length: PACKSHOT_CONCURRENCY }, async () => {
+    while (cursor < urls.length && state.results.length < maxUnique) {
+      const idx = cursor++;
+      await processOnePackshot(urls[idx]!, sku, state);
+    }
+  });
+  await Promise.all(workers);
+  return state.results;
 }
 
 export type YandexRowPhotosOpts = {
@@ -149,16 +188,12 @@ export type YandexRowPhotosResult = {
   note?: string;
 };
 
-/**
- * Яндекс Маркет:
- * — главное и packshot-фото: белый фон 1000×1000 по правилам Летуаль (processLetualMainPhotoFromUrl);
- * — фото с фоном из админки: в конец, улучшаем до 1000×1000 без снятия фона.
- */
 export async function resolveYandexRowPhotos(
   opts: YandexRowPhotosOpts
 ): Promise<YandexRowPhotosResult> {
-  let allUrls = normalizeLetualFotoUrls(parseImageUrls(opts.imageText));
-  allUrls = allUrls.filter((u) => !isThumbOrSmallUrl(u));
+  const parsed = dedupeImageUrlsSemantic(parseImageUrls(opts.imageText));
+  const alreadyDone = parsed.filter(isYandexProcessedStorageUrl);
+  let sourceUrls = parsed.filter((u) => !isThumbOrSmallUrl(u) && !isYandexProcessedStorageUrl(u));
 
   let mainImageUrl: string | null = null;
   const variationId = normVariationSku(opts.sku);
@@ -169,123 +204,99 @@ export async function resolveYandexRowPhotos(
       if (mb) {
         mainImageUrl = mb.mainImageUrl;
         if (mb.imageUrls.length) {
-          allUrls = mergeImageUrls(allUrls, mb.imageUrls);
+          sourceUrls = dedupeImageUrlsSemantic(mergeImageUrls(sourceUrls, mb.imageUrls));
+          sourceUrls = sourceUrls.filter((u) => !isYandexProcessedStorageUrl(u));
         }
       }
     } catch {
-      /* Metabase optional */
+      /* optional */
     }
 
     try {
-      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 24);
+      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 12);
       const siblingUrls = siblings
         .map((s) => s.mainImageUrl)
         .filter((u): u is string => Boolean(u));
-      allUrls = mergeImageUrls(allUrls, siblingUrls);
+      sourceUrls = dedupeImageUrlsSemantic(mergeImageUrls(sourceUrls, siblingUrls));
+      sourceUrls = sourceUrls.filter((u) => !isYandexProcessedStorageUrl(u));
     } catch {
-      /* siblings optional */
+      /* optional */
     }
   }
 
-  allUrls = normalizeLetualFotoUrls(allUrls).filter((u) => !isThumbOrSmallUrl(u));
+  sourceUrls = sourceUrls.filter((u) => !isThumbOrSmallUrl(u));
 
-  if (!allUrls.length) {
+  if (!sourceUrls.length && !alreadyDone.length) {
     return { imageUrls: [], processed: [], note: "нет исходных foto" };
   }
 
-  const { packshots: rawPackshots, backgrounds: rawBackgrounds } = splitYandexImageUrls(allUrls);
-  let packshots = prioritizeMainPackshot(rawPackshots, mainImageUrl);
+  const { packshots: rawPackshots, backgrounds: rawBackgrounds } =
+    splitYandexImageUrls(sourceUrls);
+  const packshots = prioritizeMainPackshot(rawPackshots, mainImageUrl);
+  const packshotKeys = new Set(packshots.map(imageUrlIdentityKey));
 
-  if (!getOzonStorageBackend()) {
-    const fallback = [...packshots, ...rawBackgrounds].slice(0, opts.targetCount);
-    return {
-      imageUrls: fallback,
-      processed: [],
-      note: "хранилище не настроено — исходные URL (packshot + фон)"
-    };
-  }
+  const targetUnique = Math.max(1, Math.min(opts.targetCount, MAX_PACKSHOT_PROCESS));
+  let whitePhotos = uniqueUrlsForImageCell(alreadyDone);
 
-  const ranked = await rankLetualUrlsByTechnicalQuality(packshots.slice(0, 16));
-  const filtered = ranked.filter((r) => r.pixels >= MIN_PIXELS && !isThumbOrSmallUrl(r.url));
-  const rankedUrls = (filtered.length ? filtered : ranked)
-    .sort((a, b) => b.technicalScore - a.technicalScore)
-    .map((r) => r.url);
-
-  const packshotOrder: string[] = [];
-  const seenPack = new Set<string>();
-  const pushPack = (u: string) => {
-    const k = u.toLowerCase();
-    if (seenPack.has(k)) return;
-    seenPack.add(k);
-    packshotOrder.push(u);
-  };
-  for (const u of packshots) pushPack(u);
-  for (const u of rankedUrls) pushPack(u);
-
-  const targetPackshots = Math.max(1, Math.min(opts.targetCount, MAX_PACKSHOT_PROCESS));
-  const toProcess = packshotOrder.slice(0, targetPackshots);
-
-  const whitePhotos: string[] = [];
-  const errors: string[] = [];
-
-  for (let i = 0; i < toProcess.length; i++) {
-    const src = toProcess[i]!;
-    try {
-      const buf = await processLetualMainPhotoFromUrl(src);
-      const url = await uploadYandexPhoto(buf, opts.sku, `main-${i + 1}`);
-      whitePhotos.push(url);
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : "ошибка packshot");
+  if (getOzonStorageBackend() && packshots.length) {
+    const need = Math.max(0, targetUnique - whitePhotos.length);
+    if (need > 0) {
+      const processed = await processPackshotsParallel(packshots, opts.sku, need);
+      whitePhotos = uniqueUrlsForImageCell([...whitePhotos, ...processed]);
     }
-  }
-
-  if (!whitePhotos.length && packshotOrder.length) {
-    try {
-      const buf = await processLetualMainPhotoFromUrl(packshotOrder[0]!);
-      const url = await uploadYandexPhoto(buf, opts.sku, "main-fallback");
-      whitePhotos.push(url);
-    } catch {
-      /* last resort below */
-    }
+  } else if (!whitePhotos.length && packshots.length) {
+    whitePhotos = packshots.slice(0, targetUnique);
   }
 
   const backgroundUrls: string[] = [];
-  const seenBg = new Set(whitePhotos.map((u) => u.toLowerCase()));
+  const seenOut = new Set(whitePhotos.map(imageUrlIdentityKey));
 
   for (const src of rawBackgrounds.slice(0, MAX_BACKGROUND)) {
-    if (seenBg.has(src.toLowerCase())) continue;
+    const srcKey = imageUrlIdentityKey(src);
+    if (seenOut.has(srcKey) || packshotKeys.has(srcKey)) continue;
+
+    if (!getOzonStorageBackend()) {
+      backgroundUrls.push(src);
+      seenOut.add(srcKey);
+      continue;
+    }
+
     try {
       const raw = await downloadBackgroundImage(src);
-      if (!raw) {
-        backgroundUrls.push(src);
-        continue;
-      }
+      if (!raw) continue;
+
+      const contentHash = createHash("sha256").update(raw).digest("hex").slice(0, 24);
+      if (seenOut.has(`hash:${contentHash}`)) continue;
+
       const enhanced = await enhanceBackgroundPhotoTo1000(raw);
+      const uploadHash = createHash("sha256").update(enhanced).digest("hex").slice(0, 24);
+      if (seenOut.has(`hash:${uploadHash}`)) continue;
+
       const url = await uploadYandexPhoto(enhanced, opts.sku, `bg-${backgroundUrls.length + 1}`);
-      if (!seenBg.has(url.toLowerCase())) {
-        backgroundUrls.push(url);
-        seenBg.add(url.toLowerCase());
-      }
+      const urlKey = imageUrlIdentityKey(url);
+      if (seenOut.has(urlKey)) continue;
+
+      backgroundUrls.push(url);
+      seenOut.add(srcKey);
+      seenOut.add(urlKey);
+      seenOut.add(`hash:${uploadHash}`);
     } catch {
-      backgroundUrls.push(src);
+      /* skip */
     }
   }
 
-  const finalUrls = [...whitePhotos, ...backgroundUrls];
-  const parts: string[] = [];
-  if (whitePhotos.length) parts.push(`${whitePhotos.length} packshot (белый фон)`);
-  if (backgroundUrls.length) parts.push(`${backgroundUrls.length} с фоном (админка)`);
-  if (errors.length) parts.push(`ошибки packshot: ${errors.slice(0, 1).join("; ")}`);
+  const finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]);
+  const skippedDupes =
+    packshots.length + rawBackgrounds.length + alreadyDone.length - finalUrls.length;
 
-  const note = parts.length ? parts.join(" · ") : "нет обработанных foto";
+  const parts: string[] = [];
+  if (whitePhotos.length) parts.push(`${whitePhotos.length} packshot`);
+  if (backgroundUrls.length) parts.push(`${backgroundUrls.length} с фоном`);
+  if (skippedDupes > 0) parts.push(`дублей отброшено: ${skippedDupes}`);
 
   return {
-    imageUrls: finalUrls.length ? finalUrls : [...packshotOrder, ...rawBackgrounds].slice(0, opts.targetCount),
+    imageUrls: finalUrls,
     processed: finalUrls,
-    note
+    note: parts.length ? parts.join(" · ") : "нет foto"
   };
-}
-
-export function formatYandexImageCell(urls: string[]): string {
-  return formatImageCellValue(urls);
 }

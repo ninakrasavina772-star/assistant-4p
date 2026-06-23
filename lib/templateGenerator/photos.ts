@@ -48,9 +48,11 @@ export function mergeImageUrls(existing: string[], extra: string[]): string[] {
   return out;
 }
 
+import { uniqueUrlsForImageCell } from "@/lib/templateGenerator/imageUrlDedupe";
+
 /** Яндекс/Ozon: несколько URL через запятую в одной ячейке */
 export function formatImageCellValue(urls: string[]): string {
-  return urls.filter(Boolean).join(",");
+  return uniqueUrlsForImageCell(urls.filter(Boolean)).join(",");
 }
 
 export function countRowPhotos(cells: Record<string, string>, imageHeader: string | null): number {

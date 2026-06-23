@@ -329,9 +329,10 @@ async function resolveExtraPhotos(
       metabaseEnabled: batch.photoSettings.metabaseEnabled
     });
     if (photo.note) sources.push(`фото ЯМ: ${photo.note}`);
+    const urls = photo.imageUrls;
     return {
-      extraPhotos: photo.processed,
-      imageUrls: photo.imageUrls.length ? photo.imageUrls : undefined,
+      extraPhotos: urls.length > 1 ? urls.slice(1) : [],
+      imageUrls: urls.length ? urls : undefined,
       sources
     };
   }

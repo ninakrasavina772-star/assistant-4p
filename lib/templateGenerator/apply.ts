@@ -2,6 +2,7 @@ import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
 import type { ColumnSelection, FillRowResult, TemplateSheetScan } from "@/lib/templateGenerator/types";
 import { ensurePhotoReviewColumn, formatImageCellValue, formatPhotoReviewValue } from "@/lib/templateGenerator/photos";
+import { uniqueUrlsForImageCell } from "@/lib/templateGenerator/imageUrlDedupe";
 import { DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
 
 export function applyFillResults(
@@ -36,9 +37,11 @@ export function applyFillResults(
       if (!photoCol) {
         photoCol = ensurePhotoReviewColumn(ws, scan.headerRow, photoReviewHeader);
       }
-      ws.getCell(res.row, photoCol).value = formatPhotoReviewValue(res.extraPhotos);
+      ws.getCell(res.row, photoCol).value = formatPhotoReviewValue(
+        uniqueUrlsForImageCell(res.extraPhotos)
+      );
     }
-    if (res.extraPhotos.length && res.imageUrls?.length && imageCol) {
+    if (res.imageUrls?.length && imageCol) {
       ws.getCell(res.row, imageCol).value = formatImageCellValue(res.imageUrls);
     }
   }
