@@ -5,6 +5,7 @@ import type ExcelJS from "exceljs";
 import { readWorkbookFromBuffer, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 import { applyFillResults } from "@/lib/templateGenerator/apply";
 import type { FillRowInput, FillRowResult } from "@/lib/templateGenerator/types";
+import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
 import {
   buildCsvIndex,
   lookupCsvRow,
@@ -46,8 +47,16 @@ import {
   loadExampleTemplateSamples
 } from "@/lib/templateGenerator/exampleTemplate";
 import { injectVariationProducts } from "@/lib/templateGenerator/injectVariationRows";
-import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
+import { normVariationSku, parseVariationIdsFromText } from "@/lib/templateGenerator/parseVariationIds";
 import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
+import {
+  deleteWorksheetRows,
+  findEanHeader,
+  findTemplateDuplicateGroups,
+  type TemplateDuplicateGroup
+} from "@/lib/templateGenerator/templateDuplicates";
+import type { MarketplaceId } from "@/lib/marketplace/types";
+import { MARKETPLACE_LABELS } from "@/lib/marketplace/types";
 import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
 import {
@@ -64,6 +73,9 @@ const SK_OPENAI_REM = "fp_template_gen_openai_remember";
 const SK_FEED_ENABLED = "fp_template_gen_feed_enabled";
 const SK_WORK_MODE = "fp_template_gen_work_mode";
 const SK_OVERWRITE_FILLED = "fp_template_gen_overwrite_filled";
+const SK_MARKETPLACE = "fp_template_gen_marketplace";
+const SK_OZON_CLIENT = "fp_template_gen_ozon_client";
+const SK_OZON_API = "fp_template_gen_ozon_api";
 const FILL_CHUNK = 1;
 const FILL_PARALLEL = 1;
 const FILL_REQUEST_MS = 280_000;
@@ -216,6 +228,16 @@ export function TemplateGeneratorTool() {
   const [exampleSamples, setExampleSamples] = useState<TemplateProductSample[]>([]);
   const [exampleLoading, setExampleLoading] = useState(false);
 
+  const [marketplace, setMarketplace] = useState<MarketplaceId>("yandex");
+  const [ozonClientId, setOzonClientId] = useState("");
+  const [ozonApiKey, setOzonApiKey] = useState("");
+  const [variationIdsText, setVariationIdsText] = useState("");
+  const [variationInjecting, setVariationInjecting] = useState(false);
+  const [dupGroups, setDupGroups] = useState<TemplateDuplicateGroup[]>([]);
+  const [rowsMarkedForRemoval, setRowsMarkedForRemoval] = useState<Set<number>>(
+    () => new Set()
+  );
+
   const step2Ref = useRef<HTMLElement>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
   const columnPrefsKeyRef = useRef("");
@@ -243,7 +265,52 @@ export function TemplateGeneratorTool() {
     const wm = sessionStorage.getItem(SK_WORK_MODE);
     if (wm === "from_scratch" || wm === "supplement") setWorkMode(wm);
     setOverwriteFilled(sessionStorage.getItem(SK_OVERWRITE_FILLED) === "1");
+    const mp = sessionStorage.getItem(SK_MARKETPLACE);
+    if (mp === "ozon" || mp === "yandex") setMarketplace(mp);
+    const oc = sessionStorage.getItem(SK_OZON_CLIENT);
+    if (oc) setOzonClientId(oc);
+    const oa = sessionStorage.getItem(SK_OZON_API);
+    if (oa) setOzonApiKey(oa);
   }, []);
+
+  useEffect(() => {
+    sessionStorage.setItem(SK_MARKETPLACE, marketplace);
+  }, [marketplace]);
+
+  useEffect(() => {
+    sessionStorage.setItem(SK_OZON_CLIENT, ozonClientId);
+  }, [ozonClientId]);
+
+  useEffect(() => {
+    sessionStorage.setItem(SK_OZON_API, ozonApiKey);
+  }, [ozonApiKey]);
+
+  useEffect(() => {
+    if (marketplace === "yandex") {
+      setMetabaseEnabled(true);
+      setPhotoGenerateBackgrounds(false);
+    }
+  }, [marketplace]);
+
+  const refreshDupGroups = useCallback(() => {
+    const wb = wbRef.current;
+    if (!wb || !scan) {
+      setDupGroups([]);
+      return;
+    }
+    const ws = wb.getWorksheet(scan.sheetName);
+    if (!ws) {
+      setDupGroups([]);
+      return;
+    }
+    const contexts = collectRowContexts(ws, scan);
+    const eanHeader = findEanHeader(scan);
+    setDupGroups(findTemplateDuplicateGroups(contexts, eanHeader));
+  }, [scan]);
+
+  useEffect(() => {
+    refreshDupGroups();
+  }, [refreshDupGroups, sheetName, hasWb]);
 
   useEffect(() => {
     sessionStorage.setItem(SK_WORK_MODE, workMode);
@@ -635,6 +702,8 @@ export function TemplateGeneratorTool() {
       setFillRowOffset(0);
       setBatchesCompleted(0);
       setBatchNotice("");
+      setRowsMarkedForRemoval(new Set());
+      setDupGroups([]);
       setTplLoading(true);
       try {
         if (!/\.xlsx?$/i.test(file.name)) {
@@ -678,6 +747,7 @@ export function TemplateGeneratorTool() {
         const { samples, brands } = buildProductSamples(workbook, sheetScan);
         setProductSamples(samples);
         setUniqueBrands(brands);
+        refreshDupGroups();
         chatContextRef.current = {
           ...chatContextRef.current,
           templateFile: file.name,
@@ -707,8 +777,58 @@ export function TemplateGeneratorTool() {
         setTplLoading(false);
       }
     },
-    [initColumns, eventReply]
+    [initColumns, eventReply, refreshDupGroups]
   );
+
+  const onInjectVariationIds = useCallback(async () => {
+    const wb = wbRef.current;
+    if (!wb || !scan) {
+      setError("Сначала загрузите шаблон Excel");
+      return;
+    }
+    const ids = parseVariationIdsFromText(variationIdsText, 50);
+    if (!ids.length) {
+      setError("Вставьте артикулы вариаций (variation_id) — по одному в строке или через запятую");
+      return;
+    }
+    setVariationInjecting(true);
+    setError("");
+    try {
+      const mbRes = await fetch("/api/template-generator/metabase-products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variationIds: ids })
+      });
+      const mbJson = (await mbRes.json()) as {
+        products?: MetabaseProductRow[];
+        missing?: number[];
+        error?: string;
+      };
+      if (!mbRes.ok) throw new Error(mbJson.error ?? `Metabase HTTP ${mbRes.status}`);
+      const products = mbJson.products ?? [];
+      if (!products.length) {
+        throw new Error(
+          `В Metabase не найдено ни одного товара из ${ids.length} ID` +
+            (mbJson.missing?.length ? ` (пропущены: ${mbJson.missing.join(", ")})` : "")
+        );
+      }
+      const ws = wb.getWorksheet(scan.sheetName)!;
+      injectVariationProducts(ws, scan, products);
+      refreshDupGroups();
+      const { samples, brands } = buildProductSamples(wb, scan);
+      setProductSamples(samples);
+      setUniqueBrands(brands);
+      setBatchNotice(
+        `Подтянуто ${products.length} товаров из Metabase` +
+          (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "")
+      );
+      void eventReply(`Добавила в шаблон ${products.length} позиций из Metabase по variation_id.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка Metabase");
+    } finally {
+      setVariationInjecting(false);
+    }
+  }, [scan, variationIdsText, refreshDupGroups, eventReply]);
 
   const onExampleFile = useCallback(
     async (file: File) => {
@@ -798,11 +918,11 @@ export function TemplateGeneratorTool() {
       return;
     }
     const byVariationIds = Boolean(opts?.variationIds?.length);
-    if (!byVariationIds && workMode === "from_scratch" && (!feedEnabled || !csvTable)) {
-      setError("Режим «С нуля» требует включённый и загруженный CSV-фид");
+    if (!byVariationIds && workMode === "from_scratch" && marketplace === "ozon" && (!feedEnabled || !csvTable)) {
+      setError("Режим «С нуля» для Ozon требует включённый и загруженный CSV-фид");
       return;
     }
-    if (!byVariationIds && feedEnabled && !csvTable) {
+    if (!byVariationIds && feedEnabled && !csvTable && marketplace !== "yandex") {
       setError("Включён CSV-фид, но файл не загружен — загрузите фид или снимите галочку «Использовать фид»");
       return;
     }
@@ -849,12 +969,7 @@ export function TemplateGeneratorTool() {
           body: JSON.stringify({ variationIds: opts.variationIds })
         });
         const mbJson = (await mbRes.json()) as {
-          products?: {
-            variationId: number;
-            productName: string;
-            brandName: string;
-            imageUrls: string[];
-          }[];
+          products?: MetabaseProductRow[];
           missing?: number[];
           error?: string;
         };
@@ -1002,13 +1117,15 @@ export function TemplateGeneratorTool() {
                   overwriteFilled: applyOverwrite,
                   photoSettings: {
                     enabled: photoEnabled,
-                    generateBackgrounds: photoGenerateBackgrounds,
+                    generateBackgrounds:
+                      marketplace === "yandex" ? false : photoGenerateBackgrounds,
                     photoStyle,
                     metabaseEnabled,
                     minCount: photoMin,
                     targetCount: photoTarget,
                     imageHeader
-                  }
+                  },
+                  marketplace
                 })
               });
               if (!res.ok) {
@@ -1124,7 +1241,8 @@ export function TemplateGeneratorTool() {
     workMode,
     overwriteFilled,
     exampleSamples,
-    serverStatus
+    serverStatus,
+    marketplace
   ]);
 
   const handleAssistantAction = useCallback(
@@ -1167,6 +1285,26 @@ export function TemplateGeneratorTool() {
     },
     [fileName]
   );
+
+  const downloadWithoutRemoved = useCallback(async () => {
+    const wb = wbRef.current;
+    if (!wb || !scan || rowsMarkedForRemoval.size === 0) return;
+    const raw = await writeWorkbookToBlob(wb);
+    const clone = await readWorkbookFromBuffer(await raw.arrayBuffer());
+    deleteWorksheetRows(clone, scan, [...rowsMarkedForRemoval]);
+    const blob = await writeWorkbookToBlob(clone);
+    const base = fileName.replace(/\.xlsx?$/i, "") || "template";
+    downloadBlob(blob, `${base}-без-дублей.xlsx`);
+  }, [fileName, scan, rowsMarkedForRemoval]);
+
+  const toggleRowRemoval = useCallback((rowNumber: number) => {
+    setRowsMarkedForRemoval((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowNumber)) next.delete(rowNumber);
+      else next.add(rowNumber);
+      return next;
+    });
+  }, []);
 
   const enabledColCount = useMemo(
     () => Object.values(enabledCols).filter(Boolean).length,
@@ -1255,6 +1393,58 @@ export function TemplateGeneratorTool() {
           <h2 className={homeCardTitle}>1. Шаблон и данные</h2>
         </div>
         <div className={`${homeCardBody} space-y-4`}>
+            <div className="space-y-2 rounded-lg border border-slate-300 bg-slate-50 p-3">
+              <p className="text-sm font-semibold text-slate-800">Маркетплейс</p>
+              <div className="flex flex-wrap gap-4">
+                {(["yandex", "ozon"] as const).map((id) => (
+                  <label key={id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="marketplace"
+                      checked={marketplace === id}
+                      onChange={() => setMarketplace(id)}
+                    />
+                    {MARKETPLACE_LABELS[id]}
+                  </label>
+                ))}
+              </div>
+              {marketplace === "ozon" ? (
+                <div className="mt-2 space-y-2 rounded border border-dashed border-slate-300 bg-white p-3">
+                  <p className="text-xs text-slate-600">
+                    Ключи API из личного кабинета Ozon — для просмотра шаблона и правил ЛК (логика
+                    заполнения по Ozon подключается отдельно).
+                  </p>
+                  <label className="block text-sm">
+                    Client-Id
+                    <input
+                      type="text"
+                      className={`${homeInput} mt-1 w-full max-w-md`}
+                      value={ozonClientId}
+                      onChange={(e) => setOzonClientId(e.target.value)}
+                      placeholder="123456"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    Api-Key
+                    <input
+                      type="password"
+                      className={`${homeInput} mt-1 w-full max-w-md`}
+                      value={ozonApiKey}
+                      onChange={(e) => setOzonApiKey(e.target.value)}
+                      placeholder="xxxxxxxx-xxxx-xxxx"
+                      autoComplete="off"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-600">
+                  Яндекс Маркет: загрузите шаблон, фид по ссылке или файлу, либо вставьте
+                  variation_id — данные подтянутся из Metabase.
+                </p>
+              )}
+            </div>
+
             <input
               ref={tplRef}
               type="file"
@@ -1305,6 +1495,31 @@ export function TemplateGeneratorTool() {
               </p>
             ) : null}
 
+            {marketplace === "yandex" ? (
+              <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+                <p className="text-sm font-semibold text-slate-800">Артикулы вариаций (Metabase)</p>
+                <p className="text-xs text-slate-600">
+                  Вставьте variation_id — по одному в строке, через запятую или пробел. Товары
+                  добавятся в шаблон с foto и базовыми полями из каталога.
+                </p>
+                <textarea
+                  className={`${homeInput} min-h-[88px] w-full font-mono text-sm`}
+                  value={variationIdsText}
+                  onChange={(e) => setVariationIdsText(e.target.value)}
+                  placeholder={"12345678\n12345679"}
+                  disabled={!scan || variationInjecting}
+                />
+                <button
+                  type="button"
+                  className={homeBtnPrimary}
+                  disabled={!scan || variationInjecting || !variationIdsText.trim()}
+                  onClick={() => void onInjectVariationIds()}
+                >
+                  {variationInjecting ? "Metabase…" : "Подтянуть из Metabase в шаблон"}
+                </button>
+              </div>
+            ) : null}
+
             {scan ? (
               <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
                 <p className="text-sm font-semibold text-slate-800">Режим работы</p>
@@ -1321,8 +1536,12 @@ export function TemplateGeneratorTool() {
                     }}
                   />
                   <span>
-                    <strong>Дополнить</strong> — для рейтинга: заполняем только пустые выбранные поля.
-                    Уже заполненное не трогаем.
+                    <strong>
+                      {marketplace === "yandex" ? "Поднятие рейтинга" : "Дополнить"}
+                    </strong>
+                    {marketplace === "yandex"
+                      ? " — заполняем только пустые контентные поля, уже заполненное не трогаем."
+                      : " — для рейтинга: заполняем только пустые выбранные поля. Уже заполненное не трогаем."}
                   </span>
                 </label>
                 <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -1338,8 +1557,10 @@ export function TemplateGeneratorTool() {
                     }}
                   />
                   <span>
-                    <strong>С нуля</strong> — шаблон витрины + фид: сопоставление колонок, заполнение
-                    товаров из фида (нужен включённый CSV).
+                    <strong>С нуля</strong>
+                    {marketplace === "yandex"
+                      ? " — заполняем все отмеченные контентом поля (описание от 600 символов, название от 120)."
+                      : " — шаблон витрины + фид: сопоставление колонок, заполнение товаров из фида (нужен включённый CSV)."}
                   </span>
                 </label>
                 {workMode === "supplement" ? (
@@ -1406,24 +1627,28 @@ export function TemplateGeneratorTool() {
             ) : null}
 
             <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <label className="flex items-start gap-2 text-sm font-semibold text-slate-800">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={feedEnabled}
-                  onChange={(e) => setFeedEnabled(e.target.checked)}
-                />
-                <span>
-                  Использовать CSV-фид при заполнении
-                  <span className="mt-0.5 block text-xs font-normal text-slate-600">
-                    Включите, если в фиде 4Partners есть ноты, описания и т.д. — сначала подставим
-                    их по артикулу вариации, остальное добьёт AI. Выключите, чтобы заполнять только
-                    через AI без фида.
+              {marketplace === "yandex" ? (
+                <p className="text-sm font-semibold text-slate-800">CSV-фид 4Partners (по ссылке или файл)</p>
+              ) : (
+                <label className="flex items-start gap-2 text-sm font-semibold text-slate-800">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={feedEnabled}
+                    onChange={(e) => setFeedEnabled(e.target.checked)}
+                  />
+                  <span>
+                    Использовать CSV-фид при заполнении
+                    <span className="mt-0.5 block text-xs font-normal text-slate-600">
+                      Включите, если в фиде 4Partners есть ноты, описания и т.д. — сначала подставим
+                      их по артикулу вариации, остальное добьёт AI. Выключите, чтобы заполнять только
+                      через AI без фида.
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+              )}
 
-              {feedEnabled ? (
+              {feedEnabled || marketplace === "yandex" ? (
                 <>
                   <p className="text-xs text-slate-600">
                     Матчинг по «Артикул товара (SKU)». Из большого фида (10 000+ вариаций) берём
@@ -1496,7 +1721,73 @@ export function TemplateGeneratorTool() {
                   производителя. CSV можно не загружать.
                 </p>
               )}
+              {marketplace === "yandex" ? (
+                <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={feedEnabled}
+                    onChange={(e) => setFeedEnabled(e.target.checked)}
+                  />
+                  Подставлять данные из фида при заполнении (если CSV загружен)
+                </label>
+              ) : null}
             </div>
+
+            {scan && dupGroups.length > 0 ? (
+              <div className="space-y-3 rounded-lg border border-orange-300 bg-orange-50/60 p-3">
+                <p className="text-sm font-semibold text-orange-900">
+                  Дубли в шаблоне ({dupGroups.length} групп по EAN)
+                </p>
+                <p className="text-xs text-slate-600">
+                  Как в «Сравнение витрин»: одинаковый штрихкод у разных артикулов. Отметьте лишние
+                  позиции — они не попадут в Excel при скачивании «без дублей».
+                </p>
+                <div className="max-h-64 space-y-2 overflow-y-auto">
+                  {dupGroups.map((g) => (
+                    <div
+                      key={g.key + g.rowNumbers.join("-")}
+                      className="rounded border border-orange-200 bg-white p-2 text-sm"
+                    >
+                      <p className="font-medium text-slate-800">{g.reason}</p>
+                      <ul className="mt-1 space-y-1">
+                        {g.rowNumbers.map((rowNum, idx) => {
+                          const sku = g.skus[idx] ?? "";
+                          const marked = rowsMarkedForRemoval.has(rowNum);
+                          return (
+                            <li
+                              key={rowNum}
+                              className={`flex flex-wrap items-center justify-between gap-2 rounded px-1 ${
+                                marked ? "bg-red-100 line-through" : ""
+                              }`}
+                            >
+                              <span>
+                                строка {rowNum} · SKU {sku}
+                              </span>
+                              <button
+                                type="button"
+                                className="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold hover:bg-slate-50"
+                                onClick={() => toggleRowRemoval(rowNum)}
+                              >
+                                {marked ? "Вернуть в шаблон" : "Удалить товар из шаблона"}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+                {rowsMarkedForRemoval.size > 0 ? (
+                  <button
+                    type="button"
+                    className={homeBtnPrimary}
+                    onClick={() => void downloadWithoutRemoved()}
+                  >
+                    Скачать шаблон без удалённых дублей ({rowsMarkedForRemoval.size})
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             <label className="block text-sm">
               OpenAI API key
@@ -1679,59 +1970,88 @@ export function TemplateGeneratorTool() {
 
             <fieldset className="rounded-lg border border-slate-200 p-3 text-sm">
               <legend className="px-1 font-semibold">Фото товара</legend>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={photoEnabled}
-                  onChange={(e) => setPhotoEnabled(e.target.checked)}
-                />
-                Дополнять фото, если в ячейке меньше цели
-              </label>
-              <label className="mt-2 flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={metabaseEnabled}
-                  disabled={!photoEnabled || !serverStatus?.metabase}
-                  onChange={(e) => setMetabaseEnabled(e.target.checked)}
-                />
-                Брать foto из Metabase по SKU (variation_id) — large2x, lifestyle
-              </label>
-              <label className="mt-2 flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={photoGenerateBackgrounds}
-                  disabled={!photoEnabled}
-                  onChange={(e) => setPhotoGenerateBackgrounds(e.target.checked)}
-                />
-                Генерировать lifestyle-фото (флакон на тематическом фоне)
-              </label>
-              <div className="mt-2 flex flex-wrap items-center gap-3">
-                <span className="text-xs text-slate-600">Стиль фона:</span>
-                <label className="flex items-center gap-1 text-xs">
-                  <input
-                    type="radio"
-                    name="photoStyle"
-                    checked={photoStyle === "themed"}
-                    disabled={!photoEnabled || !photoGenerateBackgrounds}
-                    onChange={() => setPhotoStyle("themed")}
-                  />
-                  В тему товара (AI, как у брендов)
-                </label>
-                <label className="flex items-center gap-1 text-xs">
-                  <input
-                    type="radio"
-                    name="photoStyle"
-                    checked={photoStyle === "gradient"}
-                    disabled={!photoEnabled || !photoGenerateBackgrounds}
-                    onChange={() => setPhotoStyle("gradient")}
-                  />
-                  Простые градиенты (быстрее)
-                </label>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Packshot снимается с белого фона, ставится на сцену по бренду и нотам (DALL·E HD).
-                До 3 кадров на строку. Shiseido → японский zen, Santal → дерево/золото и т.д.
-              </p>
+              {marketplace === "yandex" ? (
+                <>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={photoEnabled}
+                      onChange={(e) => setPhotoEnabled(e.target.checked)}
+                    />
+                    Обработать все фото по правилам Летуаль (1000×1000, белый фон)
+                  </label>
+                  <label className="mt-2 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={metabaseEnabled}
+                      disabled={!photoEnabled || !serverStatus?.metabase}
+                      onChange={(e) => setMetabaseEnabled(e.target.checked)}
+                    />
+                    Metabase: foto + соседние вариации по EAN
+                  </label>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Главное фото — белый фон 1000×1000 (Летуаль). Доп. packshot тоже на белом. Фото с
+                    фоном из админки (lifestyle, сцены) — в конец галереи, до 1000×1000 без снятия
+                    фона. Metabase: + соседние вариации по EAN. ~30–60 сек на строку.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={photoEnabled}
+                      onChange={(e) => setPhotoEnabled(e.target.checked)}
+                    />
+                    Дополнять фото, если в ячейке меньше цели
+                  </label>
+                  <label className="mt-2 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={metabaseEnabled}
+                      disabled={!photoEnabled || !serverStatus?.metabase}
+                      onChange={(e) => setMetabaseEnabled(e.target.checked)}
+                    />
+                    Брать foto из Metabase по SKU (variation_id) — large2x, lifestyle
+                  </label>
+                  <label className="mt-2 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={photoGenerateBackgrounds}
+                      disabled={!photoEnabled}
+                      onChange={(e) => setPhotoGenerateBackgrounds(e.target.checked)}
+                    />
+                    Генерировать lifestyle-фото (флакон на тематическом фоне)
+                  </label>
+                  <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <span className="text-xs text-slate-600">Стиль фона:</span>
+                    <label className="flex items-center gap-1 text-xs">
+                      <input
+                        type="radio"
+                        name="photoStyle"
+                        checked={photoStyle === "themed"}
+                        disabled={!photoEnabled || !photoGenerateBackgrounds}
+                        onChange={() => setPhotoStyle("themed")}
+                      />
+                      В тему товара (AI, как у брендов)
+                    </label>
+                    <label className="flex items-center gap-1 text-xs">
+                      <input
+                        type="radio"
+                        name="photoStyle"
+                        checked={photoStyle === "gradient"}
+                        disabled={!photoEnabled || !photoGenerateBackgrounds}
+                        onChange={() => setPhotoStyle("gradient")}
+                      />
+                      Простые градиенты (быстрее)
+                    </label>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Packshot снимается с белого фона, ставится на сцену по бренду и нотам (DALL·E HD).
+                    До 3 кадров на строку.
+                  </p>
+                </>
+              )}
               <div className="mt-2 flex flex-wrap gap-4">
                 <label>
                   Минимум фото
@@ -1758,7 +2078,8 @@ export function TemplateGeneratorTool() {
               </div>
               <p className="mt-2 text-xs text-slate-500">
                 Цель до {photoTarget} фото в ячейке. Новые URL → «Ссылка на изображение» и «
-                {DEFAULT_PHOTO_REVIEW_COLUMN}». AI-режим: ~1–2 мин на строку.
+                {DEFAULT_PHOTO_REVIEW_COLUMN}».
+                {marketplace === "yandex" ? " Летуаль-обработка всех кадров." : " AI-режим: ~1–2 мин на строку."}
               </p>
             </fieldset>
 

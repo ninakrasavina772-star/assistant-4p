@@ -5,6 +5,7 @@ export type MetabaseProductRow = {
   variationId: number;
   productName: string;
   brandName: string;
+  mainImageUrl: string | null;
   imageUrls: string[];
 };
 
@@ -32,6 +33,7 @@ export async function fetchMetabaseProductBySku(
     variationId: row.variationId,
     productName: row.productName,
     brandName: row.brandName,
+    mainImageUrl: row.mainImageUrl,
     imageUrls: row.imageUrls
   };
 }
@@ -71,6 +73,7 @@ export async function fetchMetabaseProductsByIds(
         variationId: r.variationId,
         productName: r.productName,
         brandName: r.brandName,
+        mainImageUrl: r.mainImageUrl,
         imageUrls: r.imageUrls
       } satisfies MetabaseProductRow
     ])

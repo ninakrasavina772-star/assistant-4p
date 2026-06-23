@@ -1,3 +1,4 @@
+import type { MarketplaceId } from "@/lib/marketplace/types";
 import { prefillFromCsvData } from "@/lib/templateGenerator/csvPrefill";
 import { guessBrandDomain, fetchPageTextSnippet } from "@/lib/templateGenerator/webContext";
 import { resolveRowPhotos, productPhotoContextFromRow } from "@/lib/templateGenerator/photoGenerate";
@@ -8,6 +9,15 @@ import {
 } from "@/lib/templateGenerator/metabaseProduct";
 import type { ColumnSelection, FillRowInput, FillRowResult, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import { rowNeedsAiForHeaders } from "@/lib/templateGenerator/workMode";
+import {
+  buildYandexFieldHint,
+  isYandexDescriptionHeader,
+  isYandexTitleHeader,
+  padYandexTitle,
+  YANDEX_SYSTEM_APPEND,
+  yandexDescriptionTooShort
+} from "@/lib/templateGenerator/yandexRules";
+import { resolveYandexRowPhotos } from "@/lib/templateGenerator/yandexPhotos";
 
 export type FillBatchIn = {
   openaiApiKey: string;
@@ -40,6 +50,8 @@ export type FillBatchIn = {
   workMode?: TemplateWorkMode;
   /** Перезаписывать уже заполненные ячейки (режим «дополнить») */
   overwriteFilled?: boolean;
+  /** Ветка маркетплейса — разная логика фото и контента */
+  marketplace?: MarketplaceId;
 };
 
 type AiFieldSpec = {
@@ -94,6 +106,7 @@ function buildUserMessage(
     contentFocus: boolean;
     onlyHeaders?: string[];
     prefilled?: Record<string, string>;
+    yandex?: boolean;
   }
 ): string {
   const activeFields = opts.onlyHeaders?.length
@@ -142,7 +155,8 @@ function buildUserMessage(
           `- ${f.header}: ТОЛЬКО одно значение из списка (${f.allowed.length} вариантов, фрагмент): ${JSON.stringify(sample)}`
         );
       } else {
-        lines.push(`- ${f.header}: ${f.hint || "свободный текст"}`);
+        const ymHint = opts.yandex ? buildYandexFieldHint(f.header) : null;
+        lines.push(`- ${f.header}: ${ymHint || f.hint || "свободный текст"}`);
       }
     }
     lines.push("");
@@ -153,7 +167,8 @@ function buildUserMessage(
   return lines.join("\n");
 }
 
-const SYSTEM = `Ты умный помощник контент-отдела маркетплейса. Заполняешь КОНТЕНТНЫЕ характеристики товаров для Excel-шаблона витрины (Ozon, Яндекс Маркет и др.).
+function buildSystem(marketplace?: MarketplaceId): string {
+  const base = `Ты умный помощник контент-отдела маркетплейса. Заполняешь КОНТЕНТНЫЕ характеристики товаров для Excel-шаблона витрины (Ozon, Яндекс Маркет и др.).
 
 Правила:
 1. Приоритет — официальный сайт бренда (если фрагмент передан), затем CSV, затем логический вывод из названия товара.
@@ -166,8 +181,16 @@ const SYSTEM = `Ты умный помощник контент-отдела м�
 
 Ответ — JSON:
 {"fields":{"Заголовок столбца":"значение",...},"extra_photo_urls":[],"sources":["кратко: откуда взято"]}`;
+  if (marketplace === "yandex") return `${base}\n\n${YANDEX_SYSTEM_APPEND}`;
+  return base;
+}
 
-async function callOpenAi(apiKey: string, user: string, model?: string): Promise<AiJson> {
+async function callOpenAi(
+  apiKey: string,
+  user: string,
+  model?: string,
+  marketplace?: MarketplaceId
+): Promise<AiJson> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 75_000);
   try {
@@ -183,7 +206,7 @@ async function callOpenAi(apiKey: string, user: string, model?: string): Promise
         temperature: 0.25,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: SYSTEM },
+          { role: "system", content: buildSystem(marketplace) },
           { role: "user", content: user }
         ]
       })
@@ -296,6 +319,21 @@ async function resolveExtraPhotos(
     }
   }
 
+  if (batch.marketplace === "yandex") {
+    const photo = await resolveYandexRowPhotos({
+      imageText,
+      sku: row.sku,
+      targetCount: batch.photoSettings.targetCount,
+      metabaseEnabled: batch.photoSettings.metabaseEnabled
+    });
+    if (photo.note) sources.push(`фото ЯМ: ${photo.note}`);
+    return {
+      extraPhotos: photo.processed,
+      imageUrls: photo.imageUrls.length ? photo.imageUrls : undefined,
+      sources
+    };
+  }
+
   const photo = await resolveRowPhotos({
     imageText,
     sku: row.sku,
@@ -337,11 +375,21 @@ async function getBrandSnippet(
   return snippet;
 }
 
+function applyYandexPostProcess(values: Record<string, string>): void {
+  for (const [header, raw] of Object.entries(values)) {
+    if (!raw?.trim()) continue;
+    if (isYandexTitleHeader(header)) {
+      values[header] = padYandexTitle(raw);
+    }
+  }
+}
+
 export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResult[]> {
   const fields = buildFieldSpecs(batch.columns, batch.columnMeta);
   const contentFocus = batch.contentFocus !== false;
   const workMode = batch.workMode ?? "supplement";
   const keepTemplateFilled = workMode === "supplement" && batch.overwriteFilled !== true;
+  const isYandex = batch.marketplace === "yandex";
   const out: FillRowResult[] = [];
   const brandSnippetCache = new Map<string, string>();
 
@@ -393,26 +441,54 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       const user = buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
         contentFocus,
         onlyHeaders: missing,
-        prefilled: values
+        prefilled: values,
+        yandex: isYandex
       });
-      const json = await callOpenAi(batch.openaiApiKey, user, batch.model);
+      const json = await callOpenAi(batch.openaiApiKey, user, batch.model, batch.marketplace);
       Object.assign(values, parseAiFields(json, fields));
+      applyYandexPostProcess(values);
       sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
       missing = fields
         .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header)
         .slice(0, 14);
+
+      if (isYandex) {
+        const shortDesc = fields
+          .filter(
+            (f) =>
+              aiHeaders.includes(f.header) &&
+              isYandexDescriptionHeader(f.header) &&
+              values[f.header] &&
+              yandexDescriptionTooShort(values[f.header]!)
+          )
+          .map((f) => f.header);
+        if (shortDesc.length) {
+          missing = [...new Set([...missing, ...shortDesc])];
+        }
+      }
+
       if (missing.length > 0) {
         const retryUser =
           buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
             contentFocus: true,
             onlyHeaders: missing,
-            prefilled: values
+            prefilled: values,
+            yandex: isYandex
           }) +
-          "\n\nЭти поля остались пустыми — заполни их обязательно на основе названия, CSV и сайта бренда. Не оставляй пустыми.";
-        const json2 = await callOpenAi(batch.openaiApiKey, retryUser, batch.model);
+          "\n\nЭти поля остались пустыми — заполни их обязательно на основе названия, CSV и сайта бренда. Не оставляй пустыми." +
+          (isYandex
+            ? "\nДля Яндекс Маркета: описание не короче 600 символов, название не короче 120 символов."
+            : "");
+        const json2 = await callOpenAi(
+          batch.openaiApiKey,
+          retryUser,
+          batch.model,
+          batch.marketplace
+        );
         Object.assign(values, parseAiFields(json2, fields));
+        applyYandexPostProcess(values);
         sources.push(...(json2.sources ?? []).map((s) => `AI retry: ${s}`));
       }
 
