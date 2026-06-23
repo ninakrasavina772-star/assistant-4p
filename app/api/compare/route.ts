@@ -294,17 +294,22 @@ export async function POST(req: NextRequest) {
       let dataSource: "metabase" | "api" = "api";
 
       if (idListKind === "variation") {
-        if (!metabaseIsConfigured()) {
+        const metabaseApiKey =
+          typeof body.metabaseApiKey === "string" ? body.metabaseApiKey.trim() : "";
+        if (!metabaseIsConfigured(metabaseApiKey || undefined)) {
           return NextResponse.json(
             {
               error:
-                "Metabase не настроен на сервере (METABASE_API_KEY). Для поиска по SKU данные берутся из Metabase."
+                "Укажите ключ Metabase в форме ниже или задайте METABASE_API_KEY на сервере."
             },
-            { status: 503 }
+            { status: 400 }
           );
         }
         try {
-          const mb = await fetchFpProductsByVariationIdsFromMetabase(requestedIds);
+          const mb = await fetchFpProductsByVariationIdsFromMetabase(
+            requestedIds,
+            metabaseApiKey || undefined
+          );
           products = mb.products;
           missingInMetabase = mb.missingInMetabase;
           dataSource = "metabase";

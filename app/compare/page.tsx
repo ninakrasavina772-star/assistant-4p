@@ -155,6 +155,8 @@ const SK_REMEMBER = "fp_compare_remember_keys";
 const SK_NOVELTY_IDS_B = "fp_compare_novelty_ids_b";
 const SK_OPENAI_KEY = "fp_compare_openai_key";
 const SK_OPENAI_REM = "fp_compare_openai_key_remember";
+const SK_METABASE_KEY = "fp_compare_metabase_key";
+const SK_METABASE_REM = "fp_compare_metabase_key_remember";
 
 function cleanProcessedStorageKey(siteA: string, siteB: string): string {
   return `fp_compare_clean_processed_${siteA}|${siteB}`;
@@ -417,6 +419,8 @@ export default function ComparePage() {
   /** Показ дублей: все / EAN+арт / название+фото+хар. / мало: фото+хар. */
   const [dupKindFilter, setDupKindFilter] = useState<DupKindFilter>("all");
   const [openAiKey, setOpenAiKey] = useState("");
+  const [metabaseApiKey, setMetabaseApiKey] = useState("");
+  const [rememberMetabaseKey, setRememberMetabaseKey] = useState(true);
   const [rememberOpenAiKey, setRememberOpenAiKey] = useState(true);
   const [aiDupMaxPairs, setAiDupMaxPairs] = useState(
     AI_DUP_MAX_PAIRS_TEXT_PER_REQUEST
@@ -559,6 +563,12 @@ export default function ComparePage() {
         if (ok) setOpenAiKey(ok);
       } else {
         setRememberOpenAiKey(false);
+      }
+      if (sessionStorage.getItem(SK_METABASE_REM) !== "0") {
+        const mk = sessionStorage.getItem(SK_METABASE_KEY);
+        if (mk) setMetabaseApiKey(mk);
+      } else {
+        setRememberMetabaseKey(false);
       }
     } catch {
       // ignore
@@ -3054,6 +3064,12 @@ export default function ComparePage() {
         );
         return;
       }
+    } else {
+      const mbKey = metabaseApiKey.trim();
+      if (mbKey.length < 8) {
+        setError("Укажите ключ Metabase (API key) в поле ниже — от 8 символов.");
+        return;
+      }
     }
     userCancelledRef.current = false;
     setError(null);
@@ -3066,6 +3082,14 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (idListDupKind === "variation" && rememberMetabaseKey && typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          // ignore
+        }
+      }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const res = await fetch("/api/compare", {
@@ -3076,6 +3100,8 @@ export default function ComparePage() {
           mode: "idListIntraDups",
           idListKind: idListDupKind,
           productIds: ids,
+          metabaseApiKey:
+            idListDupKind === "variation" ? metabaseApiKey.trim() || undefined : undefined,
           nameLocale,
           siteVariation,
           tokenA: tokenA.trim() || undefined,
@@ -3139,6 +3165,8 @@ export default function ComparePage() {
   }, [
     idListDupIdsText,
     idListDupKind,
+    metabaseApiKey,
+    rememberMetabaseKey,
     tokenA,
     tokenB,
     nameLocale,
@@ -4690,9 +4718,9 @@ export default function ComparePage() {
             <p className="text-xs text-slate-500">
               {idListDupKind === "variation" ? (
                 <>
-                  Данные о товарах — из <strong>Metabase</strong> (4Partners DB). На сервере должен быть{" "}
-                  <strong>METABASE_API_KEY</strong>. Опционально действуют фильтры брендов / моделей и ужесточение по
-                  объёму/оттенку/цвету.
+                  Данные о товарах — из <strong>Metabase</strong> (4Partners DB). Вставьте ключ ниже (хранится в
+                  sessionStorage браузера) или задайте <strong>METABASE_API_KEY</strong> на сервере. Опционально
+                  действуют фильтры брендов / моделей и ужесточение по объёму/оттенку/цвету.
                 </>
               ) : (
                 <>
@@ -4707,6 +4735,44 @@ export default function ComparePage() {
               <strong className="text-slate-800">ключ OpenAI</strong> и нажмите проверку — модель дополнительно посмотрит
               превью и название по каждой паре из мягких слоёв.
             </p>
+            {idListDupKind === "variation" ? (
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-slate-700" htmlFor="id-list-metabase-key">
+                  Ключ Metabase (API)
+                </label>
+                <input
+                  id="id-list-metabase-key"
+                  type="password"
+                  autoComplete="off"
+                  value={metabaseApiKey}
+                  onChange={(e) => {
+                    setMetabaseApiKey(e.target.value);
+                    setError(null);
+                  }}
+                  className={`${homeInput} w-full font-mono text-xs`}
+                  placeholder="mb_…"
+                />
+                <label className="inline-flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rememberMetabaseKey}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setRememberMetabaseKey(on);
+                      if (!on && typeof window !== "undefined") {
+                        try {
+                          sessionStorage.removeItem(SK_METABASE_KEY);
+                          sessionStorage.setItem(SK_METABASE_REM, "0");
+                        } catch {
+                          // ignore
+                        }
+                      }
+                    }}
+                  />
+                  Запомнить ключ в этой вкладке
+                </label>
+              </div>
+            ) : null}
             <textarea
               value={idListDupIdsText}
               onChange={(e) => {

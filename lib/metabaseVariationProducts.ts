@@ -33,14 +33,15 @@ export function fpProductFromLetualVariation(row: LetualVariationRow): FpProduct
 
 /** Загрузка товаров по списку variation_id только из Metabase (пакетами). */
 export async function fetchFpProductsByVariationIdsFromMetabase(
-  requestedIds: number[]
+  requestedIds: number[],
+  metabaseApiKey?: string
 ): Promise<{ products: FpProduct[]; missingInMetabase: number }> {
   const unique = [...new Set(requestedIds.filter((id) => id > 0))];
   const byVarId = new Map<number, FpProduct>();
 
   for (let i = 0; i < unique.length; i += METABASE_VARIATION_BATCH) {
     const chunk = unique.slice(i, i + METABASE_VARIATION_BATCH);
-    const rows = await fetchLetualVariations(chunk);
+    const rows = await fetchLetualVariations(chunk, metabaseApiKey);
     for (const row of rows) {
       byVarId.set(row.variationId, fpProductFromLetualVariation(row));
     }
