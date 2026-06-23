@@ -748,6 +748,18 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
+      }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
@@ -1164,6 +1176,18 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
+      }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
@@ -1216,7 +1240,10 @@ export default function ComparePage() {
             ? { rubricsB: rubricBParsedIds }
             : {}),
           ...(compareMode === "crossRubric"
-            ? { crossRubricBatchLimit }
+            ? {
+                crossRubricBatchLimit,
+                metabaseApiKey: metabaseApiKey.trim() || undefined
+              }
             : {}),
           ...(fetchSiteBOnlyByNoveltyIds
             ? {
@@ -1438,6 +1465,18 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
+      }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
@@ -1641,6 +1680,18 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
+      }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
@@ -1795,6 +1846,18 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
+      }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
       const excludeList = parseExcludeProductIdsFromText(excludeIdsText);
@@ -1904,6 +1967,18 @@ export default function ComparePage() {
     try {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
+      }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
       }
       const brandList = parseBrandListFromText(brandText);
       const modelList = parseModelListFromText(modelText);
@@ -3097,6 +3172,18 @@ export default function ComparePage() {
       if (rememberKeys) {
         persistKeys(tokenA, tokenB, siteLabelA, siteLabelB);
       }
+      if (
+        compareMode === "crossRubric" &&
+        rememberMetabaseKey &&
+        typeof window !== "undefined"
+      ) {
+        try {
+          sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
+          sessionStorage.setItem(SK_METABASE_REM, "1");
+        } catch {
+          /* ignore */
+        }
+      }
       if (idListDupKind === "variation" && rememberMetabaseKey && typeof window !== "undefined") {
         try {
           sessionStorage.setItem(SK_METABASE_KEY, metabaseApiKey.trim());
@@ -3680,8 +3767,8 @@ export default function ComparePage() {
                 Дубли: 2 рубрики, 1 сайт
               </p>
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                <span className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
-                  Через API (нужен ключ)
+                <span className="text-[10px] uppercase tracking-wide text-violet-700 font-semibold">
+                  Через Metabase
                 </span>
                 <br />
                 Разные поставщики в двух рубриках одной витрины. Сопоставление по{" "}
@@ -3929,7 +4016,7 @@ export default function ComparePage() {
           </div>
         )}
 
-        {catalogSource === "api" && (
+        {catalogSource === "api" && compareMode !== "crossRubric" && (
           <>
         <h2 className="text-sm font-semibold text-slate-800 mb-3">
           Ключи API (4Partners) и подписи
@@ -4082,11 +4169,24 @@ export default function ComparePage() {
               Партийный поиск дублей (один сайт, две рубрики)
             </p>
             <p className="text-xs text-slate-700 leading-relaxed">
-              За один запуск обрабатывается до N карточек с каждой стороны. После схлопывания
-              добавьте id обеих карточек в «Исключить id на A» и запустите снова — пока в отчёте
-              не останется пар.
+              Каталог берётся из <strong>Metabase</strong> по id рубрик — ключ 4Partners не нужен.
+              Ключ Metabase можно оставить пустым, если задан <code className="text-[11px] bg-white/80 px-1 rounded">METABASE_API_KEY</code> на сервере.
+              После схлопывания добавьте id обеих карточек в «Исключить id» и перезапустите.
             </p>
-            <label className="flex flex-wrap items-center gap-2 text-sm">
+            <label className="block text-xs font-medium text-slate-700" htmlFor="cross-rubric-metabase-key">
+              Ключ Metabase (если нет на сервере)
+            </label>
+            <input
+              id="cross-rubric-metabase-key"
+              type="password"
+              className="w-full max-w-md border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
+              value={metabaseApiKey}
+              onChange={(e) => setMetabaseApiKey(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="пусто = METABASE_API_KEY в .env / Vercel"
+            />
+            <label className="flex flex-wrap items-center gap-2 text-sm mt-2">
               <span className="text-slate-700">Карточек на рубрику за запуск:</span>
               <input
                 type="number"
@@ -4118,6 +4218,11 @@ export default function ComparePage() {
               <strong>Два способа на каждой стороне:</strong> каскад из каталога (как раньше){" "}
               <strong>или</strong> поле id — что удобнее. Оба варианта меняют одни и те же значения;
               искать id в админке не обязательно, если вы вошли в сервис и указали ключ API.
+              {compareMode === "crossRubric" ? (
+                <span className="block mt-1 text-violet-900/90">
+                  Для «2 рубрики, 1 сайт» достаточно id рубрик и Metabase — каскад опционален.
+                </span>
+              ) : null}
               <span className="block mt-1">
                 <strong>Сайт A:</strong> одна рубрика (опорный каталог).
                 {(compareMode === "twoSite" || compareMode === "crossRubric") ? (

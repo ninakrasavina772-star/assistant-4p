@@ -300,3 +300,112 @@ export async function fetchProductIdsByVariationIds(
 }
 
 export { metabaseIsConfigured, DEFAULT_METABASE_URL, DEFAULT_METABASE_DB_ID };
+
+export type LetualProductRow = {
+  productId: number;
+  variationId: number;
+  productName: string;
+  brandName: string;
+  ean: string | null;
+  mainImageUrl: string | null;
+  imageUrls: string[];
+};
+
+const METABASE_PRODUCT_BATCH = 200;
+
+/** product_id в рубрике(ах) — для выгрузки каталога без Partner API */
+export async function fetchProductIdsByRubricIds(
+  rubricIds: number[],
+  metabaseApiKey?: string
+): Promise<number[]> {
+  const creds = resolveMetabaseCredentials(metabaseApiKey);
+  if (!creds) {
+    throw new Error(
+      "Metabase не настроен: укажите ключ в форме или METABASE_API_KEY на сервере"
+    );
+  }
+  const ids = [...new Set(rubricIds.map((id) => Math.floor(id)).filter((id) => id > 0))];
+  if (!ids.length) return [];
+
+  const sql = `
+    SELECT DISTINCT pr.product_id
+    FROM public.product_rubric pr
+    WHERE pr.rubric_id IN (${ids.join(",")})
+    ORDER BY pr.product_id
+  `;
+  const rows = await metabaseQuery<{ product_id: number }>(sql, creds);
+  return rows.map((r) => Number(r.product_id)).filter((id) => id > 0);
+}
+
+/** Карточки товара (product_id) с фото и брендом из Metabase */
+export async function fetchLetualProducts(
+  productIds: number[],
+  metabaseApiKey?: string
+): Promise<LetualProductRow[]> {
+  const creds = resolveMetabaseCredentials(metabaseApiKey);
+  if (!creds) {
+    throw new Error(
+      "Metabase не настроен: укажите ключ в форме или METABASE_API_KEY на сервере"
+    );
+  }
+  const unique = [...new Set(productIds.filter((id) => id > 0))];
+  if (!unique.length) return [];
+
+  const out: LetualProductRow[] = [];
+  for (let i = 0; i < unique.length; i += METABASE_PRODUCT_BATCH) {
+    const chunk = unique.slice(i, i + METABASE_PRODUCT_BATCH);
+    const inList = chunk.join(",");
+    const sql = `
+      SELECT
+        p.id AS product_id,
+        pv.id AS variation_id,
+        p.name AS product_name,
+        b.name AS brand_name,
+        NULLIF(TRIM(pv.ean), '') AS ean,
+        NULLIF(TRIM(pvmi.image_load_hash), '') AS main_image_hash,
+        STRING_AGG(NULLIF(TRIM(il.url_hash), ''), ' ' ORDER BY pvil.position, il.id) AS image_hashes,
+        STRING_AGG(il.url, ' ' ORDER BY pvil.position, il.id) AS image_urls
+      FROM public.product p
+      JOIN public.brand b ON b.id = p.brand_id
+      JOIN public.product_variation pv ON pv.product_id = p.id
+      LEFT JOIN public.product_variation_main_image pvmi ON pvmi.product_variation_id = pv.id
+      LEFT JOIN public.product_variation_image_load_link pvil ON pvil.product_variation_id = pv.id
+      LEFT JOIN public.image_load il ON il.id = pvil.image_load_id AND il.is_active = true
+      WHERE p.id IN (${inList})
+      GROUP BY p.id, pv.id, p.name, b.name, pv.ean, pvmi.image_load_hash
+      ORDER BY p.id, pv.id
+    `;
+    const rows = await metabaseQuery<{
+      product_id: number;
+      variation_id: number;
+      product_name: string;
+      brand_name: string;
+      ean: string | null;
+      main_image_hash: string | null;
+      image_hashes: string | null;
+      image_urls: string | null;
+    }>(sql, creds);
+
+    const seenProduct = new Set<number>();
+    for (const r of rows) {
+      const productId = Number(r.product_id);
+      if (seenProduct.has(productId)) continue;
+      seenProduct.add(productId);
+      const merged = mergeLetualImageUrls(
+        r.main_image_hash ? String(r.main_image_hash).trim() : null,
+        parseImageHashes(r.image_hashes),
+        parseImageUrls(r.image_urls)
+      );
+      out.push({
+        productId,
+        variationId: Number(r.variation_id),
+        productName: String(r.product_name ?? "").trim(),
+        brandName: String(r.brand_name ?? "").trim(),
+        ean: r.ean ? String(r.ean).trim() : null,
+        mainImageUrl: merged.mainImageUrl,
+        imageUrls: merged.imageUrls
+      });
+    }
+  }
+  return out;
+}

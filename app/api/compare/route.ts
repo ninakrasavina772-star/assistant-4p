@@ -25,6 +25,7 @@ import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
 import { MAX_RUBRICS_B } from "@/lib/rubricIds";
 import { parsePartnersFeedCsv } from "@/lib/partnersFeedCsv";
 import { runCompare, runCrossRubricCompare } from "@/lib/match";
+import { fetchFpProductsByRubricIdsFromMetabase } from "@/lib/metabaseRubricProducts";
 import { collectEanIndexKeys, countProductsWithEanIndexKeys, toCompareProduct } from "@/lib/product";
 import type {
   AttrMatchOptions,
@@ -421,10 +422,16 @@ export async function POST(req: NextRequest) {
     const CROSS_RUBRIC_BATCH_DEFAULT = 600;
 
     if (crossRubricMode) {
+      const metabaseApiKey =
+        typeof body.metabaseApiKey === "string" ? body.metabaseApiKey.trim() : "";
       const token = resolveToken(body.tokenA, "A");
-      if (token.length < MIN_TOKEN_LEN) {
+      const useMetabase = metabaseIsConfigured(metabaseApiKey || undefined);
+      if (!useMetabase && token.length < MIN_TOKEN_LEN) {
         return NextResponse.json(
-          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          {
+            error:
+              "Укажите ключ Metabase в форме (или METABASE_API_KEY на сервере). Ключ 4Partners не обязателен."
+          },
           { status: 400 }
         );
       }
@@ -466,12 +473,42 @@ export async function POST(req: NextRequest) {
           ? body.siteBLabel.trim()
           : "Рубрика B";
 
-      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
-      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
-      const totalA = mergedA.products.length;
-      const totalB = mergedB.products.length;
-      const productsA = mergedA.products.slice(0, batchLimit);
-      const productsB = mergedB.products.slice(0, batchLimit);
+      let productsA: FpProduct[];
+      let productsB: FpProduct[];
+      let totalA: number;
+      let totalB: number;
+      let mergedA: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let mergedB: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let crossRubricDataSource: "metabase" | "api" = "api";
+
+      if (useMetabase) {
+        crossRubricDataSource = "metabase";
+        const mbA = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricAIds,
+          pipeA,
+          "A",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        const mbB = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricBIds,
+          pipeB,
+          "B",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        productsA = mbA.products;
+        productsB = mbB.products;
+        totalA = mbA.totalInRubrics;
+        totalB = mbB.totalInRubrics;
+      } else {
+        mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+        mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+        totalA = mergedA.products.length;
+        totalB = mergedB.products.length;
+        productsA = mergedA.products.slice(0, batchLimit);
+        productsB = mergedB.products.slice(0, batchLimit);
+      }
 
       const cmp = await runCrossRubricCompare(
         productsA,
@@ -484,24 +521,25 @@ export async function POST(req: NextRequest) {
       const brandFilter = buildBrandFilterInfo(
         brandsRaw,
         brandMatch,
-        mergedA.brandExcludedMissing,
-        mergedA.brandExcludedNotInList,
-        mergedB.brandExcludedMissing,
-        mergedB.brandExcludedNotInList
+        mergedA?.brandExcludedMissing ?? 0,
+        mergedA?.brandExcludedNotInList ?? 0,
+        mergedB?.brandExcludedMissing ?? 0,
+        mergedB?.brandExcludedNotInList ?? 0
       );
       const modelFilter = buildModelFilterInfo(
         modelsRaw,
         modelMatch,
-        mergedA.modelExcludedNotInList,
-        mergedB.modelExcludedNotInList
+        mergedA?.modelExcludedNotInList ?? 0,
+        mergedB?.modelExcludedNotInList ?? 0
       );
       const result: CompareResult = {
         ...cmp,
         brandFilter,
         modelFilter,
-        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA?.excludeMeta),
         unlikelySearch: buildUnlikelySearch(attrMatch),
         crossRubricMode: true,
+        crossRubricDataSource,
         crossRubricBatch: {
           limitPerSide: batchLimit,
           fetchedA: productsA.length,
@@ -588,10 +626,16 @@ export async function POST(req: NextRequest) {
     const CROSS_RUBRIC_BATCH_DEFAULT = 600;
 
     if (crossRubricMode) {
+      const metabaseApiKey =
+        typeof body.metabaseApiKey === "string" ? body.metabaseApiKey.trim() : "";
       const token = resolveToken(body.tokenA, "A");
-      if (token.length < MIN_TOKEN_LEN) {
+      const useMetabase = metabaseIsConfigured(metabaseApiKey || undefined);
+      if (!useMetabase && token.length < MIN_TOKEN_LEN) {
         return NextResponse.json(
-          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          {
+            error:
+              "Укажите ключ Metabase в форме (или METABASE_API_KEY на сервере). Ключ 4Partners не обязателен."
+          },
           { status: 400 }
         );
       }
@@ -633,12 +677,42 @@ export async function POST(req: NextRequest) {
           ? body.siteBLabel.trim()
           : "Рубрика B";
 
-      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
-      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
-      const totalA = mergedA.products.length;
-      const totalB = mergedB.products.length;
-      const productsA = mergedA.products.slice(0, batchLimit);
-      const productsB = mergedB.products.slice(0, batchLimit);
+      let productsA: FpProduct[];
+      let productsB: FpProduct[];
+      let totalA: number;
+      let totalB: number;
+      let mergedA: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let mergedB: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let crossRubricDataSource: "metabase" | "api" = "api";
+
+      if (useMetabase) {
+        crossRubricDataSource = "metabase";
+        const mbA = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricAIds,
+          pipeA,
+          "A",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        const mbB = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricBIds,
+          pipeB,
+          "B",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        productsA = mbA.products;
+        productsB = mbB.products;
+        totalA = mbA.totalInRubrics;
+        totalB = mbB.totalInRubrics;
+      } else {
+        mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+        mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+        totalA = mergedA.products.length;
+        totalB = mergedB.products.length;
+        productsA = mergedA.products.slice(0, batchLimit);
+        productsB = mergedB.products.slice(0, batchLimit);
+      }
 
       const cmp = await runCrossRubricCompare(
         productsA,
@@ -651,24 +725,25 @@ export async function POST(req: NextRequest) {
       const brandFilter = buildBrandFilterInfo(
         brandsRaw,
         brandMatch,
-        mergedA.brandExcludedMissing,
-        mergedA.brandExcludedNotInList,
-        mergedB.brandExcludedMissing,
-        mergedB.brandExcludedNotInList
+        mergedA?.brandExcludedMissing ?? 0,
+        mergedA?.brandExcludedNotInList ?? 0,
+        mergedB?.brandExcludedMissing ?? 0,
+        mergedB?.brandExcludedNotInList ?? 0
       );
       const modelFilter = buildModelFilterInfo(
         modelsRaw,
         modelMatch,
-        mergedA.modelExcludedNotInList,
-        mergedB.modelExcludedNotInList
+        mergedA?.modelExcludedNotInList ?? 0,
+        mergedB?.modelExcludedNotInList ?? 0
       );
       const result: CompareResult = {
         ...cmp,
         brandFilter,
         modelFilter,
-        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA?.excludeMeta),
         unlikelySearch: buildUnlikelySearch(attrMatch),
         crossRubricMode: true,
+        crossRubricDataSource,
         crossRubricBatch: {
           limitPerSide: batchLimit,
           fetchedA: productsA.length,
@@ -738,10 +813,16 @@ export async function POST(req: NextRequest) {
     const CROSS_RUBRIC_BATCH_DEFAULT = 600;
 
     if (crossRubricMode) {
+      const metabaseApiKey =
+        typeof body.metabaseApiKey === "string" ? body.metabaseApiKey.trim() : "";
       const token = resolveToken(body.tokenA, "A");
-      if (token.length < MIN_TOKEN_LEN) {
+      const useMetabase = metabaseIsConfigured(metabaseApiKey || undefined);
+      if (!useMetabase && token.length < MIN_TOKEN_LEN) {
         return NextResponse.json(
-          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          {
+            error:
+              "Укажите ключ Metabase в форме (или METABASE_API_KEY на сервере). Ключ 4Partners не обязателен."
+          },
           { status: 400 }
         );
       }
@@ -783,12 +864,42 @@ export async function POST(req: NextRequest) {
           ? body.siteBLabel.trim()
           : "Рубрика B";
 
-      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
-      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
-      const totalA = mergedA.products.length;
-      const totalB = mergedB.products.length;
-      const productsA = mergedA.products.slice(0, batchLimit);
-      const productsB = mergedB.products.slice(0, batchLimit);
+      let productsA: FpProduct[];
+      let productsB: FpProduct[];
+      let totalA: number;
+      let totalB: number;
+      let mergedA: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let mergedB: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let crossRubricDataSource: "metabase" | "api" = "api";
+
+      if (useMetabase) {
+        crossRubricDataSource = "metabase";
+        const mbA = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricAIds,
+          pipeA,
+          "A",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        const mbB = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricBIds,
+          pipeB,
+          "B",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        productsA = mbA.products;
+        productsB = mbB.products;
+        totalA = mbA.totalInRubrics;
+        totalB = mbB.totalInRubrics;
+      } else {
+        mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+        mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+        totalA = mergedA.products.length;
+        totalB = mergedB.products.length;
+        productsA = mergedA.products.slice(0, batchLimit);
+        productsB = mergedB.products.slice(0, batchLimit);
+      }
 
       const cmp = await runCrossRubricCompare(
         productsA,
@@ -801,24 +912,25 @@ export async function POST(req: NextRequest) {
       const brandFilter = buildBrandFilterInfo(
         brandsRaw,
         brandMatch,
-        mergedA.brandExcludedMissing,
-        mergedA.brandExcludedNotInList,
-        mergedB.brandExcludedMissing,
-        mergedB.brandExcludedNotInList
+        mergedA?.brandExcludedMissing ?? 0,
+        mergedA?.brandExcludedNotInList ?? 0,
+        mergedB?.brandExcludedMissing ?? 0,
+        mergedB?.brandExcludedNotInList ?? 0
       );
       const modelFilter = buildModelFilterInfo(
         modelsRaw,
         modelMatch,
-        mergedA.modelExcludedNotInList,
-        mergedB.modelExcludedNotInList
+        mergedA?.modelExcludedNotInList ?? 0,
+        mergedB?.modelExcludedNotInList ?? 0
       );
       const result: CompareResult = {
         ...cmp,
         brandFilter,
         modelFilter,
-        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA?.excludeMeta),
         unlikelySearch: buildUnlikelySearch(attrMatch),
         crossRubricMode: true,
+        crossRubricDataSource,
         crossRubricBatch: {
           limitPerSide: batchLimit,
           fetchedA: productsA.length,
@@ -1203,10 +1315,16 @@ export async function POST(req: NextRequest) {
     const CROSS_RUBRIC_BATCH_DEFAULT = 600;
 
     if (crossRubricMode) {
+      const metabaseApiKey =
+        typeof body.metabaseApiKey === "string" ? body.metabaseApiKey.trim() : "";
       const token = resolveToken(body.tokenA, "A");
-      if (token.length < MIN_TOKEN_LEN) {
+      const useMetabase = metabaseIsConfigured(metabaseApiKey || undefined);
+      if (!useMetabase && token.length < MIN_TOKEN_LEN) {
         return NextResponse.json(
-          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          {
+            error:
+              "Укажите ключ Metabase в форме (или METABASE_API_KEY на сервере). Ключ 4Partners не обязателен."
+          },
           { status: 400 }
         );
       }
@@ -1248,12 +1366,42 @@ export async function POST(req: NextRequest) {
           ? body.siteBLabel.trim()
           : "Рубрика B";
 
-      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
-      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
-      const totalA = mergedA.products.length;
-      const totalB = mergedB.products.length;
-      const productsA = mergedA.products.slice(0, batchLimit);
-      const productsB = mergedB.products.slice(0, batchLimit);
+      let productsA: FpProduct[];
+      let productsB: FpProduct[];
+      let totalA: number;
+      let totalB: number;
+      let mergedA: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let mergedB: Awaited<ReturnType<typeof fetchMergedRubricsProducts>> | null = null;
+      let crossRubricDataSource: "metabase" | "api" = "api";
+
+      if (useMetabase) {
+        crossRubricDataSource = "metabase";
+        const mbA = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricAIds,
+          pipeA,
+          "A",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        const mbB = await fetchFpProductsByRubricIdsFromMetabase(
+          rubricBIds,
+          pipeB,
+          "B",
+          metabaseApiKey || undefined,
+          batchLimit
+        );
+        productsA = mbA.products;
+        productsB = mbB.products;
+        totalA = mbA.totalInRubrics;
+        totalB = mbB.totalInRubrics;
+      } else {
+        mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+        mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+        totalA = mergedA.products.length;
+        totalB = mergedB.products.length;
+        productsA = mergedA.products.slice(0, batchLimit);
+        productsB = mergedB.products.slice(0, batchLimit);
+      }
 
       const cmp = await runCrossRubricCompare(
         productsA,
@@ -1266,24 +1414,25 @@ export async function POST(req: NextRequest) {
       const brandFilter = buildBrandFilterInfo(
         brandsRaw,
         brandMatch,
-        mergedA.brandExcludedMissing,
-        mergedA.brandExcludedNotInList,
-        mergedB.brandExcludedMissing,
-        mergedB.brandExcludedNotInList
+        mergedA?.brandExcludedMissing ?? 0,
+        mergedA?.brandExcludedNotInList ?? 0,
+        mergedB?.brandExcludedMissing ?? 0,
+        mergedB?.brandExcludedNotInList ?? 0
       );
       const modelFilter = buildModelFilterInfo(
         modelsRaw,
         modelMatch,
-        mergedA.modelExcludedNotInList,
-        mergedB.modelExcludedNotInList
+        mergedA?.modelExcludedNotInList ?? 0,
+        mergedB?.modelExcludedNotInList ?? 0
       );
       const result: CompareResult = {
         ...cmp,
         brandFilter,
         modelFilter,
-        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA?.excludeMeta),
         unlikelySearch: buildUnlikelySearch(attrMatch),
         crossRubricMode: true,
+        crossRubricDataSource,
         crossRubricBatch: {
           limitPerSide: batchLimit,
           fetchedA: productsA.length,

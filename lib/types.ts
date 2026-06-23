@@ -619,6 +619,7 @@ export type CompareResult = {
   siteBFetchedByNoveltyIds?: boolean;
   /** Режим «2 рубрики, 1 сайт» */
   crossRubricMode?: boolean;
+  crossRubricDataSource?: "metabase" | "api";
   crossRubricBatch?: CrossRubricBatchInfo;
   /** Каталоги A/B из CSV-фидов (не выгрузка по рубрикам API) */
   catalogFromFeeds?: boolean;
