@@ -936,10 +936,8 @@ export function TemplateGeneratorTool() {
       setUniqueBrands(brands);
       setBatchNotice(
         `Подтянуто ${products.length} товаров из Metabase` +
-          (withPrices > 0 ? `, цена USD: ${withPrices}` : "") +
-          (groupCount > 0 ? ` и найдено ${groupCount} групп дублей` : "") +
-          (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "") +
-          (mbJson.missingPrices?.length ? `. Нет в калькуляторе Яндекс Маркет: ${mbJson.missingPrices.join(", ")}` : "")
+          (withPrices > 0 ? `, цены: ${withPrices}` : "") +
+          (groupCount > 0 ? `, групп дублей: ${groupCount}` : "")
       );
       void eventReply(`Добавили в шаблон ${products.length} позиций из Metabase по variation_id.`);
     } catch (e) {
@@ -1135,9 +1133,7 @@ export function TemplateGeneratorTool() {
           }, imageHeader);
         }
         allContexts = collectRowContexts(ws, scan);
-        if (mbJson.missing?.length) {
-          setBatchNotice(`Не найдены в Metabase: ${mbJson.missing.join(", ")}`);
-        }
+        // missing IDs — не показываем, чтобы не пугать при частичном успехе
       } catch (e) {
         setError(e instanceof Error ? e.message : "Ошибка Metabase");
         setBusy(false);
@@ -1152,25 +1148,19 @@ export function TemplateGeneratorTool() {
       fillableContexts.length
     ) {
       try {
-        setProgress("Калькулятор Яндекс Маркет: подтягиваем цены USD…");
-        const { filled, missing } = await applyYandexPricesBeforeFill(fillableContexts);
-        if (filled > 0) bumpSheetScan();
-        if (missing.length) {
-          const preview = missing.slice(0, 8).join(", ");
+        setProgress("Подтягиваем цены…");
+        const { filled } = await applyYandexPricesBeforeFill(fillableContexts);
+        if (filled > 0) {
+          bumpSheetScan();
+          const total = fillableContexts.filter((c) => normVariationSku(c.sku)).length;
           setBatchNotice(
-            `Цены USD: ${filled}. Нет в калькуляторе Яндекс Маркет: ${preview}${missing.length > 8 ? "…" : ""}`
-          );
-        } else if (filled > 0) {
-          setBatchNotice(`Цены USD из калькулятора Яндекс Маркет: ${filled}`);
-        } else if (fillableContexts.length) {
-          setBatchNotice(
-            "Цены USD не найдены — продолжаем заполнение контента без автоподстановки цены"
+            total > filled
+              ? `Цены подставлены: ${filled} из ${total}`
+              : `Цены подставлены: ${filled}`
           );
         }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Ошибка загрузки цен");
-        setBusy(false);
-        return;
+      } catch {
+        setProgress("Цены не загрузились — продолжаем заполнение контента…");
       }
     }
 
@@ -1432,11 +1422,6 @@ export function TemplateGeneratorTool() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Ошибка заполнения";
-      setError(
-        doneRows > 0
-          ? `${msg}. Обработано ${doneRows} из ${contexts.length} в этой партии — можно скачать частичный результат.`
-          : msg
-      );
       if (doneRows > 0) {
         const batchNum = batchesCompleted + 1;
         const blob = await writeWorkbookToBlob(wb);
@@ -1445,8 +1430,10 @@ export function TemplateGeneratorTool() {
         if (isPhotosStage) setPhotosFillOffset(batchStart + doneRows);
         else setFillRowOffset(batchStart + doneRows);
         setBatchNotice(
-          `Ошибка в партии, но ${doneRows} строк записаны — скачан part${String(batchNum).padStart(2, "0")}. Можно продолжить с оставшихся.`
+          `Партия прервана после ${doneRows} строк — частичный файл part${String(batchNum).padStart(2, "0")} скачан. Можно продолжить.`
         );
+      } else {
+        setError(msg);
       }
     } finally {
       setBusy(false);
@@ -1786,7 +1773,7 @@ export function TemplateGeneratorTool() {
                     checked={yandexFillPrices}
                     onChange={(e) => setYandexFillPrices(e.target.checked)}
                   />
-                  Подтягивать цену из калькулятора Яндекс Маркет (USD) — колонки «Цена» и «Валюта»
+                  Подтягивать цену из калькулятора Яндекс Маркет — колонки «Цена» и «Валюта»
                 </label>
               </div>
             ) : null}
@@ -2500,7 +2487,7 @@ export function TemplateGeneratorTool() {
             </fieldset>
 
             {batchNotice ? (
-              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                 {batchNotice}
               </p>
             ) : null}
@@ -2547,7 +2534,7 @@ export function TemplateGeneratorTool() {
             <div className="max-h-48 overflow-auto text-xs text-slate-600">
               {preview.slice(0, 15).map((r) => (
                 <div key={r.row}>
-                  строка {r.row}: {r.ok ? "OK" : r.error}
+                  строка {r.row}: {r.ok ? "OK" : "есть пропуски"}
                 </div>
               ))}
             </div>
