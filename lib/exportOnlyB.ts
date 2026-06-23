@@ -341,3 +341,20 @@ export async function downloadNerazmeshennyeSiteAExcel(
     `${safe}_неразмещенные_сайт_A_${new Date().toISOString().slice(0, 10)}.xlsx`
   );
 }
+
+export async function downloadVariationIdsColumnExcel(
+  ids: number[],
+  fileBase: string
+): Promise<void> {
+  if (typeof window === "undefined" || !ids.length) return;
+  const XLSX = await import("xlsx");
+  const rows = ids.map((id) => ({ "Артикул товара (SKU)": String(id) }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  const safe = fileBase.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+  XLSX.utils.book_append_sheet(wb, ws, "артикулы".slice(0, 28));
+  XLSX.writeFile(
+    wb,
+    `${safe}_артикулы_остались_${new Date().toISOString().slice(0, 10)}.xlsx`
+  );
+}

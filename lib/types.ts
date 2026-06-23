@@ -373,9 +373,17 @@ export type SingleSiteDupsResult = {
     withEanIndexKeys?: number;
     /** Режим: список id из файла/тела запроса, карточки подтянуты по API */
     idList?: {
+      /** product — id карточки; variation — id вариации (SKU) */
+      idKind?: "product" | "variation";
       requestedIds: number;
       /** Сколько id из запроса не вернулись из /product/info (нет прав, удалён, опечатка) */
       missingInApi: number;
+      /** Только для variation: не найдено в Metabase */
+      missingInMetabase?: number;
+      /** Только для variation: уникальных product_id после резолва */
+      uniqueProductIds?: number;
+      /** Откуда взяты данные о товарах */
+      dataSource?: "metabase" | "api";
     };
     /** Почему в отчёте 0 товаров — сверка с API */
     fetchDiagnostics?: {

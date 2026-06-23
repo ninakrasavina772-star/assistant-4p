@@ -18,6 +18,8 @@ import {
   findInternalNoveltyDuplicates
 } from "@/lib/cleanNovelties";
 import { findIntraSiteDuplicates } from "@/lib/intraSiteDups";
+import { metabaseIsConfigured } from "@/lib/letualMetabase";
+import { fetchFpProductsByVariationIdsFromMetabase } from "@/lib/metabaseVariationProducts";
 import { filterFpProductsByModels, mergeModelLists, type ModelMatchMode } from "@/lib/model-filter";
 import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
 import { MAX_RUBRICS_B } from "@/lib/rubricIds";
@@ -270,25 +272,65 @@ export async function POST(req: NextRequest) {
 
   try {
     if (body.mode === "idListIntraDups") {
-      const ids = parseNoveltyIdsFromBody(body.productIds);
-      if (!ids.length) {
+      const idListKind =
+        body.idListKind === "variation" || body.idListKind === "product"
+          ? body.idListKind
+          : "product";
+      const requestedIds = parseNoveltyIdsFromBody(body.productIds);
+      if (!requestedIds.length) {
         return NextResponse.json(
-          { error: "Укажите productIds: массив id товаров (числа)" },
+          {
+            error:
+              idListKind === "variation"
+                ? "Укажите productIds: массив id вариации (SKU, числа)"
+                : "Укажите productIds: массив id товаров (числа)"
+          },
           { status: 400 }
         );
       }
-      const token = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
-      if (token.length < MIN_TOKEN_LEN) {
-        return NextResponse.json(
-          { error: "Нужен ключ API (сайт A или B, 12+ символов) или переменная окружения" },
-          { status: 400 }
-        );
-      }
-      let products = await fetchProductsByIds(token, siteVariation, ids);
-      const apiReturnedSet = new Set(products.map((p) => p.id));
+      let products: FpProduct[] = [];
+      let missingInMetabase = 0;
       let missingInApi = 0;
-      for (const id of ids) {
-        if (!apiReturnedSet.has(id)) missingInApi++;
+      let dataSource: "metabase" | "api" = "api";
+
+      if (idListKind === "variation") {
+        if (!metabaseIsConfigured()) {
+          return NextResponse.json(
+            {
+              error:
+                "Metabase не настроен на сервере (METABASE_API_KEY). Для поиска по SKU данные берутся из Metabase."
+            },
+            { status: 503 }
+          );
+        }
+        try {
+          const mb = await fetchFpProductsByVariationIdsFromMetabase(requestedIds);
+          products = mb.products;
+          missingInMetabase = mb.missingInMetabase;
+          dataSource = "metabase";
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Ошибка Metabase";
+          return NextResponse.json({ error: msg }, { status: 502 });
+        }
+        if (!products.length) {
+          return NextResponse.json(
+            { error: "Ни один id вариации не найден в Metabase" },
+            { status: 400 }
+          );
+        }
+      } else {
+        const token = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
+        if (token.length < MIN_TOKEN_LEN) {
+          return NextResponse.json(
+            { error: "Нужен ключ API (сайт A или B, 12+ символов) или переменная окружения" },
+            { status: 400 }
+          );
+        }
+        products = await fetchProductsByIds(token, siteVariation, requestedIds);
+        const apiReturnedSet = new Set(products.map((p) => p.id));
+        for (const id of requestedIds) {
+          if (!apiReturnedSet.has(id)) missingInApi++;
+        }
       }
       let brandExcludedMissing = 0;
       let brandExcludedNotInList = 0;
@@ -313,7 +355,13 @@ export async function POST(req: NextRequest) {
         stats: {
           count: products.length,
           withEanIndexKeys: countProductsWithEanIndexKeys(products),
-          idList: { requestedIds: ids.length, missingInApi }
+          idList: {
+            idKind: idListKind,
+            requestedIds: requestedIds.length,
+            missingInApi,
+            dataSource,
+            ...(idListKind === "variation" ? { missingInMetabase } : {})
+          }
         },
         brandFilter: brandsRaw.length
           ? buildBrandFilterInfo(

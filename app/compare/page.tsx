@@ -86,6 +86,7 @@ import {
   parseModelListFromText
 } from "@/lib/model-filter";
 import { parseExcludeProductIdsFromText } from "@/lib/excludeProductIds";
+import { parseVariationIdsFromTextBulk } from "@/lib/templateGenerator/parseVariationIds";
 import {
   MAX_RUBRICS_B,
   mergeUniqueSortedRubricId,
@@ -478,6 +479,7 @@ export default function ComparePage() {
     preview: { article: string; name: string; link: string; dup: string }[];
   }>(null);
   /** Список id → API → дубли (EAN, название, фото) как в режиме «одна рубрика» */
+  const [idListDupKind, setIdListDupKind] = useState<"product" | "variation">("variation");
   const [idListDupIdsText, setIdListDupIdsText] = useState("");
   const [idListDupLoading, setIdListDupLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -2964,9 +2966,44 @@ export default function ComparePage() {
   }, [namePhotoDupTool]);
 
   const idListDupParsedIds = useMemo(
-    () => parseExcludeProductIdsFromText(idListDupIdsText),
-    [idListDupIdsText]
+    () =>
+      idListDupKind === "variation"
+        ? parseVariationIdsFromTextBulk(idListDupIdsText)
+        : parseExcludeProductIdsFromText(idListDupIdsText),
+    [idListDupIdsText, idListDupKind]
   );
+
+  const removeIdFromIdListDup = useCallback((id: number) => {
+    setIdListDupIdsText((prev) => {
+      const parser =
+        idListDupKind === "variation"
+          ? parseVariationIdsFromTextBulk
+          : parseExcludeProductIdsFromText;
+      const next = parser(prev).filter((x) => x !== id);
+      return next.join("\n");
+    });
+    setError(null);
+  }, [idListDupKind]);
+
+  const downloadIdListDupRemainingExcel = useCallback(async () => {
+    const ids = idListDupParsedIds;
+    if (!ids.length) {
+      setError("Список пуст — нечего выгружать.");
+      return;
+    }
+    setError(null);
+    try {
+      if (idListDupKind === "variation") {
+        const { downloadVariationIdsColumnExcel } = await import("@/lib/exportOnlyB");
+        await downloadVariationIdsColumnExcel(ids, siteLabelA.trim() || "список");
+      } else {
+        const { downloadProductIdsColumnExcel } = await import("@/lib/exportOnlyB");
+        await downloadProductIdsColumnExcel(ids, siteLabelA.trim() || "список");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось сохранить Excel");
+    }
+  }, [idListDupParsedIds, idListDupKind, siteLabelA]);
 
   const onIdListDupFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -2974,13 +3011,17 @@ export default function ComparePage() {
     if (!f) return;
     setError(null);
     try {
-      const { extractProductIdsFromFile } = await import("@/lib/excludeIdsFileImport");
-      const fromFile = await extractProductIdsFromFile(f);
+      const mod = await import("@/lib/excludeIdsFileImport");
+      const fromFile =
+        idListDupKind === "variation"
+          ? await mod.extractVariationIdsFromFile(f)
+          : await mod.extractProductIdsFromFile(f);
       setIdListDupIdsText((prev) => {
-        const merged = new Set<number>([
-          ...parseExcludeProductIdsFromText(prev),
-          ...fromFile
-        ]);
+        const parsePrev =
+          idListDupKind === "variation"
+            ? parseVariationIdsFromTextBulk
+            : parseExcludeProductIdsFromText;
+        const merged = new Set<number>([...parsePrev(prev), ...fromFile]);
         return Array.from(merged)
           .sort((a, b) => a - b)
           .join("\n");
@@ -2990,22 +3031,29 @@ export default function ComparePage() {
         err instanceof Error ? err.message : "Не удалось прочитать файл с id"
       );
     }
-  }, []);
+  }, [idListDupKind]);
 
   const runIdListIntraDupSearch = useCallback(async () => {
-    const ids = parseExcludeProductIdsFromText(idListDupIdsText);
+    const ids =
+      idListDupKind === "variation"
+        ? parseVariationIdsFromTextBulk(idListDupIdsText)
+        : parseExcludeProductIdsFromText(idListDupIdsText);
     if (!ids.length) {
       setError(
-        "Введите id товаров (по одному в строке или через запятую) или загрузите файл."
+        idListDupKind === "variation"
+          ? "Введите id вариации / артикулы SKU (по одному в строке или через запятую) или загрузите файл."
+          : "Введите id товаров (по одному в строке или через запятую) или загрузите файл."
       );
       return;
     }
-    const tok = tokenA.trim() || tokenB.trim();
-    if (tok.length < MIN_API_TOKEN) {
-      setError(
-        "Нужен ключ API: укажите в основной форме ключ сайта A или B (от 12 символов)."
-      );
-      return;
+    if (idListDupKind === "product") {
+      const tok = tokenA.trim() || tokenB.trim();
+      if (tok.length < MIN_API_TOKEN) {
+        setError(
+          "Нужен ключ API: укажите в основной форме ключ сайта A или B (от 12 символов)."
+        );
+        return;
+      }
     }
     userCancelledRef.current = false;
     setError(null);
@@ -3026,6 +3074,7 @@ export default function ComparePage() {
         signal: ac.signal,
         body: JSON.stringify({
           mode: "idListIntraDups",
+          idListKind: idListDupKind,
           productIds: ids,
           nameLocale,
           siteVariation,
@@ -3089,6 +3138,7 @@ export default function ComparePage() {
     }
   }, [
     idListDupIdsText,
+    idListDupKind,
     tokenA,
     tokenB,
     nameLocale,
@@ -4599,18 +4649,57 @@ export default function ComparePage() {
 
         <details className="mb-4 rounded-xl border border-sky-200 bg-sky-50/35">
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
-            Дубли по списку id (API): EAN, название и фото
+            Дубли по списку id / артикулов (API): EAN, название и фото
           </summary>
           <div className="border-t border-sky-100 px-4 pb-4 pt-3 space-y-3">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="id-list-dup-kind"
+                  checked={idListDupKind === "variation"}
+                  onChange={() => {
+                    setIdListDupKind("variation");
+                    setError(null);
+                  }}
+                />
+                <span>
+                  <strong>ID вариации (SKU)</strong> — артикул в шаблоне витрины
+                </span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="id-list-dup-kind"
+                  checked={idListDupKind === "product"}
+                  onChange={() => {
+                    setIdListDupKind("product");
+                    setError(null);
+                  }}
+                />
+                <span>
+                  <strong>ID товара</strong> — внутренняя карточка в админке
+                </span>
+              </label>
+            </div>
             <p className="text-sm text-slate-800 font-medium leading-snug">
-              Укажите <strong>внутренние id товаров</strong> вашей витрины (один столбец в Excel/CSV или текст). Сервер
-              подтянет карточки через API (пакетами по 50 id) и построит тот же отчёт о дублях, что и «одна рубрика»:
-              сначала совпадения по <strong>EAN</strong>, затем слои по <strong>названию и фото</strong> (в т.ч. визуально
-              похожие превью).
+              Укажите список на <strong>одной витрине</strong> (столбец в Excel/CSV или текст). Сервер подтянет карточки
+              из <strong>Metabase</strong> (название, бренд, EAN, фото) и построит тот же отчёт о дублях, что и «одна рубрика»: сначала <strong>EAN</strong>, затем{" "}
+              <strong>название и фото</strong>. Ключ Partner API для SKU <strong>не нужен</strong>.
             </p>
             <p className="text-xs text-slate-500">
-              Нужен <strong>ключ API</strong> сайта A или B из основной формы выше. Опционально действуют списки брендов /
-              моделей и ужесточение по объёму/оттенку/цвету — как при обычном поиске дублей.
+              {idListDupKind === "variation" ? (
+                <>
+                  Данные о товарах — из <strong>Metabase</strong> (4Partners DB). На сервере должен быть{" "}
+                  <strong>METABASE_API_KEY</strong>. Опционально действуют фильтры брендов / моделей и ужесточение по
+                  объёму/оттенку/цвету.
+                </>
+              ) : (
+                <>
+                  Нужен <strong>ключ API</strong> сайта A или B из основной формы выше. Опционально действуют списки
+                  брендов / моделей и ужесточение по объёму/оттенку/цвету — как при обычном поиске дублей.
+                </>
+              )}
             </p>
             <p className="text-xs text-slate-600 bg-white/70 border border-sky-100 rounded-lg px-3 py-2">
               После расчёта в открывшемся отчёте внизу блока дублей включите опцию{" "}
@@ -4626,7 +4715,11 @@ export default function ComparePage() {
               }}
               rows={5}
               className={`${homeInput} w-full font-mono text-xs`}
-              placeholder={"Например:\n12345\n12346\nили: 12345, 12346"}
+              placeholder={
+                idListDupKind === "variation"
+                  ? "Например (SKU / id вариации):\n1182822\n1182823\nили: 1182822, 1182823"
+                  : "Например (id товара):\n12345\n12346\nили: 12345, 12346"
+              }
             />
             <div className="flex flex-wrap items-center gap-3 text-sm">
               <label className="text-xs font-medium text-slate-700 sr-only" htmlFor="id-list-dup-file">
@@ -4640,14 +4733,47 @@ export default function ComparePage() {
                 className="text-slate-700 text-xs max-w-full"
               />
               <span className="text-xs text-slate-500">
-                <strong>Excel</strong> (.xlsx, .xls, .xlsm) или CSV/TXT. Если первая строка — заголовок, ищем колонку
-                вроде «Id товара» / «Product id»; иначе берём <strong>первый столбец</strong>. Лист «Новинки», если есть.
-                Загрузка <strong>добавляет</strong> id в поле без дублей.
+                <strong>Excel</strong> (.xlsx, .xls, .xlsm) или CSV/TXT. Для SKU — колонка «Артикул товара (SKU)» или
+                первый столбец; для id товара — «Id товара» / «Product id». Лист «Новинки», если есть. Загрузка{" "}
+                <strong>добавляет</strong> в поле без дублей.
               </span>
             </div>
             <p className="text-xs text-slate-600">
-              Уникальных id в поле: <strong className="tabular-nums">{idListDupParsedIds.length}</strong>
+              Уникальных в списке:{" "}
+              <strong className="tabular-nums">{idListDupParsedIds.length}</strong>
+              {idListDupKind === "variation" ? " (id вариации / SKU)" : " (id товара)"}
             </p>
+            {idListDupParsedIds.length > 0 ? (
+              <div className="max-h-48 overflow-auto rounded-lg border border-sky-100 bg-white">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-sky-50 text-slate-700">
+                    <tr>
+                      <th className="p-2 text-left font-semibold">
+                        {idListDupKind === "variation" ? "Артикул (SKU)" : "ID товара"}
+                      </th>
+                      <th className="p-2 w-24 text-right font-semibold">Действие</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {idListDupParsedIds.map((id) => (
+                      <tr key={id} className="border-t border-slate-100">
+                        <td className="p-2 font-mono tabular-nums">{id}</td>
+                        <td className="p-2 text-right">
+                          <button
+                            type="button"
+                            className="rounded border border-red-200 bg-red-50 px-2 py-1 text-red-800 hover:bg-red-100"
+                            onClick={() => removeIdFromIdListDup(id)}
+                            title="Убрать из списка (например, после схлопывания дубля)"
+                          >
+                            Удалить
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -4667,6 +4793,14 @@ export default function ComparePage() {
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 Очистить список
+              </button>
+              <button
+                type="button"
+                disabled={idListDupParsedIds.length === 0}
+                onClick={() => void downloadIdListDupRemainingExcel()}
+                className="rounded-lg border border-emerald-600 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+              >
+                Excel: оставшиеся артикулы ({idListDupParsedIds.length})
               </button>
             </div>
             {idListDupLoading && (
@@ -5495,8 +5629,9 @@ export default function ComparePage() {
               {data.stats.idList ? (
                 <>
                   {": "}
-                  список id — запрошено{" "}
-                  <strong className="tabular-nums">{data.stats.idList.requestedIds}</strong>,                   карточек после фильтров{" "}
+                  список{" "}
+                  {data.stats.idList.idKind === "variation" ? "SKU" : "id"} — запрошено{" "}
+                  <strong className="tabular-nums">{data.stats.idList.requestedIds}</strong>, карточек после фильтров{" "}
                   <strong className="tabular-nums">{data.stats.count}</strong>
                   {data.stats.withEanIndexKeys != null ? (
                     <>
@@ -5504,7 +5639,20 @@ export default function ComparePage() {
                       <strong className="tabular-nums">{data.stats.withEanIndexKeys}</strong>
                     </>
                   ) : null}
-                  {data.stats.idList.missingInApi > 0 ? (
+                  {data.stats.idList.dataSource === "metabase" ? (
+                    <span className="text-slate-600"> · данные из Metabase</span>
+                  ) : null}
+                  {data.stats.idList.missingInMetabase != null &&
+                  data.stats.idList.missingInMetabase > 0 ? (
+                    <>
+                      , не найдено в Metabase:{" "}
+                      <strong className="tabular-nums text-amber-800">
+                        {data.stats.idList.missingInMetabase}
+                      </strong>
+                    </>
+                  ) : null}
+                  {data.stats.idList.dataSource !== "metabase" &&
+                  data.stats.idList.missingInApi > 0 ? (
                     <>
                       , не вернулось из API:{" "}
                       <strong className="tabular-nums text-amber-800">

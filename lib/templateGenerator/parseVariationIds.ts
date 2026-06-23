@@ -35,3 +35,25 @@ export function normVariationSku(sku: string): number | null {
   const n = Number(digits);
   return n > 0 ? n : null;
 }
+
+const MAX_VARIATION_IDS_BULK = 50_000;
+
+/** Как parseVariationIdsFromText, но для больших списков (сравнение каталогов). */
+export function parseVariationIdsFromTextBulk(text: string): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const part of text.split(/[\n\r,;|\t]+/u)) {
+    const t = part.trim().replace(/^[Vv#]/, "");
+    if (!t) continue;
+    const digits = t.replace(/\D/g, "");
+    if (!digits) continue;
+    const n = Number(digits);
+    if (!Number.isFinite(n) || n < 1) continue;
+    const id = Math.floor(n);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= MAX_VARIATION_IDS_BULK) break;
+  }
+  return out;
+}
