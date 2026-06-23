@@ -1,4 +1,4 @@
-﻿import {
+import {
   resolveMetabaseCredentials,
   type MetabaseCredentials
 } from "@/lib/letualMetabaseConfig";
@@ -52,7 +52,7 @@ function formatPrice(value: unknown): number | null {
   return Math.round(n * 100) / 100;
 }
 
-/** Цены калькулятора Яндекс Маркет (4stand) из yandex_market.product, валюта USD */
+/** Цены из калькулятора Яндекс Маркет (https://4stand.com/yandex-market/calculator/price), USD. */
 export async function fetchYandexMarketPrices(
   ids: number[],
   metabaseApiKey?: string
@@ -67,7 +67,7 @@ export async function fetchYandexMarketPrices(
     SELECT DISTINCT ON (product_variation_id)
       product_variation_id,
       price,
-      price_currency
+      COALESCE(NULLIF(TRIM(price_currency), ''), 'USD') AS price_currency
     FROM yandex_market.product
     WHERE product_variation_id IN (${inList})
       AND price IS NOT NULL

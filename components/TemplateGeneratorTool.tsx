@@ -854,11 +854,13 @@ export function TemplateGeneratorTool() {
 
   const applyYandexPricesBeforeFill = useCallback(
     async (contexts: TemplateRowContext[]) => {
-      if (marketplace !== "yandex" || !yandexFillPrices || !contexts.length) return 0;
+      if (marketplace !== "yandex" || !yandexFillPrices || !contexts.length) {
+        return { filled: 0, missing: [] as number[] };
+      }
       const ids = contexts
         .map((c) => normVariationSku(c.sku))
         .filter((id): id is number => id != null);
-      if (!ids.length) return 0;
+      if (!ids.length) return { filled: 0, missing: [] as number[] };
       const res = await fetch("/api/template-generator/yandex-prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -866,6 +868,7 @@ export function TemplateGeneratorTool() {
       });
       const json = (await res.json()) as {
         prices?: { variationId: number; price: number; currency: string }[];
+        missing?: number[];
         error?: string;
       };
       if (!res.ok) throw new Error(json.error ?? `Цены HTTP ${res.status}`);
@@ -876,11 +879,12 @@ export function TemplateGeneratorTool() {
         ])
       );
       const wb = wbRef.current;
-      if (!wb || !scan) return 0;
+      if (!wb || !scan) return { filled: 0, missing: json.missing ?? ids };
       const ws = wb.getWorksheet(scan.sheetName)!;
-      return applyYandexPricesToWorksheet(ws, scan, contexts, map, {
+      const { filled, missing } = applyYandexPricesToWorksheet(ws, scan, contexts, map, {
         overwrite: overwriteFilled
-      }).filled;
+      });
+      return { filled, missing: missing.length ? missing : (json.missing ?? []) };
     },
     [marketplace, yandexFillPrices, scan, overwriteFilled]
   );
@@ -920,7 +924,7 @@ export function TemplateGeneratorTool() {
       }
       const withPrices = products.filter((p) => p.priceUsd != null).length;
       const ws = wb.getWorksheet(scan.sheetName)!;
-      await injectVariationProducts(ws, scan, products);
+      await injectVariationProducts(ws, scan, products, { skipImages: marketplace === "yandex" });
       setDupsPhaseDone(false);
       setPipelineStep(1);
       const newScan = bumpSheetScan();
@@ -933,7 +937,7 @@ export function TemplateGeneratorTool() {
           (withPrices > 0 ? `, цена USD: ${withPrices}` : "") +
           (groupCount > 0 ? ` и найдено ${groupCount} групп дублей` : "") +
           (mbJson.missing?.length ? `. Не найдены: ${mbJson.missing.join(", ")}` : "") +
-          (mbJson.missingPrices?.length ? `. Без цены: ${mbJson.missingPrices.join(", ")}` : "")
+          (mbJson.missingPrices?.length ? `. Нет в калькуляторе Яндекс Маркет: ${mbJson.missingPrices.join(", ")}` : "")
       );
       void eventReply(`Добавили в шаблон ${products.length} позиций из Metabase по variation_id.`);
     } catch (e) {
@@ -1119,10 +1123,10 @@ export function TemplateGeneratorTool() {
               (mbJson.missing?.length ? ` (пропущены: ${mbJson.missing.join(", ")})` : "")
           );
         }
-        fillableContexts = await injectVariationProducts(ws, scan, products);
+        fillableContexts = await injectVariationProducts(ws, scan, products, { skipImages: marketplace === "yandex" });
         const newScan = bumpSheetScan();
         refreshDupGroups(newScan);
-        if (imageHeader) {
+        if (imageHeader && marketplace !== "yandex") {
           await prefillPhotoReviewColumn(ws, scan, fillableContexts, {
             minCount: photoMin,
             targetCount: photoTarget
@@ -1146,9 +1150,23 @@ export function TemplateGeneratorTool() {
       fillableContexts.length
     ) {
       try {
-        setProgress("Калькулятор 4stand: подтягиваем цены USD…");
-        const priced = await applyYandexPricesBeforeFill(fillableContexts);
-        if (priced > 0) bumpSheetScan();
+        setProgress("Калькулятор Яндекс Маркет: подтягиваем цены USD…");
+        const { filled, missing } = await applyYandexPricesBeforeFill(fillableContexts);
+        if (filled > 0) bumpSheetScan();
+        if (missing.length) {
+          const preview = missing.slice(0, 8).join(", ");
+          setBatchNotice(
+            `Цены USD: ${filled}. Нет в калькуляторе Яндекс Маркет: ${preview}${missing.length > 8 ? "…" : ""}`
+          );
+        } else if (filled > 0) {
+          setBatchNotice(`Цены USD из калькулятора Яндекс Маркет: ${filled}`);
+        } else if (fillableContexts.length) {
+          setError(
+            "Не удалось подтянуть цены USD — для этих variation_id нет данных в калькуляторе Яндекс Маркет (yandex_market.product)"
+          );
+          setBusy(false);
+          return;
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Ошибка загрузки цен");
         setBusy(false);
@@ -1265,7 +1283,7 @@ export function TemplateGeneratorTool() {
       .filter(Boolean)
       .join("\n\n");
     const applyOverwrite =
-      byVariationIds || workMode === "from_scratch" || overwriteFilled;
+      byVariationIds || workMode === "from_scratch" || overwriteFilled || isPhotosStage;
 
     const stageLabel = isPhotosStage ? "Фото" : "Контент";
 
@@ -1341,7 +1359,7 @@ export function TemplateGeneratorTool() {
           applyOverwrite,
           scan.imageCol
         );
-        if (!isPhotosStage && imageHeader) {
+        if (!isPhotosStage && imageHeader && marketplace !== "yandex") {
           await prefillPhotoReviewColumn(
             ws,
             scan,
@@ -1767,7 +1785,7 @@ export function TemplateGeneratorTool() {
                     checked={yandexFillPrices}
                     onChange={(e) => setYandexFillPrices(e.target.checked)}
                   />
-                  Подтягивать цену из калькулятора 4stand (USD) — колонки «Цена» и «Валюта»
+                  Подтягивать цену из калькулятора Яндекс Маркет (USD) — колонки «Цена» и «Валюта»
                 </label>
               </div>
             ) : null}
@@ -2538,3 +2556,6 @@ export function TemplateGeneratorTool() {
     </div>
   );
 }
+
+
+

@@ -5,6 +5,7 @@ import { LETUAL_CANVAS_SIZE, LETUAL_JPEG_QUALITY } from "@/lib/letualMainPhotoCo
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import { compositeFlatImageToLetualCanvas } from "@/lib/letualMainPhotoLayout";
 import { fetchLetualImageDetailed } from "@/lib/letualFotoQuality";
+import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { getOzonStorageBackend, uploadOzonImage, uploadOzonImageAtKey } from "@/lib/ozonImageStorage";
 import { fetchMetabaseProductBySku } from "@/lib/templateGenerator/metabaseProduct";
 import {
@@ -32,21 +33,18 @@ function isCdnPackshotUrl(url: string): boolean {
   return /cdnru\.4stand\.com\/huge\/|\/huge\/[0-9a-f]{40,}/i.test(url);
 }
 
-function isAdminBackgroundUrl(url: string): boolean {
+/** Lifestyle / сцены из админки — в конец галереи с сохранением фона */
+function isLifestyleBackgroundUrl(url: string): boolean {
   if (isThumbOrSmallUrl(url)) return false;
   if (isCdnPackshotUrl(url)) return false;
   const u = url.toLowerCase();
-  if (
-    /lifestyle|lookbook|model|banner|ingredient|flower|scene|interior|flacon|cdnbigbuy|_r10|_r20|_r30|makeupstore|notino/i.test(
-      u
-    )
-  ) {
-    return true;
-  }
-  if (!/4stand|cdnru\.4partners|deloox\.com|ozon\.ru|goldapple|letu\.ru/i.test(u)) {
-    return true;
-  }
-  return false;
+  return /lifestyle|lookbook|model|banner|ingredient|flower|scene|interior|flacon|makeupstore|_r10|_r20|_r30/.test(
+    u
+  );
+}
+
+function isAdminBackgroundUrl(url: string): boolean {
+  return isLifestyleBackgroundUrl(url);
 }
 
 function splitYandexImageUrls(urls: string[]): { packshots: string[]; backgrounds: string[] } {
@@ -75,6 +73,26 @@ function prioritizeMainPackshot(packshots: string[], mainImageUrl: string | null
   const main =
     packshots.find((u) => imageUrlIdentityKey(u) === mainKey) ?? mainImageUrl.trim();
   return [main, ...rest];
+}
+
+async function downloadImageBuffer(url: string): Promise<Buffer | null> {
+  const podruzhka = await fetchPodruzhkaProductImageDetailed(url);
+  if (podruzhka.buf?.length && podruzhka.buf.length >= 512) return podruzhka.buf;
+
+  const letual = await fetchLetualImageDetailed(url);
+  if (letual?.buf?.length && letual.buf.length >= 512) return letual.buf;
+
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(20_000),
+      headers: { Accept: "image/*", "User-Agent": "assistant-4p-yandex-photos/1.0" }
+    });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length >= 512 ? buf : null;
+  } catch {
+    return null;
+  }
 }
 
 async function uploadYandexPhoto(buf: Buffer, sku: string, tag: string): Promise<string> {
@@ -111,41 +129,19 @@ async function enhanceBackgroundPhotoTo1000(buf: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-async function downloadBackgroundImage(url: string): Promise<Buffer | null> {
-  const fetched = await fetchLetualImageDetailed(url);
-  if (fetched?.buf?.length) return fetched.buf;
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(20_000),
-      headers: { Accept: "image/*", "User-Agent": "assistant-4p-yandex-photos/1.0" }
-    });
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length >= 512 ? buf : null;
-  } catch {
-    return null;
-  }
-}
-
 type PackshotState = {
   sourceKeys: Set<string>;
   contentHashes: Set<string>;
   results: string[];
 };
 
-function isRawCdnPackshotUrl(url: string): boolean {
-  return isCdnPackshotUrl(url) && !isYandexProcessedStorageUrl(url);
-}
-
 async function packshotTo1000Buffer(src: string): Promise<Buffer> {
   try {
     return await processLetualMainPhotoFromUrl(src);
   } catch {
-    const fetched = await fetchLetualImageDetailed(src);
-    if (!fetched?.buf?.length) {
-      throw new Error("не скачалось");
-    }
-    return compositeFlatImageToLetualCanvas(fetched.buf);
+    const raw = await downloadImageBuffer(src);
+    if (!raw) throw new Error("не скачалось");
+    return compositeFlatImageToLetualCanvas(raw);
   }
 }
 
@@ -202,6 +198,18 @@ async function processPackshotsParallel(
   return state.results;
 }
 
+function mergeUniqueSources(existing: string[], extra: string[]): string[] {
+  const seen = new Set(existing.map(imageUrlIdentityKey));
+  const out = [...existing];
+  for (const u of extra) {
+    const key = imageUrlIdentityKey(u);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(u);
+  }
+  return dedupeImageUrlsSemantic(out);
+}
+
 export type YandexRowPhotosOpts = {
   imageText: string;
   sku: string;
@@ -231,7 +239,7 @@ export async function resolveYandexRowPhotos(
       if (mb) {
         mainImageUrl = mb.mainImageUrl;
         if (mb.imageUrls.length) {
-          sourceUrls = dedupeImageUrlsSemantic(mergeImageUrls(sourceUrls, mb.imageUrls));
+          sourceUrls = mergeUniqueSources(sourceUrls, mb.imageUrls);
           sourceUrls = sourceUrls.filter((u) => !isYandexProcessedStorageUrl(u));
         }
       }
@@ -240,11 +248,11 @@ export async function resolveYandexRowPhotos(
     }
 
     try {
-      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 12);
+      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 8);
       const siblingUrls = siblings
         .map((s) => s.mainImageUrl)
         .filter((u): u is string => Boolean(u));
-      sourceUrls = dedupeImageUrlsSemantic(mergeImageUrls(sourceUrls, siblingUrls));
+      sourceUrls = mergeUniqueSources(sourceUrls, siblingUrls);
       sourceUrls = sourceUrls.filter((u) => !isYandexProcessedStorageUrl(u));
     } catch {
       /* optional */
@@ -263,13 +271,10 @@ export async function resolveYandexRowPhotos(
   }
 
   if (!getOzonStorageBackend()) {
-    const kept = uniqueUrlsForImageCell(alreadyDone);
     return {
-      imageUrls: kept,
-      processed: kept,
-      note: kept.length
-        ? "только ранее загруженные foto (хранилище S3 недоступно)"
-        : "хранилище не настроено — packshot не приведены к 1000×1000"
+      imageUrls: [],
+      processed: [],
+      note: "хранилище S3/Blob не настроено — foto не обработаны (1000×1000)"
     };
   }
 
@@ -297,7 +302,7 @@ export async function resolveYandexRowPhotos(
     if (seenOut.has(srcKey) || packshotKeys.has(srcKey)) continue;
 
     try {
-      const raw = await downloadBackgroundImage(src);
+      const raw = await downloadImageBuffer(src);
       if (!raw) continue;
 
       const contentHash = createHash("sha256").update(raw).digest("hex").slice(0, 24);
@@ -320,8 +325,8 @@ export async function resolveYandexRowPhotos(
     }
   }
 
-  const finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]).filter(
-    (u) => !isRawCdnPackshotUrl(u)
+  const finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]).filter((u) =>
+    isYandexProcessedStorageUrl(u)
   );
   const skippedDupes =
     packshots.length + rawBackgrounds.length + alreadyDone.length - finalUrls.length;
@@ -330,8 +335,8 @@ export async function resolveYandexRowPhotos(
   if (whitePhotos.length) parts.push(`${whitePhotos.length} packshot 1000×1000`);
   if (backgroundUrls.length) parts.push(`${backgroundUrls.length} с фоном`);
   if (skippedDupes > 0) parts.push(`дублей отброшено: ${skippedDupes}`);
-  if (packshots.length && !whitePhotos.filter((u) => !isYandexProcessedStorageUrl(u)).length) {
-    parts.push("исходники CDN не попали в ячейку — не удалось обработать");
+  if (!finalUrls.length && (packshots.length || rawBackgrounds.length)) {
+    parts.push("не удалось обработать foto — проверьте S3 и доступность исходников");
   }
 
   return {

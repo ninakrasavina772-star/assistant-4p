@@ -75,9 +75,11 @@ function formatPriceCell(price: number): string {
 export async function injectVariationProducts(
   ws: ExcelJS.Worksheet,
   scan: TemplateSheetScan,
-  products: MetabaseProductRow[]
+  products: MetabaseProductRow[],
+  opts?: { skipImages?: boolean }
 ): Promise<{ row: number; sku: string; cells: Record<string, string> }[]> {
   if (!products.length) return [];
+  const skipImages = opts?.skipImages === true;
 
   const skuCol = scan.skuCol ?? 1;
   const nameHeader =
@@ -127,7 +129,7 @@ export async function injectVariationProducts(
     setCell(ws, row, nameCol, p.productName);
     setCell(ws, row, brandCol, p.brandName);
     if (p.ean) setCell(ws, row, eanCol, p.ean);
-    if (imageText && imageCol) setCell(ws, row, imageCol, imageText);
+    if (!skipImages && imageText && imageCol) setCell(ws, row, imageCol, imageText);
 
     if (p.priceUsd != null && p.priceUsd > 0 && priceCol) {
       setCell(ws, row, priceCol, formatPriceCell(p.priceUsd));
@@ -143,3 +145,4 @@ export async function injectVariationProducts(
     return id != null && idSet.has(id);
   });
 }
+
