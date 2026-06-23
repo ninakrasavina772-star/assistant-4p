@@ -144,13 +144,18 @@ export async function buildOnlyBCrossWithA(
           );
           if (colorV === "conflict") continue;
           if (colorV === "unknown") {
-            const visualOk = visualSimilarAcrossAllPhotos(
-              cA,
-              cB,
-              phashCache,
-              CROSS_RUBRIC_FACTORY_PHASH_MAX
-            );
-            if (!visualOk) continue;
+            const imgA = cA.firstImage || cA.allImages?.[0] || "";
+            const imgB = cB.firstImage || cB.allImages?.[0] || "";
+            /** Фото — только если оба превью есть и phash уже загружен; иначе не режем по коду модели. */
+            if (imgA && imgB && phashCache.size > 0) {
+              const visualOk = visualSimilarAcrossAllPhotos(
+                cA,
+                cB,
+                phashCache,
+                CROSS_RUBRIC_FACTORY_PHASH_MAX
+              );
+              if (!visualOk) continue;
+            }
           }
           hitA.add(pA.id);
           rows.push({
