@@ -483,6 +483,16 @@ export type CompareExcludeIdsAInfo = {
   listIdsNotFoundInRubric: number;
 };
 
+
+/** Партия при сравнении двух рубрик одного сайта */
+export type CrossRubricBatchInfo = {
+  limitPerSide: number;
+  fetchedA: number;
+  fetchedB: number;
+  totalA: number;
+  totalB: number;
+};
+
 export type CompareResult = {
   siteALabel: string;
   siteBLabel: string;
@@ -607,6 +617,9 @@ export type CompareResult = {
   unlikelySearch?: UnlikelySearchInfo;
   /** Сайт B загружен через GET /product/info по списку новинок (этап 1), не целиком из рубрик */
   siteBFetchedByNoveltyIds?: boolean;
+  /** Режим «2 рубрики, 1 сайт» */
+  crossRubricMode?: boolean;
+  crossRubricBatch?: CrossRubricBatchInfo;
   /** Каталоги A/B из CSV-фидов (не выгрузка по рубрикам API) */
   catalogFromFeeds?: boolean;
 };

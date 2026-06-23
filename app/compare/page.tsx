@@ -405,7 +405,8 @@ export default function ComparePage() {
   /** id товаров, убрать из каталога A после выгрузки рубрики (до брендов/моделей) */
   const [excludeIdsText, setExcludeIdsText] = useState("");
   /** twoSite — два каталога; singleDups — дубли в одной рубрике (один токен) */
-  const [compareMode, setCompareMode] = useState<"twoSite" | "singleDups">("twoSite");
+  const [compareMode, setCompareMode] = useState<"twoSite" | "singleDups" | "crossRubric">("twoSite");
+  const [crossRubricBatchLimit, setCrossRubricBatchLimit] = useState(600);
   /** api — рубрики и ключи; feeds — CSV из *.4partners.io/my/feed/… или файл */
   const [catalogSource, setCatalogSource] = useState<"api" | "feeds">("api");
   const [feedUrlA, setFeedUrlA] = useState("");
@@ -443,7 +444,7 @@ export default function ComparePage() {
   );
   /** После двух магазинов: только «новинки по id» на B или дубли новинок по артикулу против A */
   const [twoSiteGoal, setTwoSiteGoal] = useState<
-    "noveltiesById" | "dupContourAgainstA" | "cleanNovelties"
+    "noveltiesById" | "cleanNovelties"
   >("noveltiesById");
   /** Вместе с «название+фото»: учитывать объём / оттенок / цвет в JSON товара */
   const [attrMatch, setAttrMatch] = useState({
@@ -1170,14 +1171,18 @@ export default function ComparePage() {
         catalogSource !== "feeds" &&
         compareMode === "twoSite" &&
         noveltyIdsStored.length > 0 &&
-        (twoSiteGoal === "noveltiesById" ||
-          (twoSiteGoal === "dupContourAgainstA" && useNoveltyIdsForSiteB));
+        twoSiteGoal === "noveltiesById";
       const res = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: ac.signal,
         body: JSON.stringify({
-          mode: compareMode === "singleDups" ? "singleDups" : undefined,
+          mode:
+            compareMode === "singleDups"
+              ? "singleDups"
+              : compareMode === "crossRubric"
+                ? "crossRubricDups"
+                : undefined,
           dataSource: catalogSource === "feeds" ? "feeds" : undefined,
           feedUrlA:
             catalogSource === "feeds" && feedUrlA.trim()
@@ -1204,10 +1209,14 @@ export default function ComparePage() {
               : undefined,
           rubricA: rubricAParsedIds[0] ?? 0,
           rubricsA: rubricAParsedIds,
-          ...(compareMode === "twoSite" &&
-          !fetchSiteBOnlyByNoveltyIds &&
-          rubricBParsedIds.length > 0
+          ...((compareMode === "twoSite" &&
+            !fetchSiteBOnlyByNoveltyIds &&
+            rubricBParsedIds.length > 0) ||
+          (compareMode === "crossRubric" && rubricBParsedIds.length > 0)
             ? { rubricsB: rubricBParsedIds }
+            : {}),
+          ...(compareMode === "crossRubric"
+            ? { crossRubricBatchLimit }
             : {}),
           ...(fetchSiteBOnlyByNoveltyIds
             ? {
@@ -1261,16 +1270,18 @@ export default function ComparePage() {
       const cmp = json as CompareResult | SingleSiteDupsResult;
       setData(cmp);
       if (
-        compareMode === "twoSite" &&
+        (compareMode === "twoSite" || compareMode === "crossRubric") &&
         !("resultKind" in cmp && cmp.resultKind === "singleSiteDups")
       ) {
         selectReportView(
-          twoSiteGoal === "noveltiesById" ? "notOnA" : "crossBvsA",
+          compareMode === "crossRubric" || twoSiteGoal !== "noveltiesById"
+            ? "crossBvsA"
+            : "notOnA",
           {
             scrollToId:
-              twoSiteGoal === "noveltiesById"
-                ? "rep-not-on-a"
-                : "rep-cross-b-vs-a"
+              compareMode === "crossRubric" || twoSiteGoal !== "noveltiesById"
+                ? "rep-cross-b-vs-a"
+                : "rep-not-on-a"
           }
         );
       }
@@ -1317,7 +1328,8 @@ export default function ComparePage() {
     feedUrlA,
     feedUrlB,
     feedCsvTextA,
-    feedCsvTextB
+    feedCsvTextB,
+    crossRubricBatchLimit
   ]);
 
   const brandListCount = useMemo(
@@ -1350,13 +1362,9 @@ export default function ComparePage() {
   const rubricAOk = rubricAParsedIds.length >= 1 && rubricACountOk;
   const rubricBCountOk = rubricBParsedIds.length <= MAX_RUBRICS_B;
   const rubricBOk =
-    compareMode !== "twoSite" ||
+    (compareMode !== "twoSite" && compareMode !== "crossRubric") ||
     (rubricBParsedIds.length >= 1 && rubricBCountOk);
 
-  const dupContourUsesNoveltyList =
-    compareMode === "twoSite" &&
-    twoSiteGoal === "dupContourAgainstA" &&
-    useNoveltyIdsForSiteB;
 
   /** После синего шага 1: полное сравнение «Найти новинки» берёт B только по сохранённым id */
   const noveltiesByIdUsesStoredList =
@@ -1366,20 +1374,17 @@ export default function ComparePage() {
 
   /** Для основного запуска: в режиме «только новинки» рубрики B не обязательны */
   const rubricBOkForRun =
-    compareMode !== "twoSite" ||
-    dupContourUsesNoveltyList ||
+    (compareMode !== "twoSite" && compareMode !== "crossRubric") ||
     noveltiesByIdUsesStoredList ||
     (rubricBParsedIds.length >= 1 && rubricBCountOk);
 
   const brandsRequiredForTwoSite =
     catalogSource === "feeds" ||
+    compareMode === "crossRubric" ||
     compareMode !== "twoSite" ||
-    dupContourUsesNoveltyList ||
     noveltiesByIdUsesStoredList ||
     brandListCount > 0;
 
-  const noveltyListOkForDup =
-    !dupContourUsesNoveltyList || noveltyIdsStored.length > 0;
 
   const comparePrimaryDisabled =
     loading ||
@@ -1389,7 +1394,7 @@ export default function ComparePage() {
         : !feedReadyA || !feedReadyB
       : !rubricAOk || !rubricBOkForRun) ||
     (catalogSource !== "feeds" && !brandsRequiredForTwoSite) ||
-    (catalogSource !== "feeds" && !noveltyListOkForDup);
+    false;
 
   const compareDisabledHint = !loading
     ? catalogSource === "feeds"
@@ -1401,7 +1406,7 @@ export default function ComparePage() {
           ? "Режим фидов: для A и B нужны ссылки на фиды или загруженные CSV (по одному источнику на сторону)."
           : null
       : !brandsRequiredForTwoSite && compareMode === "twoSite"
-        ? dupContourUsesNoveltyList
+        ? false
           ? "При желании укажите бренды ниже — пустой список значит все бренды среди сохранённых новинок."
           : "Для двух магазинов укажите хотя бы один бренд — поле ниже или «Добавить список из Excel». Без ограничения по бренду сравнение не запускается."
         : !rubricAOk
@@ -1410,9 +1415,7 @@ export default function ComparePage() {
             ? `На сайте B допускается не более ${MAX_RUBRICS_B} узких рубрик — уберите лишние id (чипы или поле вручную).`
             : compareMode === "twoSite" && !rubricBOkForRun
             ? "Укажите хотя бы одну рубрику B: клик в каскаде справа добавляет id, либо введите id под каскадом. Если ключ B пуст, каскад B строится по ключу A."
-            : dupContourUsesNoveltyList && noveltyIdsStored.length === 0
-              ? "Включён старый режим «только список новинок» для B: выполните синий «Шаг 1» выше или снимите галочку в дополнительном блоке."
-              : null
+            : null
     : null;
 
   const noveltyIdsStageDisabled =
@@ -1963,7 +1966,7 @@ export default function ComparePage() {
         return;
       }
       setData(cmp as CompareResult);
-      setTwoSiteGoal("dupContourAgainstA");
+      setCompareMode("crossRubric");
       setUseNoveltyIdsForSiteB(true);
       selectReportView("crossBvsA", { scrollToId: "rep-cross-b-vs-a" });
       setDupKindFilter("all");
@@ -2008,14 +2011,14 @@ export default function ComparePage() {
   type CatalogMainTask =
     | "singleDups"
     | "twoSite_noveltiesById"
-    | "twoSite_dupContour"
+    | "crossRubric_dups"
     | "twoSite_cleanNovelties";
 
   const catalogMainTask: CatalogMainTask = useMemo(() => {
     if (compareMode === "singleDups") return "singleDups";
+    if (compareMode === "crossRubric") return "crossRubric_dups";
     if (twoSiteGoal === "noveltiesById") return "twoSite_noveltiesById";
-    if (twoSiteGoal === "cleanNovelties") return "twoSite_cleanNovelties";
-    return "twoSite_dupContour";
+    return "twoSite_cleanNovelties";
   }, [compareMode, twoSiteGoal]);
 
   /** Текст главной кнопки запуска (без «Загрузка…») */
@@ -2023,6 +2026,7 @@ export default function ComparePage() {
     if (compareMode === "singleDups") return "Найти дубли";
     if (twoSiteGoal === "noveltiesById") return "Найти новинки";
     if (twoSiteGoal === "cleanNovelties") return "Найти новинки и дубли с A";
+    if (compareMode === "crossRubric") return "Найти дубли между рубриками";
     return "Сравнить витрины";
   }, [compareMode, twoSiteGoal]);
 
@@ -2032,13 +2036,13 @@ export default function ComparePage() {
       setCompareMode("singleDups");
       return;
     }
+    if (t === "crossRubric_dups") {
+      setCompareMode("crossRubric");
+      return;
+    }
     setCompareMode("twoSite");
-    const goal: "noveltiesById" | "dupContourAgainstA" | "cleanNovelties" =
-      t === "twoSite_noveltiesById"
-        ? "noveltiesById"
-        : t === "twoSite_cleanNovelties"
-          ? "cleanNovelties"
-          : "dupContourAgainstA";
+    const goal: "noveltiesById" | "cleanNovelties" =
+      t === "twoSite_noveltiesById" ? "noveltiesById" : "cleanNovelties";
     setTwoSiteGoal(goal);
     if (goal === "noveltiesById" || goal === "cleanNovelties") {
       setUseNoveltyIdsForSiteB(false);
@@ -2051,8 +2055,8 @@ export default function ComparePage() {
         return "Найти дубли в одной рубрике";
       case "twoSite_noveltiesById":
         return "Товары-новинки на второй витрине (нет того же id на A)";
-      case "twoSite_dupContour":
-        return "Кандидаты в дубль между витринами";
+      case "crossRubric_dups":
+        return "Дубли между двумя рубриками одного сайта";
       case "twoSite_cleanNovelties":
         return "Чистый фид B: новинки без дублей на A (по EAN и названию/фото)";
       default:
@@ -2075,15 +2079,16 @@ export default function ComparePage() {
           : feedReadyA && feedReadyB
         : rubricAOk && (compareMode === "singleDups" || rubricBOkForRun);
     const filtersReady =
-      compareMode !== "twoSite" || brandsRequiredForTwoSite;
+      compareMode === "crossRubric" ||
+      compareMode !== "twoSite" ||
+      brandsRequiredForTwoSite;
     const readyToRun =
       rubricsReady &&
       filtersReady &&
-      (catalogSource === "feeds" || noveltyListOkForDup) &&
       !loading;
     const step3Title =
       compareMode === "twoSite"
-        ? dupContourUsesNoveltyList || noveltiesByIdUsesStoredList
+        ? noveltiesByIdUsesStoredList
           ? "Бренды (по желанию) и доп. фильтры"
           : "Бренды (обязательно) и доп. фильтры"
         : "Доп. фильтры: бренды, модели, id";
@@ -2096,7 +2101,9 @@ export default function ComparePage() {
             ? "Ищем повторы и похожие карточки внутри одной рубрики одной витрины."
             : twoSiteGoal === "noveltiesById"
               ? "Две витрины: список позиций на B без той же карточки по внутреннему id на A."
-              : "Две витрины: таблица пар для ручной проверки (код, название, фото).",
+              : compareMode === "crossRubric"
+                ? "Один сайт, две рубрики (разные поставщики): ищем дубли по названию и фото, партиями."
+                : "Две витрины: сравнение каталогов по выбранному сценарию.",
         ok: true,
         fix: null as string | null
       },
@@ -2109,10 +2116,12 @@ export default function ComparePage() {
               ? "Два экспортных CSV (ссылка https://….4partners.io/my/feed/….csv или тот же файл с компьютера). Один источник на сторону: не заполняйте одновременно и ссылку, и файл."
               : "Один фид или файл — внутренние дубли по отобранным строкам."
             : compareMode === "twoSite"
-              ? noveltiesByIdUsesStoredList || dupContourUsesNoveltyList
+              ? noveltiesByIdUsesStoredList
                 ? "A — одна рубрика (для каталога A и синего шага 1). Для жёлтого «Найти новинки» витрина B берётся только из сохранённого списка id; поля рубрик B нужны для шага 1 и если список id очищен."
                 : `A — одна рубрика; B — до ${MAX_RUBRICS_B} узких рубрик (если товары разнесены по каталогу), id в списке.`
-              : "Нужна одна рубрика (id больше нуля).",
+              : compareMode === "crossRubric"
+                ? `Две рубрики одного сайта: A и B (до ${MAX_RUBRICS_B} id каждая). Один ключ API.`
+                : "Нужна одна рубрика (id больше нуля).",
         ok: rubricsReady,
         fix:
           catalogSource === "feeds"
@@ -2136,7 +2145,7 @@ export default function ComparePage() {
         title: step3Title,
         hint:
           compareMode === "twoSite"
-            ? dupContourUsesNoveltyList || noveltiesByIdUsesStoredList
+            ? noveltiesByIdUsesStoredList
               ? "Сайт B подгружается только по сохранённым id новинок; бренды и модели дополнительно отфильтруют этот список после получения карточек из API."
               : "Обязательно укажите бренды; при необходимости откройте блоки ниже — модели, исключение id, ужесточение по объёму/цвету."
             : "По желанию сузьте рубрику брендами, моделями или уберите лишние id с опорной витрины.",
@@ -2144,7 +2153,6 @@ export default function ComparePage() {
         fix:
           compareMode === "twoSite" &&
           !brandsRequiredForTwoSite &&
-          !dupContourUsesNoveltyList &&
           !noveltiesByIdUsesStoredList
             ? "Добавьте хотя бы один бренд в поле ниже или загрузите список из файла."
             : null
@@ -2157,9 +2165,7 @@ export default function ComparePage() {
         fix:
           rubricsReady &&
           filtersReady &&
-          (catalogSource === "feeds" || noveltyListOkForDup)
-            ? null
-            : "Сначала закройте шаги выше.",
+          rubricsReady && filtersReady ? null : "Сначала закройте шаги выше.",
         anchor: "#compare-run-anchor"
       }
     ];
@@ -2172,10 +2178,8 @@ export default function ComparePage() {
     rubricAOk,
     rubricBOkForRun,
     rubricBParsedIds.length,
-    dupContourUsesNoveltyList,
     noveltiesByIdUsesStoredList,
     brandsRequiredForTwoSite,
-    noveltyListOkForDup,
     loading
   ]);
 
@@ -3277,6 +3281,12 @@ export default function ComparePage() {
               <strong className="font-semibold text-slate-900">трёх задач</strong> (полная выгрузка в Excel,
               дубли с витриной A по вкладкам, или только id без пересечения EAN с A).
             </p>
+          ) : compareMode === "crossRubric" ? (
+            <p className="text-base text-slate-800 mt-3 leading-relaxed">
+              Один ключ API и две рубрики (например padelnuestro и b2b padelnuestro). Ищем{" "}
+              <strong className="font-semibold text-slate-900">дубли между поставщиками</strong> по
+              названию и фото — партиями, с исключением уже схлопнутых id.
+            </p>
           ) : (
             <p className="text-base text-slate-800 mt-3 leading-relaxed">
               Страница ведёт по шагам: вы выбираете витрины и рубрики, при необходимости сужаете список
@@ -3659,24 +3669,25 @@ export default function ComparePage() {
             </button>
             <button
               type="button"
-              onClick={() => applyCatalogMainTask("twoSite_dupContour")}
+              onClick={() => applyCatalogMainTask("crossRubric_dups")}
               className={`rounded-xl border-2 p-4 text-left transition ${
-                catalogMainTask === "twoSite_dupContour"
+                catalogMainTask === "crossRubric_dups"
                   ? "border-emerald-600 bg-emerald-50/70 shadow-sm ring-1 ring-emerald-200/60"
                   : "border-slate-200 bg-white hover:border-amber-300/80"
               }`}
             >
               <p className="text-sm font-bold text-slate-900 leading-snug">
-                Кандидаты в дубль — проверить вручную
+                Дубли: 2 рубрики, 1 сайт
               </p>
               <p className="mt-2 text-xs text-slate-600 leading-relaxed">
                 <span className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
                   Через API (нужен ключ)
                 </span>
                 <br />
-                Две витрины: таблица «карточка на A — похожая на B» (код, название, фото).
-                Внутри могут быть надёжные совпадения по штрихкоду — смотреть нужно каждую
-                строку. Медленнее, чем «Чистый фид B», и не показывает дубли внутри новинок.
+                Разные поставщики в двух рубриках одной витрины. Сопоставление по{" "}
+                <strong className="font-semibold text-slate-800">названию и фото</strong> (EAN часто
+                нет). Партиями: нашли дубли → схлопнули → исключили id → пересчёт, пока пары не
+                закончатся.
               </p>
             </button>
             <button
@@ -3879,7 +3890,7 @@ export default function ComparePage() {
                 )}
               </div>
             </div>
-            {compareMode === "twoSite" && (
+            {(compareMode === "twoSite" || compareMode === "crossRubric") && (
               <div className="space-y-2 rounded-lg border border-emerald-200 bg-white/80 px-3 py-3">
                 <span className="text-xs font-semibold text-slate-800">
                   Сайт B ({siteLabelB.trim() || "B"})
@@ -4064,6 +4075,35 @@ export default function ComparePage() {
           </>
         )}
 
+
+        {compareMode === "crossRubric" && catalogSource === "api" && (
+          <div className="mb-4 rounded-xl border border-violet-200 bg-violet-50/40 px-4 py-3 space-y-2">
+            <p className="text-sm font-semibold text-violet-950">
+              Партийный поиск дублей (один сайт, две рубрики)
+            </p>
+            <p className="text-xs text-slate-700 leading-relaxed">
+              За один запуск обрабатывается до N карточек с каждой стороны. После схлопывания
+              добавьте id обеих карточек в «Исключить id на A» и запустите снова — пока в отчёте
+              не останется пар.
+            </p>
+            <label className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-slate-700">Карточек на рубрику за запуск:</span>
+              <input
+                type="number"
+                min={50}
+                max={2000}
+                step={50}
+                className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-sm font-mono"
+                value={crossRubricBatchLimit}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n) && n > 0) setCrossRubricBatchLimit(Math.min(2000, Math.floor(n)));
+                }}
+              />
+            </label>
+          </div>
+        )}
+
         <p className="text-sm font-semibold text-slate-900 mb-4 mt-6 px-0.5 border-l-4 border-slate-300 pl-3 py-0.5">
           Текущая задача: {catalogTaskTitle}
         </p>
@@ -4080,16 +4120,16 @@ export default function ComparePage() {
               искать id в админке не обязательно, если вы вошли в сервис и указали ключ API.
               <span className="block mt-1">
                 <strong>Сайт A:</strong> одна рубрика (опорный каталог).
-                {compareMode === "twoSite" ? (
+                {(compareMode === "twoSite" || compareMode === "crossRubric") ? (
                   <>
                     {" "}
-                    <strong>Сайт B:</strong> до {MAX_RUBRICS_B} рубрик — выгрузки склеим без дублей
+                    <strong>{compareMode === "crossRubric" ? "Рубрика B" : "Сайт B"}:</strong> до {MAX_RUBRICS_B} рубрик — выгрузки склеим без дублей
                     по id товара.
                   </>
                 ) : null}{" "}
                 Только <strong>активные</strong> рубрики в каскаде.
               </span>
-              {compareMode === "twoSite" && (
+              {(compareMode === "twoSite" || compareMode === "crossRubric") && (
                 <span className="block mt-1 text-slate-500">
                   Если ключ B пуст, каскад B строится на том же ключе, что и A.
                 </span>
@@ -4106,7 +4146,7 @@ export default function ComparePage() {
             )}
             <div
               className={`grid gap-4 ${
-                compareMode === "twoSite" ? "sm:grid-cols-2" : ""
+                (compareMode === "twoSite" || compareMode === "crossRubric") ? "sm:grid-cols-2" : ""
               }`}
             >
               <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm space-y-3">
@@ -4180,7 +4220,7 @@ export default function ComparePage() {
                   />
                 </label>
               </div>
-              {compareMode === "twoSite" && (
+              {(compareMode === "twoSite" || compareMode === "crossRubric") && (
                 <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm space-y-3">
                   <p className="text-xs font-semibold text-slate-800">
                     Сайт B — до {MAX_RUBRICS_B} рубрик
@@ -4994,58 +5034,8 @@ export default function ComparePage() {
                         Excel.
                       </span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => applyCatalogMainTask("twoSite_dupContour")}
-                      className={`rounded-2xl border-2 px-5 py-4 text-left transition ${
-                        twoSiteGoal === "dupContourAgainstA"
-                          ? "border-emerald-600 bg-white shadow-md ring-2 ring-emerald-500/25"
-                          : "border-slate-200 bg-white/90 hover:border-emerald-300"
-                      }`}
-                    >
-                      <span className="block text-base font-bold text-slate-900 leading-snug">
-                        Похожесть между витринами{" "}
-                        <span className="font-normal text-slate-600">(проверить вручную)</span>
-                      </span>
-                      <span className="mt-2 block text-sm text-slate-600 leading-relaxed">
-                        Для ручной проверки возможных дублей: скан, код, название рядом. Сначала
-                        надёжные совпадения, затем более мягкие.
-                      </span>
-                    </button>
+
                   </div>
-                  {twoSiteGoal === "dupContourAgainstA" && (
-                    <div className="mt-4 rounded-xl border border-emerald-400/50 bg-white px-4 py-3 space-y-2">
-                      <label className="flex items-start gap-2 text-sm text-slate-800 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="mt-1 shrink-0"
-                          checked={useNoveltyIdsForSiteB}
-                          onChange={(e) => setUseNoveltyIdsForSiteB(e.target.checked)}
-                        />
-                        <span>
-                          <strong>Этап 2:</strong> для сайта B использовать только сохранённый список новинок по ID
-                          (не выгружать всю рубрику B целиком).
-                        </span>
-                      </label>
-                      <p className="text-xs text-slate-600 pl-6">
-                        Сохранено id в браузере:{" "}
-                        <strong className="text-slate-800">{noveltyIdsStored.length}</strong>.
-                        {noveltyIdsStored.length === 0 ? (
-                          <>
-                            {" "}
-                            Сначала выполните <strong>шаг 1</strong> в синем блоке «Новинки: короткий сценарий» выше.
-                          </>
-                        ) : null}{" "}
-                        <button
-                          type="button"
-                          onClick={clearStoredNoveltyIds}
-                          className="underline text-slate-700 hover:text-slate-900"
-                        >
-                          Очистить список
-                        </button>
-                      </p>
-                    </div>
-                  )}
                   <p className="mt-5 text-sm font-medium text-emerald-950 rounded-xl bg-white border border-emerald-200/90 px-4 py-3">
                     {twoSiteGoal === "noveltiesById" ? (
                       <>
@@ -6742,17 +6732,24 @@ export default function ComparePage() {
               </button>
             </div>
           )}
-          {twoSiteGoal === "dupContourAgainstA" && (
-            <div className="mb-6 p-4 rounded-xl border-2 border-emerald-700/40 bg-white">
-              <h3 className="text-sm font-semibold text-emerald-950 mb-1">
-                Выбранный сценарий: дубли из «новинок по артикулу» {data.siteBLabel} по каталогу{" "}
-                {data.siteALabel}
+          {(compareMode === "crossRubric" || data.crossRubricMode) && (
+            <div className="mb-6 p-4 rounded-xl border-2 border-violet-500/40 bg-violet-50/30">
+              <h3 className="text-sm font-semibold text-violet-950 mb-1">
+                Дубли между рубриками: {data.siteALabel} ↔ {data.siteBLabel}
               </h3>
+              <p className="text-xs text-slate-600 mb-2">
+                Найдено пар: <strong className="tabular-nums">{crossRowKindCounts.total}</strong>.
+                {data.crossRubricBatch ? (
+                  <>
+                    {" "}
+                    Партия: до {data.crossRubricBatch.limitPerSide} с каждой стороны (загружено{" "}
+                    {data.crossRubricBatch.fetchedA} / {data.crossRubricBatch.fetchedB} из{" "}
+                    {data.crossRubricBatch.totalA} / {data.crossRubricBatch.totalB}).
+                  </>
+                ) : null}
+              </p>
               <p className="text-xs text-slate-600 mb-3">
-                Всего найденных пар второго контура:{" "}
-                <strong className="tabular-nums">{crossRowKindCounts.total}</strong>. Слои включают EAN/артикул,
-                название+фото и слабых кандидатов — переключатель в блоке статистики выше; отдельно вкладка{" "}
-                <strong>Дубли AI</strong> для пар вне автоматики.
+                Схлопните дубли в каталоге, добавьте id в исключения и перезапустите расчёт.
               </p>
               <button
                 type="button"
@@ -6761,9 +6758,9 @@ export default function ComparePage() {
                     scrollToId: "rep-cross-b-vs-a"
                   })
                 }
-                className="rounded-lg border border-emerald-800 text-emerald-950 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-50"
+                className="rounded-lg border border-violet-800 text-violet-950 px-3 py-1.5 text-xs font-semibold hover:bg-violet-50"
               >
-                Открыть вкладку с парами A ↔ B
+                Открыть таблицу пар
               </button>
             </div>
           )}

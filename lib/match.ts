@@ -464,3 +464,73 @@ export async function runCompare(
     onlyAInternalDups
   };
 }
+
+
+const EMPTY_INTRA = {
+  eanGroups: [],
+  eanGroupsSummary: { groupCount: 0, uniqueProductCount: 0, rowSlotsInGroups: 0 },
+  nameGroups: [],
+  nameGroupsSummary: { groupCount: 0, uniqueProductCount: 0, rowSlotsInGroups: 0 },
+  namePhotoPairs: [],
+  brandVisualPairs: [],
+  unlikelyPairs: []
+};
+
+/** Две рубрики одного сайта (разные поставщики): полный кросс по названию+фото, без этапа «новинки». */
+export async function runCrossRubricCompare(
+  productsA: FpProduct[],
+  productsB: FpProduct[],
+  nameLocale: NameLocale,
+  rubricALabel: string,
+  rubricBLabel: string,
+  attrOpts?: AttrMatchOptions
+): Promise<CompareResult> {
+  const onlyBCrossWithA = await buildOnlyBCrossWithA(
+    productsB,
+    productsA,
+    nameLocale,
+    attrOpts
+  );
+  const onlyACrossWithB = await buildOnlyACrossWithB(
+    productsA,
+    productsB,
+    nameLocale,
+    attrOpts
+  );
+
+  return {
+    siteALabel: rubricALabel,
+    siteBLabel: rubricBLabel,
+    nameLocale,
+    idMatches: [],
+    unplacedBByIdRaw: [],
+    unplacedAByIdRaw: [],
+    intraSiteADups: EMPTY_INTRA,
+    intraSiteBDups: EMPTY_INTRA,
+    eanMatches: [],
+    eanTrivialSameId: 0,
+    articleTrivialSameId: 0,
+    articleMatches: [],
+    nameMatches: [],
+    onlyA: [],
+    onlyB: [],
+    stats: {
+      countA: productsA.length,
+      countB: productsB.length,
+      idPlacedCount: 0,
+      unplacedBByIdCount: 0,
+      unplacedAByIdCount: 0,
+      noveltiesBByArticleCount: 0,
+      noveltiesAByArticleCount: 0,
+      eanMatchCount: 0,
+      articleMatchCount: 0,
+      nameCandidateCount: 0
+    },
+    duplicateEanWarnings: [],
+    duplicateArticleWarnings: [],
+    onlyBCrossWithA,
+    onlyACrossWithB,
+    onlyBInternalDups: [],
+    onlyAInternalDups: []
+  };
+}

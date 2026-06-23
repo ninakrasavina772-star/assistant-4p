@@ -24,7 +24,7 @@ import { filterFpProductsByModels, mergeModelLists, type ModelMatchMode } from "
 import { fetchPartnersFeedText } from "@/lib/partnersFeedFetch";
 import { MAX_RUBRICS_B } from "@/lib/rubricIds";
 import { parsePartnersFeedCsv } from "@/lib/partnersFeedCsv";
-import { runCompare } from "@/lib/match";
+import { runCompare, runCrossRubricCompare } from "@/lib/match";
 import { collectEanIndexKeys, countProductsWithEanIndexKeys, toCompareProduct } from "@/lib/product";
 import type {
   AttrMatchOptions,
@@ -416,7 +416,104 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.comparePhase === "noveltyIdsSlice") {
-      const tokenA = resolveToken(body.tokenA, "A"),
+  
+    const crossRubricMode = body.mode === "crossRubricDups";
+    const CROSS_RUBRIC_BATCH_DEFAULT = 600;
+
+    if (crossRubricMode) {
+      const token = resolveToken(body.tokenA, "A");
+      if (token.length < MIN_TOKEN_LEN) {
+        return NextResponse.json(
+          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          { status: 400 }
+        );
+      }
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
+      }
+      const rubricBIds = parseRubricBIds(body);
+      if (!rubricBIds.length) {
+        return NextResponse.json({ error: "Укажите rubricsB (вторая рубрика)" }, { status: 400 });
+      }
+      const rubricAErr = rubricBCountError(rubricAIds);
+      if (rubricAErr) {
+        return NextResponse.json(
+          { error: rubricAErr.replace("сайт B", "рубрика A") },
+          { status: 400 }
+        );
+      }
+      const rubricBErr = rubricBCountError(rubricBIds);
+      if (rubricBErr) {
+        return NextResponse.json({ error: rubricBErr }, { status: 400 });
+      }
+      const batchLimitRaw = Number(body.crossRubricBatchLimit);
+      const batchLimit =
+        Number.isFinite(batchLimitRaw) && batchLimitRaw > 0
+          ? Math.min(Math.floor(batchLimitRaw), 2000)
+          : CROSS_RUBRIC_BATCH_DEFAULT;
+      const pipeB: RubricFetchPipeline = {
+        ...pipeShared,
+        excludeIds: excludeSet,
+        excludeIdsRaw: excludeIdsRaw.length ? excludeIdsRaw : undefined
+      };
+      const rubricALabel =
+        typeof body.siteALabel === "string" && body.siteALabel.trim()
+          ? body.siteALabel.trim()
+          : "Рубрика A";
+      const rubricBLabel =
+        typeof body.siteBLabel === "string" && body.siteBLabel.trim()
+          ? body.siteBLabel.trim()
+          : "Рубрика B";
+
+      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+      const totalA = mergedA.products.length;
+      const totalB = mergedB.products.length;
+      const productsA = mergedA.products.slice(0, batchLimit);
+      const productsB = mergedB.products.slice(0, batchLimit);
+
+      const cmp = await runCrossRubricCompare(
+        productsA,
+        productsB,
+        nameLocale,
+        rubricALabel,
+        rubricBLabel,
+        attrMatch
+      );
+      const brandFilter = buildBrandFilterInfo(
+        brandsRaw,
+        brandMatch,
+        mergedA.brandExcludedMissing,
+        mergedA.brandExcludedNotInList,
+        mergedB.brandExcludedMissing,
+        mergedB.brandExcludedNotInList
+      );
+      const modelFilter = buildModelFilterInfo(
+        modelsRaw,
+        modelMatch,
+        mergedA.modelExcludedNotInList,
+        mergedB.modelExcludedNotInList
+      );
+      const result: CompareResult = {
+        ...cmp,
+        brandFilter,
+        modelFilter,
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        unlikelySearch: buildUnlikelySearch(attrMatch),
+        crossRubricMode: true,
+        crossRubricBatch: {
+          limitPerSide: batchLimit,
+          fetchedA: productsA.length,
+          fetchedB: productsB.length,
+          totalA,
+          totalB
+        }
+      };
+      return NextResponse.json(result);
+    }
+
+    const tokenA = resolveToken(body.tokenA, "A"),
         tokenB = resolveToken(body.tokenB, "B");
       if (tokenA.length < MIN_TOKEN_LEN || tokenB.length < MIN_TOKEN_LEN) {
         return NextResponse.json({ error: "Нужны ключи API для сайтов A и B (или переменные окружения)" }, { status: 400 });
@@ -486,7 +583,104 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.wizardTask === "noveltyIdsNoEanOnA") {
-      const tokenA = resolveToken(body.tokenA, "A"),
+  
+    const crossRubricMode = body.mode === "crossRubricDups";
+    const CROSS_RUBRIC_BATCH_DEFAULT = 600;
+
+    if (crossRubricMode) {
+      const token = resolveToken(body.tokenA, "A");
+      if (token.length < MIN_TOKEN_LEN) {
+        return NextResponse.json(
+          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          { status: 400 }
+        );
+      }
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
+      }
+      const rubricBIds = parseRubricBIds(body);
+      if (!rubricBIds.length) {
+        return NextResponse.json({ error: "Укажите rubricsB (вторая рубрика)" }, { status: 400 });
+      }
+      const rubricAErr = rubricBCountError(rubricAIds);
+      if (rubricAErr) {
+        return NextResponse.json(
+          { error: rubricAErr.replace("сайт B", "рубрика A") },
+          { status: 400 }
+        );
+      }
+      const rubricBErr = rubricBCountError(rubricBIds);
+      if (rubricBErr) {
+        return NextResponse.json({ error: rubricBErr }, { status: 400 });
+      }
+      const batchLimitRaw = Number(body.crossRubricBatchLimit);
+      const batchLimit =
+        Number.isFinite(batchLimitRaw) && batchLimitRaw > 0
+          ? Math.min(Math.floor(batchLimitRaw), 2000)
+          : CROSS_RUBRIC_BATCH_DEFAULT;
+      const pipeB: RubricFetchPipeline = {
+        ...pipeShared,
+        excludeIds: excludeSet,
+        excludeIdsRaw: excludeIdsRaw.length ? excludeIdsRaw : undefined
+      };
+      const rubricALabel =
+        typeof body.siteALabel === "string" && body.siteALabel.trim()
+          ? body.siteALabel.trim()
+          : "Рубрика A";
+      const rubricBLabel =
+        typeof body.siteBLabel === "string" && body.siteBLabel.trim()
+          ? body.siteBLabel.trim()
+          : "Рубрика B";
+
+      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+      const totalA = mergedA.products.length;
+      const totalB = mergedB.products.length;
+      const productsA = mergedA.products.slice(0, batchLimit);
+      const productsB = mergedB.products.slice(0, batchLimit);
+
+      const cmp = await runCrossRubricCompare(
+        productsA,
+        productsB,
+        nameLocale,
+        rubricALabel,
+        rubricBLabel,
+        attrMatch
+      );
+      const brandFilter = buildBrandFilterInfo(
+        brandsRaw,
+        brandMatch,
+        mergedA.brandExcludedMissing,
+        mergedA.brandExcludedNotInList,
+        mergedB.brandExcludedMissing,
+        mergedB.brandExcludedNotInList
+      );
+      const modelFilter = buildModelFilterInfo(
+        modelsRaw,
+        modelMatch,
+        mergedA.modelExcludedNotInList,
+        mergedB.modelExcludedNotInList
+      );
+      const result: CompareResult = {
+        ...cmp,
+        brandFilter,
+        modelFilter,
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        unlikelySearch: buildUnlikelySearch(attrMatch),
+        crossRubricMode: true,
+        crossRubricBatch: {
+          limitPerSide: batchLimit,
+          fetchedA: productsA.length,
+          fetchedB: productsB.length,
+          totalA,
+          totalB
+        }
+      };
+      return NextResponse.json(result);
+    }
+
+    const tokenA = resolveToken(body.tokenA, "A"),
         tokenB = resolveToken(body.tokenB, "B");
       if (tokenA.length < MIN_TOKEN_LEN || tokenB.length < MIN_TOKEN_LEN) {
         return NextResponse.json({ error: "Нужны ключи API для сайтов A и B" }, { status: 400 });
@@ -539,7 +733,104 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.comparePhase === "noveltyIds") {
-      const tokenA = resolveToken(body.tokenA, "A"),
+  
+    const crossRubricMode = body.mode === "crossRubricDups";
+    const CROSS_RUBRIC_BATCH_DEFAULT = 600;
+
+    if (crossRubricMode) {
+      const token = resolveToken(body.tokenA, "A");
+      if (token.length < MIN_TOKEN_LEN) {
+        return NextResponse.json(
+          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          { status: 400 }
+        );
+      }
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
+      }
+      const rubricBIds = parseRubricBIds(body);
+      if (!rubricBIds.length) {
+        return NextResponse.json({ error: "Укажите rubricsB (вторая рубрика)" }, { status: 400 });
+      }
+      const rubricAErr = rubricBCountError(rubricAIds);
+      if (rubricAErr) {
+        return NextResponse.json(
+          { error: rubricAErr.replace("сайт B", "рубрика A") },
+          { status: 400 }
+        );
+      }
+      const rubricBErr = rubricBCountError(rubricBIds);
+      if (rubricBErr) {
+        return NextResponse.json({ error: rubricBErr }, { status: 400 });
+      }
+      const batchLimitRaw = Number(body.crossRubricBatchLimit);
+      const batchLimit =
+        Number.isFinite(batchLimitRaw) && batchLimitRaw > 0
+          ? Math.min(Math.floor(batchLimitRaw), 2000)
+          : CROSS_RUBRIC_BATCH_DEFAULT;
+      const pipeB: RubricFetchPipeline = {
+        ...pipeShared,
+        excludeIds: excludeSet,
+        excludeIdsRaw: excludeIdsRaw.length ? excludeIdsRaw : undefined
+      };
+      const rubricALabel =
+        typeof body.siteALabel === "string" && body.siteALabel.trim()
+          ? body.siteALabel.trim()
+          : "Рубрика A";
+      const rubricBLabel =
+        typeof body.siteBLabel === "string" && body.siteBLabel.trim()
+          ? body.siteBLabel.trim()
+          : "Рубрика B";
+
+      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+      const totalA = mergedA.products.length;
+      const totalB = mergedB.products.length;
+      const productsA = mergedA.products.slice(0, batchLimit);
+      const productsB = mergedB.products.slice(0, batchLimit);
+
+      const cmp = await runCrossRubricCompare(
+        productsA,
+        productsB,
+        nameLocale,
+        rubricALabel,
+        rubricBLabel,
+        attrMatch
+      );
+      const brandFilter = buildBrandFilterInfo(
+        brandsRaw,
+        brandMatch,
+        mergedA.brandExcludedMissing,
+        mergedA.brandExcludedNotInList,
+        mergedB.brandExcludedMissing,
+        mergedB.brandExcludedNotInList
+      );
+      const modelFilter = buildModelFilterInfo(
+        modelsRaw,
+        modelMatch,
+        mergedA.modelExcludedNotInList,
+        mergedB.modelExcludedNotInList
+      );
+      const result: CompareResult = {
+        ...cmp,
+        brandFilter,
+        modelFilter,
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        unlikelySearch: buildUnlikelySearch(attrMatch),
+        crossRubricMode: true,
+        crossRubricBatch: {
+          limitPerSide: batchLimit,
+          fetchedA: productsA.length,
+          fetchedB: productsB.length,
+          totalA,
+          totalB
+        }
+      };
+      return NextResponse.json(result);
+    }
+
+    const tokenA = resolveToken(body.tokenA, "A"),
         tokenB = resolveToken(body.tokenB, "B");
       if (tokenA.length < MIN_TOKEN_LEN || tokenB.length < MIN_TOKEN_LEN) {
         return NextResponse.json({ error: "Нужны ключи API для сайтов A и B" }, { status: 400 });
@@ -905,6 +1196,103 @@ export async function POST(req: NextRequest) {
         unlikelySearch: buildUnlikelySearch(attrMatch)
       };
       return NextResponse.json(single);
+    }
+
+
+    const crossRubricMode = body.mode === "crossRubricDups";
+    const CROSS_RUBRIC_BATCH_DEFAULT = 600;
+
+    if (crossRubricMode) {
+      const token = resolveToken(body.tokenA, "A");
+      if (token.length < MIN_TOKEN_LEN) {
+        return NextResponse.json(
+          { error: "Нужен ключ API (один сайт, одна витрина)" },
+          { status: 400 }
+        );
+      }
+      const rubricAIds = parseRubricAIds(body);
+      if (!rubricAIds.length) {
+        return NextResponse.json({ error: "Некорректная rubricA / rubricsA" }, { status: 400 });
+      }
+      const rubricBIds = parseRubricBIds(body);
+      if (!rubricBIds.length) {
+        return NextResponse.json({ error: "Укажите rubricsB (вторая рубрика)" }, { status: 400 });
+      }
+      const rubricAErr = rubricBCountError(rubricAIds);
+      if (rubricAErr) {
+        return NextResponse.json(
+          { error: rubricAErr.replace("сайт B", "рубрика A") },
+          { status: 400 }
+        );
+      }
+      const rubricBErr = rubricBCountError(rubricBIds);
+      if (rubricBErr) {
+        return NextResponse.json({ error: rubricBErr }, { status: 400 });
+      }
+      const batchLimitRaw = Number(body.crossRubricBatchLimit);
+      const batchLimit =
+        Number.isFinite(batchLimitRaw) && batchLimitRaw > 0
+          ? Math.min(Math.floor(batchLimitRaw), 2000)
+          : CROSS_RUBRIC_BATCH_DEFAULT;
+      const pipeB: RubricFetchPipeline = {
+        ...pipeShared,
+        excludeIds: excludeSet,
+        excludeIdsRaw: excludeIdsRaw.length ? excludeIdsRaw : undefined
+      };
+      const rubricALabel =
+        typeof body.siteALabel === "string" && body.siteALabel.trim()
+          ? body.siteALabel.trim()
+          : "Рубрика A";
+      const rubricBLabel =
+        typeof body.siteBLabel === "string" && body.siteBLabel.trim()
+          ? body.siteBLabel.trim()
+          : "Рубрика B";
+
+      const mergedA = await fetchMergedRubricsProducts(token, siteVariation, rubricAIds, pipeA);
+      const mergedB = await fetchMergedRubricsProducts(token, siteVariation, rubricBIds, pipeB);
+      const totalA = mergedA.products.length;
+      const totalB = mergedB.products.length;
+      const productsA = mergedA.products.slice(0, batchLimit);
+      const productsB = mergedB.products.slice(0, batchLimit);
+
+      const cmp = await runCrossRubricCompare(
+        productsA,
+        productsB,
+        nameLocale,
+        rubricALabel,
+        rubricBLabel,
+        attrMatch
+      );
+      const brandFilter = buildBrandFilterInfo(
+        brandsRaw,
+        brandMatch,
+        mergedA.brandExcludedMissing,
+        mergedA.brandExcludedNotInList,
+        mergedB.brandExcludedMissing,
+        mergedB.brandExcludedNotInList
+      );
+      const modelFilter = buildModelFilterInfo(
+        modelsRaw,
+        modelMatch,
+        mergedA.modelExcludedNotInList,
+        mergedB.modelExcludedNotInList
+      );
+      const result: CompareResult = {
+        ...cmp,
+        brandFilter,
+        modelFilter,
+        excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, mergedA.excludeMeta),
+        unlikelySearch: buildUnlikelySearch(attrMatch),
+        crossRubricMode: true,
+        crossRubricBatch: {
+          limitPerSide: batchLimit,
+          fetchedA: productsA.length,
+          fetchedB: productsB.length,
+          totalA,
+          totalB
+        }
+      };
+      return NextResponse.json(result);
     }
 
     const tokenA = resolveToken(body.tokenA, "A"),
