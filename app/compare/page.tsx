@@ -6689,11 +6689,17 @@ export default function ComparePage() {
               <p className="text-xs text-slate-600">пар между A и B</p>
             </div>
             <div className="rounded-xl border border-amber-200/80 bg-amber-50/40 p-4 shadow-sm">
-              <p className="text-[11px] uppercase text-amber-900 font-medium">Кандидаты</p>
-              <p className="text-lg font-semibold text-amber-950">
-                {data.stats.nameCandidateCount}
+              <p className="text-[11px] uppercase text-amber-900 font-medium">
+                {data.crossRubricMode ? "Дубли (всего)" : "Кандидаты"}
               </p>
-              <p className="text-xs text-slate-600">модель+фото / название</p>
+              <p className="text-lg font-semibold text-amber-950">
+                {data.crossRubricMode ? crossRowKindCounts.total : data.stats.nameCandidateCount}
+              </p>
+              <p className="text-xs text-slate-600">
+                {data.crossRubricMode
+                  ? `название+фото: ${crossRowKindCounts.nameAttr}`
+                  : "модель+фото / название"}
+              </p>
             </div>
           </div>
           <div className="mb-6 p-3 rounded-xl border border-slate-200 bg-slate-50/80 flex flex-wrap gap-2 items-center">
@@ -6827,6 +6833,7 @@ export default function ComparePage() {
               )}
             </section>
           )}
+          {!data.crossRubricMode ? (
           <p className="text-xs text-slate-600 mb-4">
             <strong className="text-slate-800">По id товара:</strong> совпало на обеих витринах —{" "}
             {data.stats.idPlacedCount ?? data.idMatches?.length ?? 0}; на {data.siteBLabel}{" "}
@@ -6852,7 +6859,15 @@ export default function ComparePage() {
               </>
             )}
           </p>
-          {twoSiteGoal === "noveltiesById" && (
+          ) : (
+            <p className="text-xs text-slate-600 mb-4">
+              <strong className="text-slate-800">Дубли между рубриками:</strong> найдено пар —{" "}
+              <strong className="tabular-nums">{crossRowKindCounts.total}</strong> (название+фото:{" "}
+              {crossRowKindCounts.nameAttr}, EAN/артикул: {crossRowKindCounts.codeLayer}). Разные id на
+              одном сайте — нормально; схлопываем по названию и фото, не по внутреннему id.
+            </p>
+          )}
+          {twoSiteGoal === "noveltiesById" && !data.crossRubricMode && (
             <div className="mb-6 p-4 rounded-xl border-2 border-emerald-400/60 bg-emerald-50/50">
               <h3 className="text-sm font-semibold text-emerald-950">
                 Выбранный сценарий: новинки на {data.siteBLabel} (нет пары по id на{" "}
@@ -7609,15 +7624,27 @@ export default function ComparePage() {
           {reportView === "crossBvsA" && (
             <section className="mb-10 scroll-mt-24" id="rep-cross-b-vs-a">
               <h2 className="text-lg font-semibold text-slate-900 mb-1">
-                E · Второй контур: новинки {data.siteBLabel} против каталога {data.siteALabel}
+                {data.crossRubricMode
+                  ? `Дубли: ${data.siteBLabel} ↔ ${data.siteALabel}`
+                  : `E · Второй контур: новинки ${data.siteBLabel} против каталога ${data.siteALabel}`}
               </h2>
               <p className="text-sm text-slate-600 mb-3">
-                Берутся только товары с B из списка «новинки по артикулу» (артикула нет на A). Для
-                каждой позиции в полной выгрузке {data.siteALabel} ищем совпадение по{" "}
-                <strong>общему EAN</strong> (при другом артикуле), затем по{" "}
-                <strong>названию + фото</strong>, режим ~60% (бренд, линейка в названии, мягкий порог по превью картинки) и
-                блок ~45% маловероятных (<strong>строже по картинке</strong>; явное «парфюм vs тушь» по словам в заголовке
-                отсекается).
+                {data.crossRubricMode ? (
+                  <>
+                    Сравниваем <strong>весь каталог</strong> обеих рубрик одного сайта (не «новинки»).
+                    Совпадение: <strong>EAN</strong> (если есть), затем <strong>название + фото</strong> — основной
+                    режим, когда штрихкода нет.
+                  </>
+                ) : (
+                  <>
+                    Берутся только товары с B из списка «новинки по артикулу» (артикула нет на A). Для
+                    каждой позиции в полной выгрузке {data.siteALabel} ищем совпадение по{" "}
+                    <strong>общему EAN</strong> (при другом артикуле), затем по{" "}
+                    <strong>названию + фото</strong>, режим ~60% (бренд, линейка в названии, мягкий порог по превью картинки) и
+                    блок ~45% маловероятных (<strong>строже по картинке</strong>; явное «парфюм vs тушь» по словам в заголовке
+                    отсекается).
+                  </>
+                )}
               </p>
               <div className="mb-4 rounded-lg border border-amber-300/80 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-950 leading-relaxed">
                 <p className="font-semibold text-amber-950 mb-1">

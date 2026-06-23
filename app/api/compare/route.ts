@@ -1007,102 +1007,6 @@ export async function POST(req: NextRequest) {
     const cleanNoveltiesMode = body.mode === "twoFeedsCleanNovelties";
 
     if (feedsMode && cleanNoveltiesMode) {
-      if (body.mode === "crossRubricDups") {
-        const CROSS_RUBRIC_BATCH_DEFAULT = 600;
-        const batchLimitRaw = Number(body.crossRubricBatchLimit);
-        const batchLimit =
-          Number.isFinite(batchLimitRaw) && batchLimitRaw > 0
-            ? Math.min(Math.floor(batchLimitRaw), 2000)
-            : CROSS_RUBRIC_BATCH_DEFAULT;
-        const pipeB: RubricFetchPipeline = {
-          ...pipeShared,
-          excludeIds: excludeSet,
-          excludeIdsRaw: excludeIdsRaw.length ? excludeIdsRaw : undefined
-        };
-        const rubricALabel =
-          typeof body.siteALabel === "string" && body.siteALabel.trim()
-            ? body.siteALabel.trim()
-            : "Рубрика A";
-        const rubricBLabel =
-          typeof body.siteBLabel === "string" && body.siteBLabel.trim()
-            ? body.siteBLabel.trim()
-            : "Рубрика B";
-        const csvA = await resolveFeedCsvInput("Рубрика A", body.feedUrlA, body.feedCsvTextA);
-        const csvB = await resolveFeedCsvInput("Рубрика B", body.feedUrlB, body.feedCsvTextB);
-        const rawA = await parsePartnersFeedCsv(csvA);
-        const rawB = await parsePartnersFeedCsv(csvB);
-        const appliedA = applyRubricFetchPipeline(rawA, pipeA, "A");
-        const appliedB = applyRubricFetchPipeline(rawB, pipeB, "B");
-        const totalA = appliedA.out.length;
-        const totalB = appliedB.out.length;
-        const idsSeenA = new Set(rawA.map((p) => p.id));
-        let nfA = 0;
-        for (const id of excludeIdsRaw) {
-          if (!idsSeenA.has(id)) nfA++;
-        }
-        let productsA = appliedA.out.slice(0, batchLimit);
-        let productsB = appliedB.out.slice(0, batchLimit);
-        const feedToken = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
-        if (feedToken.length >= MIN_TOKEN_LEN) {
-          const enrichedA = await enrichFeedProductsFromApi(
-            feedToken,
-            siteVariation,
-            productsA
-          );
-          productsA = enrichedA.products;
-          const enrichedB = await enrichFeedProductsFromApi(
-            feedToken,
-            siteVariation,
-            productsB
-          );
-          productsB = enrichedB.products;
-        }
-        const cmp = await runCrossRubricCompare(
-          productsA,
-          productsB,
-          nameLocale,
-          rubricALabel,
-          rubricBLabel,
-          attrMatch
-        );
-        const brandFilter = buildBrandFilterInfo(
-          brandsRaw,
-          brandMatch,
-          appliedA.brandExcludedMissing,
-          appliedA.brandExcludedNotInList,
-          appliedB.brandExcludedMissing,
-          appliedB.brandExcludedNotInList
-        );
-        const modelFilter = buildModelFilterInfo(
-          modelsRaw,
-          modelMatch,
-          appliedA.modelExcludedNotInList,
-          appliedB.modelExcludedNotInList
-        );
-        const excludeMetaA =
-          excludeIdsRaw.length > 0
-            ? { removedFromA: appliedA.excludeRemovedFromA, listIdsNotFoundInRubric: nfA }
-            : undefined;
-        const result: CompareResult = {
-          ...cmp,
-          brandFilter,
-          modelFilter,
-          excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, excludeMetaA),
-          unlikelySearch: buildUnlikelySearch(attrMatch),
-          catalogFromFeeds: true,
-          crossRubricMode: true,
-          crossRubricDataSource: "feeds",
-          crossRubricBatch: {
-            limitPerSide: batchLimit,
-            fetchedA: productsA.length,
-            fetchedB: productsB.length,
-            totalA,
-            totalB
-          }
-        };
-        return NextResponse.json(result);
-      }
-
       const csvA = await resolveFeedCsvInput("Сайт A", body.feedUrlA, body.feedCsvTextA);
       const csvB = await resolveFeedCsvInput("Сайт B", body.feedUrlB, body.feedCsvTextB);
       const rawA = await parsePartnersFeedCsv(csvA);
@@ -1298,6 +1202,102 @@ export async function POST(req: NextRequest) {
           unlikelySearch: buildUnlikelySearch(attrMatch)
         };
         return NextResponse.json(single);
+      }
+
+      if (body.mode === "crossRubricDups") {
+        const CROSS_RUBRIC_BATCH_DEFAULT = 600;
+        const batchLimitRaw = Number(body.crossRubricBatchLimit);
+        const batchLimit =
+          Number.isFinite(batchLimitRaw) && batchLimitRaw > 0
+            ? Math.min(Math.floor(batchLimitRaw), 2000)
+            : CROSS_RUBRIC_BATCH_DEFAULT;
+        const pipeB: RubricFetchPipeline = {
+          ...pipeShared,
+          excludeIds: excludeSet,
+          excludeIdsRaw: excludeIdsRaw.length ? excludeIdsRaw : undefined
+        };
+        const rubricALabel =
+          typeof body.siteALabel === "string" && body.siteALabel.trim()
+            ? body.siteALabel.trim()
+            : "Рубрика A";
+        const rubricBLabel =
+          typeof body.siteBLabel === "string" && body.siteBLabel.trim()
+            ? body.siteBLabel.trim()
+            : "Рубрика B";
+        const csvA = await resolveFeedCsvInput("Рубрика A", body.feedUrlA, body.feedCsvTextA);
+        const csvB = await resolveFeedCsvInput("Рубрика B", body.feedUrlB, body.feedCsvTextB);
+        const rawA = await parsePartnersFeedCsv(csvA);
+        const rawB = await parsePartnersFeedCsv(csvB);
+        const appliedA = applyRubricFetchPipeline(rawA, pipeA, "A");
+        const appliedB = applyRubricFetchPipeline(rawB, pipeB, "B");
+        const totalA = appliedA.out.length;
+        const totalB = appliedB.out.length;
+        const idsSeenA = new Set(rawA.map((p) => p.id));
+        let nfA = 0;
+        for (const id of excludeIdsRaw) {
+          if (!idsSeenA.has(id)) nfA++;
+        }
+        let productsA = appliedA.out.slice(0, batchLimit);
+        let productsB = appliedB.out.slice(0, batchLimit);
+        const feedToken = resolveToken(body.tokenA, "A") || resolveToken(body.tokenB, "B");
+        if (feedToken.length >= MIN_TOKEN_LEN) {
+          const enrichedA = await enrichFeedProductsFromApi(
+            feedToken,
+            siteVariation,
+            productsA
+          );
+          productsA = enrichedA.products;
+          const enrichedB = await enrichFeedProductsFromApi(
+            feedToken,
+            siteVariation,
+            productsB
+          );
+          productsB = enrichedB.products;
+        }
+        const cmp = await runCrossRubricCompare(
+          productsA,
+          productsB,
+          nameLocale,
+          rubricALabel,
+          rubricBLabel,
+          attrMatch
+        );
+        const brandFilter = buildBrandFilterInfo(
+          brandsRaw,
+          brandMatch,
+          appliedA.brandExcludedMissing,
+          appliedA.brandExcludedNotInList,
+          appliedB.brandExcludedMissing,
+          appliedB.brandExcludedNotInList
+        );
+        const modelFilter = buildModelFilterInfo(
+          modelsRaw,
+          modelMatch,
+          appliedA.modelExcludedNotInList,
+          appliedB.modelExcludedNotInList
+        );
+        const excludeMetaA =
+          excludeIdsRaw.length > 0
+            ? { removedFromA: appliedA.excludeRemovedFromA, listIdsNotFoundInRubric: nfA }
+            : undefined;
+        const result: CompareResult = {
+          ...cmp,
+          brandFilter,
+          modelFilter,
+          excludeIdsA: buildExcludeIdsInfo(excludeIdsRaw, excludeMetaA),
+          unlikelySearch: buildUnlikelySearch(attrMatch),
+          catalogFromFeeds: true,
+          crossRubricMode: true,
+          crossRubricDataSource: "feeds",
+          crossRubricBatch: {
+            limitPerSide: batchLimit,
+            fetchedA: productsA.length,
+            fetchedB: productsB.length,
+            totalA,
+            totalB
+          }
+        };
+        return NextResponse.json(result);
       }
 
       const csvA = await resolveFeedCsvInput("Сайт A", body.feedUrlA, body.feedCsvTextA);
