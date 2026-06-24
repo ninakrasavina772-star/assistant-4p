@@ -145,6 +145,15 @@ function normalizeColorText(s: string): string {
     .replace(/\s+/g, " ");
 }
 
+function containsColorToken(norm: string, word: string): boolean {
+  const w = word.toLowerCase();
+  if (/^[a-z0-9]+$/i.test(w)) {
+    const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    return re.test(norm);
+  }
+  return norm.split(/\s+/).some((tok) => tok === w);
+}
+
 function colorIdsFromFreeText(text: string): Set<string> {
   const out = new Set<string>();
   const norm = normalizeColorText(text);
@@ -159,8 +168,7 @@ function colorIdsFromFreeText(text: string): Set<string> {
   }
 
   for (const [word, id] of Object.entries(COLOR_WORD_TO_ID)) {
-    const re = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-    if (re.test(masked)) out.add(id);
+    if (containsColorToken(norm, word)) out.add(id);
   }
   return out;
 }

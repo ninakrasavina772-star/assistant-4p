@@ -31,6 +31,10 @@ import { wordFollowedByConflictingDigit } from "./variantNameGuard";
 /** Внутри одной рубрики: мягче aHash — разные ракурсы/превью одного товара. */
 const INTRA_SOFT_VISUAL_HAMMING_MAX = 16;
 export const CROSS_RUBRIC_FACTORY_PHASH_MAX = 11;
+/** Кросс-рубрики: поставщики называют модель по-разному (RU/ES), фото часто разные. */
+const CROSS_RUBRIC_NAME_STRONG_MIN = 0.38;
+const CROSS_RUBRIC_MODEL_STRONG_MIN = 0.48;
+const CROSS_RUBRIC_MODEL_NO_PHOTO_MIN = 0.58;
 const INTRA_UNLIKELY_VISUAL_HAMMING_MAX = CROSS_RUBRIC_FACTORY_PHASH_MAX;
 /** Порог схожести названия для ~90% без эквивалентного URL фото (только intra, тот же бренд). */
 const INTRA_NAME_STRONG_NO_URL_MIN = 0.55;
@@ -336,14 +340,23 @@ function resolveTierForPair(
       !crossOpts?.skipDisjointEanGuard &&
       softDupBlockedByDisjointEans(cI, cJ)
     );
+  const nameStrongCross =
+    crossOpts?.crossRubric === true &&
+    !urlEq &&
+    brandsExactForDup(cI, cJ) &&
+    comb >= CROSS_RUBRIC_NAME_STRONG_MIN &&
+    (!modelSubstantial || modelSim >= CROSS_RUBRIC_MODEL_STRONG_MIN) &&
+    !softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq);
 
   if (modelLineStrictPrefixExtensionConflict(mA, mB) && !urlEq) return null;
 
-  if ((urlEq && comb >= PARTIAL_NAME_MIN_90) || nameStrongIntra) {
+  if ((urlEq && comb >= PARTIAL_NAME_MIN_90) || nameStrongIntra || nameStrongCross) {
     const g = applyAttrGate(cI, cJ, attrOpts, 0.9, [
       urlEq
         ? "~90% дубль: частичное название + эквивалентное фото (URL)"
-        : "~90% дубль: сильное название (внутри рубрики), разные превью фото"
+        : crossOpts?.crossRubric
+          ? "~90% дубль: сильное название (2 рубрики), разные фото поставщиков"
+          : "~90% дубль: сильное название (внутри рубрики), разные превью фото"
     ]);
     if (g.score >= 0.89 && g.reasons.length) {
       return { kind: "90", reasons: g.reasons, score: 0.9 };
@@ -366,6 +379,22 @@ function resolveTierForPair(
       if (g.score >= 0.59 && g.reasons.length) {
         return { kind: "60", reasons: g.reasons, score: 0.6 };
       }
+    }
+  }
+
+  if (
+    crossOpts?.crossRubric &&
+    brandsExactForDup(cI, cJ) &&
+    qualifiesForBrandVisualTier(mA, mB, modelSim) &&
+    !softVisualBlockedByDistinctModelLine(mA, mB, modelSim, urlEq) &&
+    modelSim >= CROSS_RUBRIC_MODEL_NO_PHOTO_MIN
+  ) {
+    const g = applyAttrGate(cI, cJ, attrOpts, 0.6, [
+      "~60% дубль: 2 рубрики — бренд + модельная линия (фото поставщиков различаются)",
+      `модель~${Math.round(modelSim * 100)}%`
+    ]);
+    if (g.score >= 0.59 && g.reasons.length) {
+      return { kind: "60", reasons: g.reasons, score: 0.6 };
     }
   }
 

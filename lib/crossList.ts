@@ -12,11 +12,9 @@ import {
   prefetchCrossRubricBCrossPhashes,
   prefetchOnlyACrossPhashes,
   prefetchOnlyBCrossPhashes,
-  visualSimilarAcrossAllPhotos,
-  CROSS_RUBRIC_FACTORY_PHASH_MAX,
   type CrossSoftDupOptions
 } from "./dupTiers";
-import { type PhashCache, visualSimilarFromPhash } from "./imagePhash";
+import { type PhashCache } from "./imagePhash";
 import {
   collectArticleKeys,
   collectEanIndexKeys,
@@ -33,40 +31,6 @@ import type {
   OnlyBCrossWithARow,
   OnlyBInternalDupRow
 } from "./types";
-
-
-function crossRubricFactoryPhotoAllowsPair(
-  cA: CompareProduct,
-  cB: CompareProduct,
-  cache: PhashCache,
-  maxDist: number
-): boolean {
-  const aList = cA.allImages?.length
-    ? cA.allImages
-    : cA.firstImage
-      ? [cA.firstImage]
-      : [];
-  const bList = cB.allImages?.length
-    ? cB.allImages
-    : cB.firstImage
-      ? [cB.firstImage]
-      : [];
-  if (!aList.length || !bList.length) return true;
-
-  let compared = false;
-  for (const ua of aList) {
-    for (const ub of bList) {
-      if (!cache.has(ua) || !cache.has(ub)) continue;
-      const ha = cache.get(ua);
-      const hb = cache.get(ub);
-      if (ha == null || hb == null) continue;
-      compared = true;
-      if (visualSimilarFromPhash(ha, hb, maxDist)) return true;
-    }
-  }
-  return !compared;
-}
-
 
 /** Параметры только для режима «Дубли: 2 рубрики, 1 сайт». */
 export type BuildCrossMatchOpts = {
@@ -123,7 +87,8 @@ export async function buildOnlyBCrossWithA(
       rawOnlyB,
       byBrandA,
       nameLocale,
-      phashCache
+      phashCache,
+      crossSoftOpts
     );
   } else {
     await prefetchOnlyBCrossPhashes(
@@ -178,18 +143,6 @@ export async function buildOnlyBCrossWithA(
             nameLocale
           );
           if (colorV === "conflict") continue;
-          if (colorV === "unknown") {
-            if (
-              !crossRubricFactoryPhotoAllowsPair(
-                cA,
-                cB,
-                phashCache,
-                CROSS_RUBRIC_FACTORY_PHASH_MAX
-              )
-            ) {
-              continue;
-            }
-          }
           hitA.add(pA.id);
           rows.push({
             kind: "article",
@@ -303,7 +256,8 @@ export async function buildOnlyACrossWithB(
       rawOnlyA,
       byBrandB,
       nameLocale,
-      phashCache
+      phashCache,
+      crossSoftOpts
     );
   } else {
     await prefetchOnlyACrossPhashes(
