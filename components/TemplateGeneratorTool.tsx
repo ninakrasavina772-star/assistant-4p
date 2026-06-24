@@ -455,6 +455,7 @@ export function TemplateGeneratorTool() {
       metabaseEnabled,
       photoMin,
       photoTarget,
+      marketplace,
       columns,
       productSamples: hasWb ? productSamples : undefined,
       uniqueBrands: hasWb ? uniqueBrands : undefined,
