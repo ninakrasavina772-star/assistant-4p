@@ -15,7 +15,8 @@ import {
   isYandexTitleHeader,
   padYandexTitle,
   YANDEX_SYSTEM_APPEND,
-  yandexDescriptionTooShort
+  yandexDescriptionTooShort,
+  yandexTitleNeedsFix
 } from "@/lib/templateGenerator/yandexRules";
 import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
 import { resolveYandexRowPhotos } from "@/lib/templateGenerator/yandexPhotos";
@@ -503,8 +504,17 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
               yandexDescriptionTooShort(values[f.header]!)
           )
           .map((f) => f.header);
-        if (shortDesc.length) {
-          missing = [...new Set([...missing, ...shortDesc])];
+        const badTitles = fields
+          .filter(
+            (f) =>
+              aiHeaders.includes(f.header) &&
+              isYandexTitleHeader(f.header) &&
+              values[f.header] &&
+              yandexTitleNeedsFix(values[f.header]!)
+          )
+          .map((f) => f.header);
+        if (shortDesc.length || badTitles.length) {
+          missing = [...new Set([...missing, ...shortDesc, ...badTitles])];
         }
       }
 
@@ -518,7 +528,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           }) +
           "\n\nЭти поля остались пустыми — заполни их обязательно на основе названия, CSV и сайта бренда. Не оставляй пустыми." +
           (isYandex
-            ? "\nДля Яндекс Маркета: описание не короче 600 символов, название не короче 120 символов."
+            ? "\nДля Яндекс Маркета: описание не короче 600 символов, название 60–80 символов (тип + бренд + модель + до 1 прилагательного, без объёма и оттенка)."
             : "");
         const json2 = await callOpenAi(
           batch.openaiApiKey,
