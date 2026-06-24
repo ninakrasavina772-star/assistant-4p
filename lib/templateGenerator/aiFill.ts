@@ -348,9 +348,10 @@ async function resolveExtraPhotos(
     });
     if (photo.note) sources.push(`фото ЯМ: ${photo.note}`);
     const urls = photo.imageUrls;
+    const capped = urls.slice(0, batch.photoSettings.targetCount);
     return {
-      extraPhotos: urls.length > 1 ? urls.slice(1) : [],
-      imageUrls: urls.length ? urls : undefined,
+      extraPhotos: capped.length > 1 ? capped.slice(1) : [],
+      imageUrls: capped.length ? capped : undefined,
       sources
     };
   }

@@ -22,6 +22,7 @@ import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { isLowQualityImageUrl } from "@/lib/templateGenerator/yandexImageFilter";
 import { filterYandexProductImageUrls } from "@/lib/templateGenerator/yandexImageFilter.server";
+import { dedupeProductImagesByPose } from "@/lib/templateGenerator/yandexImageVisualDedupe.server";
 
 const MAX_PACKSHOT_PROCESS = 5;
 const MAX_BACKGROUND = 4;
@@ -251,7 +252,7 @@ export async function resolveYandexRowPhotos(
     }
 
     try {
-      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 8);
+      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 4);
       const siblingUrls = siblings
         .map((s) => s.mainImageUrl)
         .filter((u): u is string => Boolean(u));
@@ -263,7 +264,10 @@ export async function resolveYandexRowPhotos(
   }
 
   sourceUrls = sourceUrls.filter((u) => !isThumbOrSmallUrl(u));
-  sourceUrls = await filterYandexProductImageUrls(sourceUrls);
+  sourceUrls = await filterYandexProductImageUrls(
+    sourceUrls,
+    Math.max(1, Math.min(opts.targetCount + 2, 8))
+  );
 
   const rehostCache: RehostCache = new Map();
   if (sourceUrls.length) {
@@ -332,9 +336,14 @@ export async function resolveYandexRowPhotos(
     }
   }
 
-  const finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]).filter((u) =>
+  let finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]).filter((u) =>
     isYandexProcessedStorageUrl(u)
   );
+  if (finalUrls.length) {
+    finalUrls = await dedupeProductImagesByPose(finalUrls, {
+      maxCount: Math.max(1, Math.min(opts.targetCount, MAX_PACKSHOT_PROCESS + MAX_BACKGROUND))
+    });
+  }
   const skippedDupes =
     packshots.length + rawBackgrounds.length + alreadyDone.length - finalUrls.length;
 
@@ -347,7 +356,12 @@ export async function resolveYandexRowPhotos(
   }
 
   if (!finalUrls.length) {
-    const fallback = uniqueUrlsForImageCell([...alreadyDone, ...sourceUrls]);
+    let fallback = uniqueUrlsForImageCell([...alreadyDone, ...sourceUrls]);
+    if (fallback.length) {
+      fallback = await dedupeProductImagesByPose(fallback, {
+        maxCount: Math.max(1, Math.min(opts.targetCount, 8))
+      });
+    }
     if (fallback.length) {
       return {
         imageUrls: fallback,

@@ -26,7 +26,21 @@ export function normalize4standHugeWebp(url: string): string {
   return `${m[1]}/huge/${m[2]}/${m[3]}/${m[4]}.webp`;
 }
 
+export function extractFotoContentHash(url: string): string | null {
+  const norm = normalize4standHugeWebp(url.trim());
+  const m40 = norm.match(/\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]{40})(?:\.|$|\?)/i);
+  if (m40) return m40[3]!.toLowerCase();
+  const m32upload = norm.match(/\/uploads\/images\/[0-9a-f]{2}\/[0-9a-f]{2}\/([0-9a-f]{32})(?:\.|$|\?)/i);
+  if (m32upload) return m32upload[1]!.toLowerCase();
+  const m32 = norm.match(/\/([0-9a-f]{32})\.(?:webp|jpe?g|png)(?:\?|$)/i);
+  if (m32) return m32[1]!.toLowerCase();
+  return null;
+}
+
+/** Ключ файла на CDN: 32-символьный префикс hash (cdnru huge ↔ api.4stand uploads). */
 export function fotoUrlHashKey(url: string): string {
+  const content = extractFotoContentHash(url);
+  if (content) return content.slice(0, 32);
   const m = url.match(/\/([0-9a-f]{2})\/([0-9a-f]{2})\/([0-9a-f]{40,})/i);
   return m ? `${m[1]}/${m[2]}/${m[3]}` : url;
 }

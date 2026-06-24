@@ -2,6 +2,7 @@ import {
   dedupeAndNormalizeFotoUrls,
   normalize4standHugeWebp
 } from "@/lib/podruzhkaFotoPick";
+import { uniqueUrlsForImageCell } from "@/lib/templateGenerator/imageUrlDedupe";
 
 /** URL-паттерны миниатюр, заглушек и превью — не использовать как packshot */
 export function isLowQualityImageUrl(url: string): boolean {
@@ -37,5 +38,5 @@ export function filterYandexProductImageUrlsByUrl(urls: string[]): string[] {
   );
   if (!candidates.length) return [];
   candidates.sort((a, b) => urlResolutionScore(b) - urlResolutionScore(a));
-  return candidates;
+  return uniqueUrlsForImageCell(candidates);
 }

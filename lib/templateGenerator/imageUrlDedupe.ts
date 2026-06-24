@@ -1,5 +1,6 @@
 import {
   dedupeAndNormalizeFotoUrls,
+  extractFotoContentHash,
   fotoUrlHashKey,
   normalize4standHugeWebp
 } from "@/lib/podruzhkaFotoPick";
@@ -20,6 +21,8 @@ export function imageUrlIdentityKey(url: string): string {
   const t = url.trim();
   if (!t) return "";
   const norm = normalize4standHugeWebp(t);
+  const content = extractFotoContentHash(norm);
+  if (content) return `4stand:${content.slice(0, 32)}`;
   const hashKey = fotoUrlHashKey(norm);
   if (hashKey !== norm) return `4stand:${hashKey}`;
   try {

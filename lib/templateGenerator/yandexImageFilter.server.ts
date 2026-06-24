@@ -11,25 +11,33 @@ import {
   filterYandexProductImageUrlsByUrl,
   isLowQualityImageUrl
 } from "@/lib/templateGenerator/yandexImageFilter";
+import { dedupeProductImagesByPose } from "@/lib/templateGenerator/yandexImageVisualDedupe.server";
 
 const MIN_EDGE_PX = 480;
 const MIN_BYTES = 16_000;
-const PROBE_LIMIT = 10;
+const PROBE_LIMIT = 12;
 
 export { isLowQualityImageUrl };
 
 /**
- * Оставить только качественные packshot URL: без заглушек и мелких дублей.
- * При нескольких фото одного товара — приоритет крупному (по пикселям/байтам).
+ * Оставить только качественные packshot URL: без заглушек, мелких и визуальных дублей.
  */
-export async function filterYandexProductImageUrls(urls: string[]): Promise<string[]> {
+export async function filterYandexProductImageUrls(
+  urls: string[],
+  maxCount = 8
+): Promise<string[]> {
   const candidates = filterYandexProductImageUrlsByUrl(urls);
   if (!candidates.length) return [];
+
+  const poseUnique = await dedupeProductImagesByPose(candidates, {
+    maxCount: Math.max(maxCount + 2, 12)
+  });
+  if (!poseUnique.length) return [];
 
   const probed: { url: string; pixels: number; bytes: number; key: string }[] = [];
 
   await Promise.all(
-    candidates.slice(0, PROBE_LIMIT).map(async (raw) => {
+    poseUnique.slice(0, PROBE_LIMIT).map(async (raw) => {
       const url = normalize4standHugeWebp(raw);
       try {
         const fetched = await fetchPodruzhkaProductImageDetailed(url);
@@ -55,7 +63,7 @@ export async function filterYandexProductImageUrls(urls: string[]): Promise<stri
   );
 
   if (!probed.length) {
-    return candidates;
+    return poseUnique.slice(0, maxCount);
   }
 
   probed.sort((a, b) => b.pixels - a.pixels || b.bytes - a.bytes);
@@ -66,6 +74,7 @@ export async function filterYandexProductImageUrls(urls: string[]): Promise<stri
     if (seen.has(item.key)) continue;
     seen.add(item.key);
     out.push(item.url);
+    if (out.length >= maxCount) break;
   }
-  return out;
+  return out.length ? out : poseUnique.slice(0, maxCount);
 }
