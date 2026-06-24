@@ -4,18 +4,23 @@ export const YANDEX_TITLE_MIN_LEN = 60;
 export const YANDEX_TITLE_MAX_LEN = 80;
 const DESCRIPTION_MIN_LEN = 600;
 
-const TITLE_PAD_ADJECTIVES = [
-  "премиальный",
-  "популярный",
-  "стойкий",
-  "свежий",
-  "насыщенный",
-  "оригинальный",
-  "элегантный",
-  "морской бриз",
+/** Только свойства товара — для добивки длины, если AI не дотянул */
+const TITLE_PRODUCT_ADJECTIVES = [
+  "увлажняющий",
+  "питательный",
+  "восстанавливающий",
+  "очищающий",
+  "тонизирующий",
+  "антивозрастной",
+  "древесный",
   "цветочный",
-  "древесный"
+  "морской",
+  "стойкий"
 ];
+
+/** Маркетинговый шум — убираем из названия */
+const GENERIC_ADJ_RE =
+  /\b(?:премиальн\w*|популярн\w*|оригинальн\w*|элегантн\w*|стильн\w*|эксклюзивн\w*|уникальн\w*|качественн\w*|шикарн\w*|надёжн\w*|надежн\w*|лучш\w*|топов\w*|бестселлер\w*|новинк\w*|рекомендуем\w*|профессиональн\w*)\b/gi;
 
 const VOLUME_RE =
   /\b\d+[\s.,]?\d*\s*(?:мл|ml|мл\.|л|l|г|g|кг|kg|шт\.?|pcs|уп\.?)\b/gi;
@@ -40,10 +45,13 @@ export const YANDEX_SYSTEM_APPEND = `
 Дополнительные правила для Яндекс Маркета:
 
 НАЗВАНИЕ ТОВАРА (если поле в списке):
-- Структура: ТИП товара на русском + бренд + модель/линейка + при необходимости ровно 1 прилагательное или короткая нота аромата.
+- Структура: ТИП товара на русском + бренд + модель/линейка + при необходимости ровно 1 прилагательное о свойстве товара.
 - Длина: от ${YANDEX_TITLE_MIN_LEN} до ${YANDEX_TITLE_MAX_LEN} символов включительно. Не длиннее ${YANDEX_TITLE_MAX_LEN}!
-- НЕ указывать в названии: объём (мл, г, л), оттенок, номер тона, SPF, размер, количество в упаковке, артикул, EAN.
-- Пример: Туалетная вода для мужчин Ferrari Scuderia Black морской бриз
+- Прилагательное только одно и только про товар: увлажняющий, питательный, древесный, матовый, стойкий и т.п.
+- ЗАПРЕЩЕНО в названии: премиальный, популярный, оригинальный, элегантный, стильный, лучший, топовый, эксклюзивный и любой маркетинговый шум.
+- НЕ указывать: объём (мл, г, л), оттенок, номер тона, SPF, размер, артикул, EAN.
+- Пример: Крем для лица BIOTHERM Night Spa увлажняющий
+- Пример (парфюм): Туалетная вода для мужчин Ferrari Scuderia Black морской
 
 ОПИСАНИЕ ТОВАРА (если поле в списке):
 - Минимум ${DESCRIPTION_MIN_LEN} символов, лучше 800–1500.
@@ -59,7 +67,7 @@ export const YANDEX_SYSTEM_APPEND = `
 
 export function buildYandexFieldHint(header: string): string | null {
   if (isYandexTitleHeader(header)) {
-    return `Яндекс Маркет: тип + бренд + модель + до 1 прилагательного, ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов, без объёма и оттенка`;
+    return `Яндекс Маркет: тип + бренд + модель + 1 прилагательное о товаре (увлажняющий и т.п.), без «премиальный/популярный», ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов`;
   }
   if (isYandexDescriptionHeader(header)) {
     return `Яндекс Маркет: структурированное описание по 6 блокам, минимум ${DESCRIPTION_MIN_LEN} символов`;
@@ -77,6 +85,11 @@ export function stripYandexTitleNoise(title: string): string {
   return t.replace(/\s+/g, " ").replace(/^[\s,.-]+|[\s,.-]+$/g, "").trim();
 }
 
+/** Убрать маркетинговые прилагательные */
+export function stripGenericTitleAdjectives(title: string): string {
+  return title.replace(GENERIC_ADJ_RE, " ").replace(/\s+/g, " ").trim();
+}
+
 function truncateAtWord(title: string, maxLen: number): string {
   if (title.length <= maxLen) return title;
   const cut = title.slice(0, maxLen);
@@ -87,16 +100,20 @@ function truncateAtWord(title: string, maxLen: number): string {
 
 /** Привести название к правилам Яндекс Маркета (60–80 символов) */
 export function padYandexTitle(title: string): string {
-  let t = stripYandexTitleNoise(title);
+  let t = stripGenericTitleAdjectives(stripYandexTitleNoise(title));
   if (!t) return title.trim();
 
   if (t.length < YANDEX_TITLE_MIN_LEN) {
-    for (const adj of TITLE_PAD_ADJECTIVES) {
-      if (t.toLowerCase().includes(adj.toLowerCase())) continue;
-      const candidate = `${t} ${adj}`.trim();
-      if (candidate.length <= YANDEX_TITLE_MAX_LEN) {
-        t = candidate;
-        break;
+    const hasProductAdj = TITLE_PRODUCT_ADJECTIVES.some((adj) =>
+      t.toLowerCase().includes(adj.toLowerCase())
+    );
+    if (!hasProductAdj) {
+      for (const adj of TITLE_PRODUCT_ADJECTIVES) {
+        const candidate = `${t} ${adj}`.trim();
+        if (candidate.length <= YANDEX_TITLE_MAX_LEN) {
+          t = candidate;
+          break;
+        }
       }
     }
   }
@@ -109,6 +126,11 @@ export function padYandexTitle(title: string): string {
 }
 
 export function yandexTitleNeedsFix(text: string): boolean {
+  const raw = stripYandexTitleNoise(text);
+  if (GENERIC_ADJ_RE.test(raw)) {
+    GENERIC_ADJ_RE.lastIndex = 0;
+    return true;
+  }
   const t = padYandexTitle(text);
   return t.length < YANDEX_TITLE_MIN_LEN || t.length > YANDEX_TITLE_MAX_LEN;
 }
