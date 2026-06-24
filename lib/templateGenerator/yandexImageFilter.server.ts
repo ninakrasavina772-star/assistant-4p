@@ -55,7 +55,7 @@ export async function filterYandexProductImageUrls(urls: string[]): Promise<stri
   );
 
   if (!probed.length) {
-    return candidates.slice(0, 1);
+    return candidates;
   }
 
   probed.sort((a, b) => b.pixels - a.pixels || b.bytes - a.bytes);

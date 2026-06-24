@@ -37,5 +37,5 @@ export function filterYandexProductImageUrlsByUrl(urls: string[]): string[] {
   );
   if (!candidates.length) return [];
   candidates.sort((a, b) => urlResolutionScore(b) - urlResolutionScore(a));
-  return candidates.slice(0, 1);
+  return candidates;
 }
