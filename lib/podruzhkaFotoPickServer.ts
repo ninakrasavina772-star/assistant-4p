@@ -3,12 +3,16 @@ import {
   normalize4standHugeWebp
 } from "@/lib/podruzhkaFotoPick";
 import { type PerfumeImageKind } from "@/lib/podruzhkaFotoAnalyzeCore";
+import {
+  filterPerfumeFotoCandidates,
+  perfumeFotoUrlTechnicalScore
+} from "@/lib/podruzhkaFotoQuality";
 import { analyzePerfumeFotoUrlServer } from "@/lib/podruzhkaFotoScoreServer";
 
 function scorePerfumeFotoUrl(url: string): number {
   const u = url.toLowerCase();
-  let score = 20;
-  if (/\/huge\//.test(u)) score += 30;
+  let score = perfumeFotoUrlTechnicalScore(url);
+  if (/cdn1\.ozone\.ru|ozon\.ru\/s3\/multimedia-1-[0-9a-g]\//i.test(u)) score -= 2000;
   if (/4stand\.com|4partners/i.test(u)) score += 8;
   if (/\.webp(?:\?|$)/.test(u)) score += 10;
   if (/\.(?:jpg|jpeg|png)(?:\?|$)/.test(u)) score += 3;
@@ -38,13 +42,13 @@ export async function pickBestPerfumeFotoServer(urls: string[]): Promise<{
   url: string;
   ranked: PerfumeFotoPickResult[];
 }> {
-  const list = dedupeAndNormalizeFotoUrls(urls);
+  const list = filterPerfumeFotoCandidates(urls);
   if (!list.length) return { url: "", ranked: [] };
   if (list.length === 1) return { url: list[0]!, ranked: [] };
 
   const prelim =
     list.length <= VISUAL_ANALYZE_MAX
-      ? list
+      ? [...list].sort((a, b) => scorePerfumeFotoUrl(b) - scorePerfumeFotoUrl(a))
       : [...list]
           .sort((a, b) => scorePerfumeFotoUrl(b) - scorePerfumeFotoUrl(a))
           .slice(0, VISUAL_ANALYZE_MAX);
@@ -66,6 +70,8 @@ export async function pickBestPerfumeFotoServer(urls: string[]): Promise<{
   );
 
   results.sort((a, b) => {
+    const tech = scorePerfumeFotoUrl(b.url) - scorePerfumeFotoUrl(a.url);
+    if (Math.abs(tech) > 400) return tech > 0 ? 1 : -1;
     const kd = KIND_RANK[b.kind] - KIND_RANK[a.kind];
     if (kd !== 0) return kd;
     return b.score - a.score;

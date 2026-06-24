@@ -48,7 +48,8 @@ import {
   type WorkbookScan
 } from "@/lib/podruzhkaExcel";
 import { PODRUZHKA_FIELD_LABELS } from "@/lib/podruzhkaColumnMapping";
-import { resolveFeedFotoUrlAsync, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
+import { resolvePerfumeFotoForRenderAsync, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
+import { PodruzhkaInfographicPreview, type InfographicPreviewItem } from "@/components/PodruzhkaInfographicPreview";
 import { mergeCsvImagesIntoWorkbook } from "@/lib/podruzhkaFeedCsvMerge";
 import {
   buildPodruzhkaErrorRows,
@@ -132,7 +133,7 @@ export function PodruzhkaOzonTool() {
     errorRows?: PodruzhkaErrorRow[];
     flushErrors?: string[];
   } | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [renderPreviews, setRenderPreviews] = useState<InfographicPreviewItem[]>([]);
   const [forceAiRegenerate, setForceAiRegenerate] = useState(false);
   const [feedCsvMergeStats, setFeedCsvMergeStats] = useState<{
     merged: number;
@@ -345,7 +346,7 @@ export function PodruzhkaOzonTool() {
       setInfographicDone(false);
       setRenderStats(null);
     setLayoutVersion(null);
-      setPreviewUrl(null);
+      setRenderPreviews([]);
       setMappingConfirmed(false);
       setSheetInfo(null);
       setAiColumns([]);
@@ -577,7 +578,7 @@ export function PodruzhkaOzonTool() {
     setInfographicDone(false);
     setRenderStats(null);
     setLayoutVersion(null);
-    setPreviewUrl(null);
+    setRenderPreviews([]);
 
     const ws = wb.getWorksheet(sheetInfo.sheetName);
     if (!ws) {
@@ -633,8 +634,6 @@ export function PodruzhkaOzonTool() {
     try {
       let foto2Col = sheetInfo.foto2Col;
       let visionNote: string | null = null;
-      let firstPreview = true;
-
       const poolResult = await runPodruzhkaRenderPool({
         items: todo,
         parallel: PODRUZHKA_RENDER_PARALLEL,
@@ -658,9 +657,13 @@ export function PodruzhkaOzonTool() {
         renderOne: async (row) => {
           const ai = readAiFromSheet(ws, sheetInfo, row);
           try {
-            const fotoUrl =
-              (await resolveFeedFotoUrlAsync(ws, row.row, mapping, "perfume", fotoResolveMode)) ||
-              row.foto;
+            const fotoResolved = await resolvePerfumeFotoForRenderAsync(
+              ws,
+              row.row,
+              mapping,
+              fotoResolveMode
+            );
+            const fotoUrl = fotoResolved.url || row.foto;
             const rendered = await renderPodruzhkaCardClient({
               brandName: row.brandName,
               productType: readProductTypeForCard(ws, sheetInfo, row, ai.model),
@@ -685,14 +688,10 @@ export function PodruzhkaOzonTool() {
                 error: data.error ?? `HTTP ${res.status}`
               };
             }
-            if (firstPreview) {
-              firstPreview = false;
-              setPreviewUrl(data.url);
-            }
             if (!visionNote) {
               visionNote =
-                "Рендер: html-figma-v15. Фото: duo на белом → один флакон. Параллельно ×" +
-                `${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
+                "Фото: CSV-галерея или Metabase (/huge/) при плохом Ozon-thumb, duo на белом. " +
+                `Параллельно ×${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
             }
             return {
               row: row.row,
@@ -711,6 +710,21 @@ export function PodruzhkaOzonTool() {
       });
 
       if (poolResult.layoutVersion) setLayoutVersion(poolResult.layoutVersion);
+
+      const previews: InfographicPreviewItem[] = todo
+        .map((row) => {
+          const url = poolResult.allUrls.get(row.row);
+          if (!url) return null;
+          const ai = readAiFromSheet(ws, sheetInfo, row);
+          return {
+            row: row.row,
+            brand: row.brandName || "—",
+            label: resolveModelForRender(ai.model, row) || row.name.slice(0, 40),
+            url
+          };
+        })
+        .filter((x): x is InfographicPreviewItem => x != null);
+      setRenderPreviews(previews);
 
       const noFotoRows = poolResult.errors.map((e) => ({
         row: e.row,
@@ -827,7 +841,9 @@ export function PodruzhkaOzonTool() {
             <strong>3.</strong> После AI скачайте Excel, поправьте при необходимости, загрузите снова.
           </p>
           <p>
-            <strong>4.</strong> Инфографика 1024×1365 → ссылки в <strong>foto 2</strong>.
+            <strong>4.</strong> Инфографика 1024×1365 → ссылки в <strong>foto 2</strong>. Если в
+            шаблоне мелкое Ozon-foto — подставим лучшее из CSV или Metabase (кол. A:{" "}
+            <strong>tpv_…</strong>).
           </p>
           <p>
             <strong>5.</strong> При необходимости — публичные https в <strong>foto 3</strong>.
@@ -1243,9 +1259,8 @@ export function PodruzhkaOzonTool() {
                     </ul>
                   </div>
                 ) : null}
-                {previewUrl ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img src={previewUrl} alt="Превью" className="max-w-xs rounded-lg border" />
+                {renderPreviews.length > 0 ? (
+                  <PodruzhkaInfographicPreview items={renderPreviews} />
                 ) : null}
                 {renderStats.errorRows && renderStats.errorRows.length > 0 ? (
                   <button

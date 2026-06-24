@@ -24,6 +24,7 @@ import {
   type Foto2ColumnInfo
 } from "@/lib/ozonImageExcel";
 import { resolveFeedFotoUrl, type FeedFotoResolveMode } from "@/lib/podruzhkaFeedFoto";
+import { ensureVariationIdMapping } from "@/lib/podruzhkaVariationId";
 
 export { readWorkbookFromFile, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
 export type { PodruzhkaSheetInfo, PodruzhkaColumnMapping, ExcelHeaderOption } from "@/lib/podruzhkaColumnMapping";
@@ -102,7 +103,7 @@ export function buildSheetFromMapping(
   const ws = wb.getWorksheet(scan.sheetName);
   if (!ws) return null;
 
-  const m = mapping;
+  const m = ensureVariationIdMapping(ws, scan.headerRow, mapping);
   const brandCol = m.brandName!;
   const rows: PodruzhkaFeedRow[] = [];
   const lastRow = ws.rowCount || scan.headerRow;

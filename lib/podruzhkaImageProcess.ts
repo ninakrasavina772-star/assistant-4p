@@ -1245,7 +1245,7 @@ export const restoreAttachedWhiteProductRegions = rebuildProductAlphaByColumn;
 /** Ozon grid 600×800: не снимаем белый сверху (колпачок), потом чистим боковые поля. */
 
 async function stripCosmeticsGridBackground(input: Buffer): Promise<Buffer> {
-  let buf = await stripEdgeNearWhiteBackground(input, 236, { skipTopEdge: true });
+  let buf = await stripEdgeNearWhiteBackground(input, 236);
   buf = await rebuildProductAlphaByColumn(buf, input);
 
   const { data: srcData, info } = await sharp(input)
@@ -2059,22 +2059,7 @@ export async function solidifyProductInterior(input: Buffer): Promise<Buffer> {
       const i = (y * w + x) * 4;
       const a = pixels[i + 3]!;
       if (a < 40 || a === 255) continue;
-
-      if (a < 230 && touchesTransparentNeighbor(pixels, w, h, x, y)) continue;
-
-      const r = pixels[i]!;
-      const g = pixels[i + 1]!;
-      const b = pixels[i + 2]!;
-      const avg = (r + g + b) / 3;
-      const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      const neutral = r - b <= 12;
-      if (neutral && avg >= 228 && spread <= 20) {
-        if (!touchesTransparentNeighbor(pixels, w, h, x, y)) {
-          pixels[i + 3] = 255;
-        }
-        continue;
-      }
-      if (avg < 210) pixels[i + 3] = 255;
+      pixels[i + 3] = 255;
     }
   }
 
@@ -2090,6 +2075,7 @@ export async function finalizeProductCutout(input: Buffer): Promise<Buffer> {
   let buf = await solidifyProductColumnStacks(input);
   buf = await removeBoundaryWhiteHalo(buf);
   buf = await solidifyProductInterior(buf);
+  buf = await solidifyProductColumnStacks(buf);
   buf = await removeSemiTransparentWhiteFringe(buf);
   buf = await stripEdgeConnectedOpaqueWhite(buf);
   return buf;
@@ -2148,32 +2134,8 @@ export async function defringeLightProductHalo(input: Buffer): Promise<Buffer> {
 
 /** Предобработка PNG перед fit (парфюм): апскейл → мягкий cut-out → duo-gap. */
 export async function preprocessProductBuffer(input: Buffer): Promise<Buffer> {
-  const source = await enhanceSourceForProcessing(input);
-  let buf = await stripProductPackshotBackground(source);
-
-  const { data: srcData, info } = await sharp(source)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const src = Buffer.from(srcData);
-  const w = info.width ?? 0;
-  const h = info.height ?? 0;
-  const { data: cutData } = await sharp(buf)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const pixels = Buffer.from(cutData);
-  if (w && h && src.length === pixels.length) {
-    purgeUnconnectedExteriorWhite(pixels, src, w, h);
-    purgeMultiPackshotInteriorGutters(pixels, src, w, h);
-    clampColumnWhiteToProductSpan(pixels, src, w, h);
-    clearFullWidthTopWhiteBands(pixels, src, w, h);
-    buf = await sharp(pixels, {
-      raw: { width: w, height: h, channels: 4 }
-    })
-      .png()
-      .toBuffer();
-  }
+  let buf = await enhanceSourceForProcessing(input);
+  buf = await stripProductPackshotBackground(buf);
 
   buf = await stripProductFloorShadow(buf, {
     avgMin: 90,

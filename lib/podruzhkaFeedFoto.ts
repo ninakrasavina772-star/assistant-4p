@@ -1,6 +1,13 @@
 import type ExcelJS from "exceljs";
+import type { PodruzhkaColumnMapping } from "@/lib/podruzhkaColumnMapping";
 import type { PodruzhkaRenderProfile } from "@/lib/podruzhkaCosmeticsLayout";
 import { cellAsUrlFromCell, cellPlainValue } from "@/lib/ozonImageExcel";
+import {
+  filterPerfumeFotoCandidates,
+  isGoodPerfumePackshotUrl,
+  isLikelyBadPerfumeFotoUrl
+} from "@/lib/podruzhkaFotoQuality";
+import type { PerfumeFotoResolveSource } from "@/lib/podruzhkaFotoResolveServer";
 import {
   parseFotoUrlsFromText,
   pickBestFotoUrl,
@@ -8,10 +15,18 @@ import {
   dedupeAndNormalizeFotoUrls,
   normalize4standHugeWebp
 } from "@/lib/podruzhkaFotoPick";
+import { readVariationId } from "@/lib/podruzhkaVariationId";
 
 export type FeedFotoMapping = {
   foto?: number;
   fotoImages?: number;
+  id?: number;
+};
+
+export type PerfumeFotoResolveOutcome = {
+  url: string;
+  source?: PerfumeFotoResolveSource;
+  metabaseUsed?: boolean;
 };
 
 /** auto — галерея CSV + умный выбор; file — только колонка foto из Excel */
@@ -91,14 +106,110 @@ export async function resolveFeedFotoUrlAsync(
   profile: PodruzhkaRenderProfile = "perfume",
   mode: FeedFotoResolveMode = "auto"
 ): Promise<string> {
+  if (profile === "perfume") {
+    const out = await resolvePerfumeFotoForRenderAsync(ws, row, mapping, mode);
+    return out.url;
+  }
   if (mode === "file") {
     return resolveFeedFotoUrlFromFile(ws, row, mapping);
   }
   const candidates = getFeedFotoCandidates(ws, row, mapping, "auto");
   if (!candidates.length) return "";
-  if (profile === "perfume" && candidates.length > 1) {
-    return pickBestPerfumeFotoAsync(candidates);
+  if (candidates.length > 1) {
+    return pickBestFotoUrl(candidates, profile);
   }
-  if (candidates.length === 1) return normalize4standHugeWebp(candidates[0]!);
-  return pickBestFotoUrl(candidates, profile);
+  return normalize4standHugeWebp(candidates[0]!);
+}
+
+async function resolvePerfumeFotoViaApi(input: {
+  variationId: number | null;
+  templateFoto: string;
+  csvUrls: string[];
+}): Promise<PerfumeFotoResolveOutcome> {
+  try {
+    const res = await fetch("/api/podruzhka/foto/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        variationId: input.variationId ?? undefined,
+        templateFoto: input.templateFoto || undefined,
+        csvUrls: input.csvUrls
+      })
+    });
+    const data = (await res.json()) as PerfumeFotoResolveOutcome & { error?: string };
+    if (res.ok && data.url) {
+      return {
+        url: data.url,
+        source: data.source,
+        metabaseUsed: data.metabaseUsed
+      };
+    }
+  } catch {
+    /* fallback */
+  }
+  const fallback = filterPerfumeFotoCandidates(
+    [...input.csvUrls, input.templateFoto].filter(Boolean)
+  );
+  if (fallback.length > 1) {
+    return { url: await pickBestPerfumeFotoAsync(fallback), source: "pick" };
+  }
+  return { url: fallback[0] ?? "", source: fallback[0] ? "template" : "none" };
+}
+
+/**
+ * Парфюм: CSV-галерея → при плохом foto из шаблона Metabase по variation_id (кол. A, tpv_…).
+ */
+export async function resolvePerfumeFotoForRenderAsync(
+  ws: ExcelJS.Worksheet,
+  row: number,
+  mapping: PodruzhkaColumnMapping,
+  mode: FeedFotoResolveMode = "auto"
+): Promise<PerfumeFotoResolveOutcome> {
+  const variationId = readVariationId(ws, row, mapping);
+  const templateFoto = resolveFeedFotoUrlFromFile(ws, row, mapping);
+  const csvCandidates = getFeedFotoCandidates(ws, row, mapping, mode);
+  const csvUrls =
+    mode === "file"
+      ? templateFoto
+        ? [templateFoto]
+        : []
+      : filterPerfumeFotoCandidates(csvCandidates);
+
+  if (mode === "file") {
+    if (templateFoto && !isLikelyBadPerfumeFotoUrl(templateFoto)) {
+      return { url: templateFoto, source: "template" };
+    }
+    return resolvePerfumeFotoViaApi({ variationId, templateFoto, csvUrls });
+  }
+
+  const hasGallery = csvUrls.length > 1;
+  const hasGoodHuge = csvUrls.some(isGoodPerfumePackshotUrl);
+  const singleGood =
+    csvUrls.length === 1 && !isLikelyBadPerfumeFotoUrl(csvUrls[0]!) && hasGoodHuge;
+
+  if (hasGallery) {
+    return {
+      url: await pickBestPerfumeFotoAsync(csvUrls),
+      source: "csv_gallery"
+    };
+  }
+
+  if (singleGood) {
+    return { url: normalize4standHugeWebp(csvUrls[0]!), source: "csv_gallery" };
+  }
+
+  const needsFallback =
+    !csvUrls.length ||
+    csvUrls.every(isLikelyBadPerfumeFotoUrl) ||
+    (!hasGoodHuge && Boolean(variationId));
+
+  if (needsFallback) {
+    return resolvePerfumeFotoViaApi({ variationId, templateFoto, csvUrls });
+  }
+
+  if (csvUrls.length === 1) {
+    return { url: normalize4standHugeWebp(csvUrls[0]!), source: "template" };
+  }
+
+  return { url: "", source: "none" };
 }

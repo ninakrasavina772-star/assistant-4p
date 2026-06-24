@@ -34,7 +34,7 @@ export const PODRUZHKA_FIELD_HINTS: Record<PodruzhkaFieldKey, string> = {
   fotoImages:
     "Из фида 4Partners: «Изображения варианта» / «Изображение» — несколько URL в ячейке; для парфюма выберем флакон+коробку",
   ml: "Например 60 или 100 мл — внизу карточки",
-  id: "Только для вашего учёта",
+  id: "ID вариации 4Partners (кол. A: tpv_222102726 → 222102726) — для Metabase",
   foto2: "Если пусто — программа создаст столбец «foto 2»"
 };
 
@@ -96,7 +96,7 @@ const GUESS: Record<PodruzhkaFieldKey, string[]> = {
     "images"
   ],
   ml: ["ml", "мл", "объем", "объём", "volume"],
-  id: ["id", "id товара", "sku", "tpv", "артикул", "offer id"],
+  id: ["id", "id товара", "sku", "tpv", "артикул", "offer id", "variation_id"],
   foto2: ["foto 2", "foto2", "фото 2"]
 };
 

@@ -21,7 +21,7 @@ const TEMPLATE_HEADERS: Record<PodruzhkaFieldKey, string[]> = {
     "изображения"
   ],
   ml: ["ml"],
-  id: ["id", "sku", "offer id"],
+  id: ["id", "sku", "offer id", "variation_id", "variation id", "tpv"],
   foto2: ["foto 2", "foto2"]
 };
 
