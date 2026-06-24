@@ -13,8 +13,8 @@ import {
 } from "@/lib/templateGenerator/yandexImageFilter";
 import { dedupeProductImagesByPose } from "@/lib/templateGenerator/yandexImageVisualDedupe.server";
 
-const MIN_EDGE_PX = 480;
-const MIN_BYTES = 16_000;
+const MIN_EDGE_PX = 700;
+const MIN_BYTES = 20_000;
 const PROBE_LIMIT = 12;
 
 export { isLowQualityImageUrl };

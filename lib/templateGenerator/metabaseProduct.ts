@@ -1,4 +1,4 @@
-﻿import { fetchLetualVariations } from "@/lib/letualMetabase";
+import { fetchLetualVariations } from "@/lib/letualMetabase";
 import { metabaseIsConfigured } from "@/lib/letualMetabaseConfig";
 import { fetchYandexMarketPrices } from "@/lib/templateGenerator/yandexMarketPrices";
 
@@ -71,11 +71,12 @@ export function sortImagesForComposite(urls: string[]): string[] {
   const score = (u: string): number => {
     const l = u.toLowerCase();
     let s = 0;
-    if (/large2x|large\//.test(l)) s += 40;
+    if (/cdnru\.4stand|api\.4stand\.com\/uploads/.test(l)) s += 2000;
     if (/\/huge\//.test(l)) s += 1200;
     if (/multimedia-1-f\//.test(l)) s += 900;
+    if (/large2x|large\//.test(l)) s += 40;
     if (/webp|jpg|jpeg/.test(l)) s += 5;
-    if (/4stand|cdnru/.test(l)) s += 10;
+    if (/lyko\.com|douglas\.|bigbuy|makeupstore|notino|goldapple|cdnbigbuy/.test(l)) s -= 1500;
     if (/pack|white|_w\./.test(l)) s -= 15;
     return s;
   };

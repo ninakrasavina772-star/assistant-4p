@@ -6,6 +6,7 @@ import { fetchMetabaseProductBySku, sortImagesForComposite } from "@/lib/templat
 import { formatImageCellValue, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { filterYandexProductImageUrlsByUrl } from "@/lib/templateGenerator/yandexImageFilter";
+import { preferAdminFotoUrls } from "@/lib/templateGenerator/yandexImageSources";
 import { findEanHeader } from "@/lib/templateGenerator/templateDuplicates";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import type { TemplateSheetScan } from "@/lib/templateGenerator/types";
@@ -96,7 +97,7 @@ export async function prefillYandexImageCells(
     try {
       const mb = await fetchMetabaseProductBySku(ctx.sku);
       if (!mb?.imageUrls.length) continue;
-      let images = sortImagesForComposite(mb.imageUrls);
+      let images = preferAdminFotoUrls(sortImagesForComposite(mb.imageUrls));
       images = filterYandexProductImageUrlsByUrl(images);
       images = await rehostImageUrls(images, ctx.sku, rehostCache);
       if (!images.length) continue;
@@ -146,7 +147,7 @@ export async function injectVariationProducts(
 
   for (const p of products) {
     const sku = String(p.variationId);
-    let images = sortImagesForComposite(p.imageUrls);
+    let images = preferAdminFotoUrls(sortImagesForComposite(p.imageUrls));
     if (images.length) {
       images = filterYandexProductImageUrlsByUrl(images);
       images = await rehostImageUrls(images, sku, rehostCache);

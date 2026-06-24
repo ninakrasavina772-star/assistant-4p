@@ -1,6 +1,5 @@
 import { createHash } from "crypto";
 import sharp from "sharp";
-import { fetchSiblingVariationPhotos } from "@/lib/letualMetabase";
 import { LETUAL_CANVAS_SIZE, LETUAL_JPEG_QUALITY } from "@/lib/letualMainPhotoConstants";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import { compositeFlatImageToLetualCanvas } from "@/lib/letualMainPhotoLayout";
@@ -17,65 +16,18 @@ import {
   isYandexProcessedStorageUrl,
   uniqueUrlsForImageCell
 } from "@/lib/templateGenerator/imageUrlDedupe";
-import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
+import { parseImageUrls } from "@/lib/templateGenerator/photos";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { isLowQualityImageUrl } from "@/lib/templateGenerator/yandexImageFilter";
-import { filterYandexProductImageUrls } from "@/lib/templateGenerator/yandexImageFilter.server";
-import { dedupeProductImagesByPose } from "@/lib/templateGenerator/yandexImageVisualDedupe.server";
+import { preferAdminFotoUrls } from "@/lib/templateGenerator/yandexImageSources";
+import { selectYandexGalleryFromUrls } from "@/lib/templateGenerator/yandexImageSelect.server";
 
-const MAX_PACKSHOT_PROCESS = 5;
 const MAX_BACKGROUND = 4;
 const PACKSHOT_CONCURRENCY = 3;
 
 function isThumbOrSmallUrl(url: string): boolean {
   return isLowQualityImageUrl(url);
-}
-
-function isCdnPackshotUrl(url: string): boolean {
-  return /cdnru\.4stand\.com\/huge\/|\/huge\/[0-9a-f]{40,}/i.test(url);
-}
-
-/** Lifestyle / сцены из админки — в конец галереи с сохранением фона */
-function isLifestyleBackgroundUrl(url: string): boolean {
-  if (isThumbOrSmallUrl(url)) return false;
-  if (isCdnPackshotUrl(url)) return false;
-  const u = url.toLowerCase();
-  return /lifestyle|lookbook|model|banner|ingredient|flower|scene|interior|flacon|makeupstore|_r10|_r20|_r30/.test(
-    u
-  );
-}
-
-function isAdminBackgroundUrl(url: string): boolean {
-  return isLifestyleBackgroundUrl(url);
-}
-
-function splitYandexImageUrls(urls: string[]): { packshots: string[]; backgrounds: string[] } {
-  const packshots: string[] = [];
-  const backgrounds: string[] = [];
-  const seen = new Set<string>();
-
-  for (const raw of urls) {
-    const u = raw.trim();
-    if (!/^https?:\/\//i.test(u)) continue;
-    const key = imageUrlIdentityKey(u);
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    if (isAdminBackgroundUrl(u)) backgrounds.push(u);
-    else packshots.push(u);
-  }
-
-  return { packshots, backgrounds };
-}
-
-function prioritizeMainPackshot(packshots: string[], mainImageUrl: string | null): string[] {
-  if (!mainImageUrl?.trim()) return packshots;
-  const mainKey = imageUrlIdentityKey(mainImageUrl);
-  const rest = packshots.filter((u) => imageUrlIdentityKey(u) !== mainKey);
-  const main =
-    packshots.find((u) => imageUrlIdentityKey(u) === mainKey) ?? mainImageUrl.trim();
-  return [main, ...rest];
 }
 
 async function downloadImageBuffer(url: string): Promise<Buffer | null> {
@@ -201,16 +153,10 @@ async function processPackshotsParallel(
   return state.results;
 }
 
-function mergeUniqueSources(existing: string[], extra: string[]): string[] {
-  const seen = new Set(existing.map(imageUrlIdentityKey));
-  const out = [...existing];
-  for (const u of extra) {
-    const key = imageUrlIdentityKey(u);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(u);
-  }
-  return dedupeImageUrlsSemantic(out);
+async function rehostList(urls: string[], sku: string, cache: RehostCache): Promise<string[]> {
+  if (!urls.length) return [];
+  const rehosted = await rehostImageUrls(urls, sku, cache);
+  return urls.map((u, i) => rehosted[i] ?? u);
 }
 
 export type YandexRowPhotosOpts = {
@@ -219,7 +165,6 @@ export type YandexRowPhotosOpts = {
   targetCount: number;
   metabaseEnabled?: boolean;
 };
-
 
 export type YandexRowPhotosResult = {
   imageUrls: string[];
@@ -235,82 +180,82 @@ export async function resolveYandexRowPhotos(
   let sourceUrls = parsed.filter((u) => !isThumbOrSmallUrl(u) && !isYandexProcessedStorageUrl(u));
 
   let mainImageUrl: string | null = null;
-  const variationId = normVariationSku(opts.sku);
 
-  if (opts.metabaseEnabled !== false && variationId) {
+  if (opts.metabaseEnabled !== false && normVariationSku(opts.sku)) {
     try {
       const mb = await fetchMetabaseProductBySku(opts.sku);
       if (mb) {
         mainImageUrl = mb.mainImageUrl;
         if (mb.imageUrls.length) {
-          sourceUrls = mergeUniqueSources(sourceUrls, mb.imageUrls);
-          sourceUrls = sourceUrls.filter((u) => !isYandexProcessedStorageUrl(u));
+          sourceUrls = preferAdminFotoUrls(sortImagesForComposite(mb.imageUrls));
         }
       }
     } catch {
       /* optional */
     }
-
-    try {
-      const siblings = await fetchSiblingVariationPhotos(variationId, undefined, undefined, 4);
-      const siblingUrls = siblings
-        .map((s) => s.mainImageUrl)
-        .filter((u): u is string => Boolean(u));
-      sourceUrls = mergeUniqueSources(sourceUrls, siblingUrls);
-      sourceUrls = sourceUrls.filter((u) => !isYandexProcessedStorageUrl(u));
-    } catch {
-      /* optional */
-    }
   }
 
+  sourceUrls = preferAdminFotoUrls(sourceUrls);
   sourceUrls = sourceUrls.filter((u) => !isThumbOrSmallUrl(u));
-  sourceUrls = await filterYandexProductImageUrls(
-    sourceUrls,
-    Math.max(1, Math.min(opts.targetCount + 2, 8))
-  );
+
+  const maxWhite = Math.min(2, Math.max(1, opts.targetCount));
+  const gallery = await selectYandexGalleryFromUrls({
+    urls: sourceUrls,
+    mainImageUrl,
+    maxWhiteTotal: maxWhite,
+    maxLifestyle: MAX_BACKGROUND
+  });
+
+  let packshotSources = [
+    ...(gallery.main ? [gallery.main] : []),
+    ...gallery.whiteExtras
+  ];
+  let lifestyleSources = gallery.lifestyles;
 
   const rehostCache: RehostCache = new Map();
-  if (sourceUrls.length) {
-    sourceUrls = await rehostImageUrls(sourceUrls, opts.sku, rehostCache);
-  }
+  packshotSources = await rehostList(packshotSources, opts.sku, rehostCache);
+  lifestyleSources = await rehostList(lifestyleSources, opts.sku, rehostCache);
 
-  if (!sourceUrls.length && !alreadyDone.length) {
-    return { imageUrls: [], processed: [], note: "нет исходных foto" };
+  if (!packshotSources.length && !lifestyleSources.length && !alreadyDone.length) {
+    return {
+      imageUrls: [],
+      processed: [],
+      note: gallery.note ? `${gallery.note} · нет foto` : "нет исходных foto"
+    };
   }
 
   if (!getOzonStorageBackend()) {
-    const fallback = uniqueUrlsForImageCell([...alreadyDone, ...sourceUrls]);
+    const fallback = uniqueUrlsForImageCell([
+      ...alreadyDone,
+      ...packshotSources,
+      ...lifestyleSources
+    ]);
     return {
       imageUrls: fallback,
       processed: alreadyDone,
       note: fallback.length
-        ? "S3 не настроен — подставлены rehost-ссылки без packshot 1000×1000"
+        ? `${gallery.note ?? ""} · S3 не настроен — rehost без 1000×1000`.trim()
         : "хранилище S3/Blob не настроено — нет foto"
     };
   }
 
-  const { packshots: rawPackshots, backgrounds: rawBackgrounds } =
-    splitYandexImageUrls(sourceUrls);
-  const packshots = prioritizeMainPackshot(rawPackshots, mainImageUrl);
-  const packshotKeys = new Set(packshots.map(imageUrlIdentityKey));
-
-  const targetUnique = Math.max(1, Math.min(opts.targetCount, MAX_PACKSHOT_PROCESS));
   let whitePhotos = uniqueUrlsForImageCell(alreadyDone);
 
-  if (packshots.length) {
-    const need = Math.max(0, targetUnique - whitePhotos.length);
-    if (need > 0) {
-      const processed = await processPackshotsParallel(packshots, opts.sku, need);
-      whitePhotos = uniqueUrlsForImageCell([...whitePhotos, ...processed]);
-    }
+  if (packshotSources.length) {
+    const processed = await processPackshotsParallel(
+      packshotSources,
+      opts.sku,
+      packshotSources.length
+    );
+    whitePhotos = uniqueUrlsForImageCell([...whitePhotos, ...processed]);
   }
 
   const backgroundUrls: string[] = [];
   const seenOut = new Set(whitePhotos.map(imageUrlIdentityKey));
 
-  for (const src of rawBackgrounds.slice(0, MAX_BACKGROUND)) {
+  for (const src of lifestyleSources) {
     const srcKey = imageUrlIdentityKey(src);
-    if (seenOut.has(srcKey) || packshotKeys.has(srcKey)) continue;
+    if (seenOut.has(srcKey)) continue;
 
     try {
       const raw = await downloadImageBuffer(src);
@@ -336,39 +281,25 @@ export async function resolveYandexRowPhotos(
     }
   }
 
-  let finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]).filter((u) =>
+  const finalUrls = uniqueUrlsForImageCell([...whitePhotos, ...backgroundUrls]).filter((u) =>
     isYandexProcessedStorageUrl(u)
   );
-  if (finalUrls.length) {
-    finalUrls = await dedupeProductImagesByPose(finalUrls, {
-      maxCount: Math.max(1, Math.min(opts.targetCount, MAX_PACKSHOT_PROCESS + MAX_BACKGROUND))
-    });
-  }
-  const skippedDupes =
-    packshots.length + rawBackgrounds.length + alreadyDone.length - finalUrls.length;
 
   const parts: string[] = [];
+  if (gallery.note) parts.push(gallery.note);
   if (whitePhotos.length) parts.push(`${whitePhotos.length} packshot 1000×1000`);
   if (backgroundUrls.length) parts.push(`${backgroundUrls.length} с фоном`);
-  if (skippedDupes > 0) parts.push(`дублей отброшено: ${skippedDupes}`);
-  if (!finalUrls.length && (packshots.length || rawBackgrounds.length)) {
-    parts.push("не удалось обработать foto — проверьте S3 и доступность исходников");
-  }
 
-  if (!finalUrls.length) {
-    let fallback = uniqueUrlsForImageCell([...alreadyDone, ...sourceUrls]);
-    if (fallback.length) {
-      fallback = await dedupeProductImagesByPose(fallback, {
-        maxCount: Math.max(1, Math.min(opts.targetCount, 8))
-      });
-    }
+  if (!finalUrls.length && (packshotSources.length || lifestyleSources.length)) {
+    const fallback = uniqueUrlsForImageCell([...alreadyDone, ...packshotSources, ...lifestyleSources]);
     if (fallback.length) {
       return {
         imageUrls: fallback,
         processed: alreadyDone,
-        note: (parts.length ? parts.join(" · ") + " · " : "") + "обработка packshot не удалась — оставлены исходные ссылки"
+        note: (parts.length ? parts.join(" · ") + " · " : "") + "обработка packshot не удалась — исходные ссылки"
       };
     }
+    parts.push("не удалось обработать foto — проверьте S3 и доступность исходников");
   }
 
   return {
