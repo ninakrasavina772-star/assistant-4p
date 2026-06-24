@@ -7,7 +7,10 @@ import { compositeFlatImageToLetualCanvas } from "@/lib/letualMainPhotoLayout";
 import { fetchLetualImageDetailed } from "@/lib/letualFotoQuality";
 import { fetchPodruzhkaProductImageDetailed } from "@/lib/podruzhkaImageFetch";
 import { getOzonStorageBackend, uploadOzonImage, uploadOzonImageAtKey } from "@/lib/ozonImageStorage";
-import { fetchMetabaseProductBySku } from "@/lib/templateGenerator/metabaseProduct";
+import {
+  fetchMetabaseProductBySku,
+  sortImagesForComposite
+} from "@/lib/templateGenerator/metabaseProduct";
 import {
   dedupeImageUrlsSemantic,
   imageUrlIdentityKey,
@@ -217,6 +220,7 @@ export type YandexRowPhotosOpts = {
   metabaseEnabled?: boolean;
 };
 
+
 export type YandexRowPhotosResult = {
   imageUrls: string[];
   processed: string[];
@@ -271,10 +275,13 @@ export async function resolveYandexRowPhotos(
   }
 
   if (!getOzonStorageBackend()) {
+    const fallback = uniqueUrlsForImageCell([...alreadyDone, ...sourceUrls]);
     return {
-      imageUrls: [],
-      processed: [],
-      note: "хранилище S3/Blob не настроено — foto не обработаны (1000×1000)"
+      imageUrls: fallback,
+      processed: alreadyDone,
+      note: fallback.length
+        ? "S3 не настроен — подставлены rehost-ссылки без packshot 1000×1000"
+        : "хранилище S3/Blob не настроено — нет foto"
     };
   }
 
@@ -337,6 +344,17 @@ export async function resolveYandexRowPhotos(
   if (skippedDupes > 0) parts.push(`дублей отброшено: ${skippedDupes}`);
   if (!finalUrls.length && (packshots.length || rawBackgrounds.length)) {
     parts.push("не удалось обработать foto — проверьте S3 и доступность исходников");
+  }
+
+  if (!finalUrls.length) {
+    const fallback = uniqueUrlsForImageCell([...alreadyDone, ...sourceUrls]);
+    if (fallback.length) {
+      return {
+        imageUrls: fallback,
+        processed: alreadyDone,
+        note: (parts.length ? parts.join(" · ") + " · " : "") + "обработка packshot не удалась — оставлены исходные ссылки"
+      };
+    }
   }
 
   return {

@@ -1,8 +1,8 @@
-﻿import type ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import { cellPlainValue } from "@/lib/ozonImageExcel";
 import { collectRowContexts } from "@/lib/templateGenerator/scan";
 import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
-import { sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
+import { fetchMetabaseProductBySku, sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
 import { formatImageCellValue, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { findEanHeader } from "@/lib/templateGenerator/templateDuplicates";
@@ -72,6 +72,43 @@ function formatPriceCell(price: number): string {
 }
 
 /** Записать variation_id в шаблон и вернуть контексты строк для заполнения */
+
+/** Заполнить пустую колонку «Ссылка на изображение» из Metabase (rehost). */
+export async function prefillYandexImageCells(
+  ws: ExcelJS.Worksheet,
+  scan: TemplateSheetScan,
+  contexts: { row: number; sku: string }[]
+): Promise<number> {
+  const imageCol = scan.imageCol;
+  if (!imageCol || !contexts.length) return 0;
+
+  const rehostCache: RehostCache = new Map();
+  let filled = 0;
+
+  for (const ctx of contexts) {
+    const existing = cellPlainValue(ws.getCell(ctx.row, imageCol).value).trim();
+    if (existing) continue;
+
+    const variationId = normVariationSku(ctx.sku);
+    if (!variationId) continue;
+
+    try {
+      const mb = await fetchMetabaseProductBySku(ctx.sku);
+      if (!mb?.imageUrls.length) continue;
+      let images = sortImagesForComposite(mb.imageUrls);
+      images = await rehostImageUrls(images, ctx.sku, rehostCache);
+      if (!images.length) continue;
+      setCell(ws, ctx.row, imageCol, formatImageCellValue(images));
+      filled++;
+    } catch {
+      /* skip */
+    }
+  }
+
+  return filled;
+}
+
+
 export async function injectVariationProducts(
   ws: ExcelJS.Worksheet,
   scan: TemplateSheetScan,

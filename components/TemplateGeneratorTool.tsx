@@ -48,7 +48,7 @@ import {
 } from "@/lib/templateGenerator/exampleTemplate";
 import { applyYandexPricesToWorksheet } from "@/lib/templateGenerator/applyYandexPrices";
 import { filterHumanDropdownValues } from "@/lib/templateGenerator/fieldValues";
-import { injectVariationProducts } from "@/lib/templateGenerator/injectVariationRows";
+import { injectVariationProducts, prefillYandexImageCells } from "@/lib/templateGenerator/injectVariationRows";
 import { normVariationSku, parseVariationIdsFromText } from "@/lib/templateGenerator/parseVariationIds";
 import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
 import {
@@ -926,7 +926,7 @@ export function TemplateGeneratorTool() {
       }
       const withPrices = products.filter((p) => p.priceUsd != null).length;
       const ws = wb.getWorksheet(scan.sheetName)!;
-      await injectVariationProducts(ws, scan, products, { skipImages: marketplace === "yandex" });
+      await injectVariationProducts(ws, scan, products, { skipImages: false });
       setDupsPhaseDone(false);
       setPipelineStep(1);
       const newScan = bumpSheetScan();
@@ -1123,7 +1123,7 @@ export function TemplateGeneratorTool() {
               (mbJson.missing?.length ? ` (пропущены: ${mbJson.missing.join(", ")})` : "")
           );
         }
-        fillableContexts = await injectVariationProducts(ws, scan, products, { skipImages: marketplace === "yandex" });
+        fillableContexts = await injectVariationProducts(ws, scan, products, { skipImages: false });
         const newScan = bumpSheetScan();
         refreshDupGroups(newScan);
         if (imageHeader && marketplace !== "yandex") {
@@ -1161,6 +1161,15 @@ export function TemplateGeneratorTool() {
         }
       } catch {
         setProgress("Цены не загрузились — продолжаем заполнение контента…");
+      }
+    }
+
+    if (marketplace === "yandex" && fillableContexts.length && scan.imageCol) {
+      try {
+        const prefilled = await prefillYandexImageCells(ws, scan, fillableContexts);
+        if (prefilled > 0) bumpSheetScan();
+      } catch {
+        /* optional */
       }
     }
 
