@@ -488,6 +488,7 @@ export function TemplateGeneratorTool() {
     metabaseEnabled,
     photoMin,
     photoTarget,
+    marketplace,
     exampleFileName,
     exampleSheet,
     exampleSamples
