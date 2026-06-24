@@ -1167,7 +1167,18 @@ export function TemplateGeneratorTool() {
     if (marketplace === "yandex" && fillableContexts.length && scan.imageCol) {
       try {
         const prefilled = await prefillYandexImageCells(ws, scan, fillableContexts);
-        if (prefilled > 0) bumpSheetScan();
+        if (prefilled > 0) {
+          bumpSheetScan();
+          if (imageHeader) {
+            await prefillPhotoReviewColumn(
+              ws,
+              scan,
+              fillableContexts,
+              { minCount: photoMin, targetCount: photoTarget },
+              imageHeader
+            );
+          }
+        }
       } catch {
         /* optional */
       }
@@ -1359,7 +1370,7 @@ export function TemplateGeneratorTool() {
           applyOverwrite,
           scan.imageCol
         );
-        if (!isPhotosStage && imageHeader && marketplace !== "yandex") {
+        if (!isPhotosStage && imageHeader) {
           await prefillPhotoReviewColumn(
             ws,
             scan,
