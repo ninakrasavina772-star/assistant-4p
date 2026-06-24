@@ -20,10 +20,8 @@ import {
 import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
-import {
-  filterYandexProductImageUrls,
-  isLowQualityImageUrl
-} from "@/lib/templateGenerator/yandexImageFilter";
+import { isLowQualityImageUrl } from "@/lib/templateGenerator/yandexImageFilter";
+import { filterYandexProductImageUrls } from "@/lib/templateGenerator/yandexImageFilter.server";
 
 const MAX_PACKSHOT_PROCESS = 5;
 const MAX_BACKGROUND = 4;
