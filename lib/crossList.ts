@@ -16,7 +16,7 @@ import {
   CROSS_RUBRIC_FACTORY_PHASH_MAX,
   type CrossSoftDupOptions
 } from "./dupTiers";
-import { type PhashCache } from "./imagePhash";
+import { type PhashCache, visualSimilarFromPhash } from "./imagePhash";
 import {
   collectArticleKeys,
   collectEanIndexKeys,
@@ -26,12 +26,47 @@ import {
 import { normBrand, sameBrandForFuzzy } from "./pairScoring";
 import type {
   AttrMatchOptions,
+  CompareProduct,
   FpProduct,
   NameLocale,
   OnlyACrossWithBRow,
   OnlyBCrossWithARow,
   OnlyBInternalDupRow
 } from "./types";
+
+
+function crossRubricFactoryPhotoAllowsPair(
+  cA: CompareProduct,
+  cB: CompareProduct,
+  cache: PhashCache,
+  maxDist: number
+): boolean {
+  const aList = cA.allImages?.length
+    ? cA.allImages
+    : cA.firstImage
+      ? [cA.firstImage]
+      : [];
+  const bList = cB.allImages?.length
+    ? cB.allImages
+    : cB.firstImage
+      ? [cB.firstImage]
+      : [];
+  if (!aList.length || !bList.length) return true;
+
+  let compared = false;
+  for (const ua of aList) {
+    for (const ub of bList) {
+      if (!cache.has(ua) || !cache.has(ub)) continue;
+      const ha = cache.get(ua);
+      const hb = cache.get(ub);
+      if (ha == null || hb == null) continue;
+      compared = true;
+      if (visualSimilarFromPhash(ha, hb, maxDist)) return true;
+    }
+  }
+  return !compared;
+}
+
 
 /** Параметры только для режима «Дубли: 2 рубрики, 1 сайт». */
 export type BuildCrossMatchOpts = {
@@ -60,7 +95,7 @@ export async function buildOnlyBCrossWithA(
   const factoryToA = new Map<string, FpProduct[]>();
   const crossRubric = matchOpts?.crossRubric === true;
   const crossSoftOpts: CrossSoftDupOptions | undefined = crossRubric
-    ? { crossRubric: true }
+    ? { crossRubric: true, skipDisjointEanGuard: true }
     : undefined;
   for (const pA of allA) {
     const bk = normBrandKeyStr(pA);
@@ -144,17 +179,15 @@ export async function buildOnlyBCrossWithA(
           );
           if (colorV === "conflict") continue;
           if (colorV === "unknown") {
-            const imgA = cA.firstImage || cA.allImages?.[0] || "";
-            const imgB = cB.firstImage || cB.allImages?.[0] || "";
-            /** Фото — только если оба превью есть и phash уже загружен; иначе не режем по коду модели. */
-            if (imgA && imgB && phashCache.size > 0) {
-              const visualOk = visualSimilarAcrossAllPhotos(
+            if (
+              !crossRubricFactoryPhotoAllowsPair(
                 cA,
                 cB,
                 phashCache,
                 CROSS_RUBRIC_FACTORY_PHASH_MAX
-              );
-              if (!visualOk) continue;
+              )
+            ) {
+              continue;
             }
           }
           hitA.add(pA.id);
@@ -242,7 +275,7 @@ export async function buildOnlyACrossWithB(
   const factoryToB = new Map<string, FpProduct[]>();
   const crossRubric = matchOpts?.crossRubric === true;
   const crossSoftOpts: CrossSoftDupOptions | undefined = crossRubric
-    ? { crossRubric: true }
+    ? { crossRubric: true, skipDisjointEanGuard: true }
     : undefined;
   for (const pB of allB) {
     const bk = normBrandKeyStr(pB);
