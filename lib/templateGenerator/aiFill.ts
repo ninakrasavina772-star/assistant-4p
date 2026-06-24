@@ -15,6 +15,7 @@ import {
   isYandexTitleHeader,
   padYandexTitle,
   YANDEX_SYSTEM_APPEND,
+  YANDEX_PHOTO_MANAGER_APPEND,
   yandexDescriptionTooShort,
   yandexTitleNeedsFix
 } from "@/lib/templateGenerator/yandexRules";
@@ -190,7 +191,9 @@ function buildSystem(marketplace?: MarketplaceId): string {
 
 Роль: опытный категорийный менеджер Яндекс Маркета. Качество важнее скорости — заполняй каждую строку на совесть, не пропускай поля, не копируй одно и то же название на разные товары.
 
-${YANDEX_SYSTEM_APPEND}`;
+${YANDEX_SYSTEM_APPEND}
+
+${YANDEX_PHOTO_MANAGER_APPEND}`;
   }
   return base;
 }

@@ -59,6 +59,7 @@ import {
 } from "@/lib/templateGenerator/templateDuplicates";
 import { TemplateDuplicatesPanel } from "@/components/TemplateDuplicatesPanel";
 import type { MarketplaceId } from "@/lib/marketplace/types";
+import { YANDEX_PHOTO_MANAGER_APPEND } from "@/lib/templateGenerator/yandexRules";
 import { MARKETPLACE_LABELS } from "@/lib/marketplace/types";
 import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
@@ -1289,7 +1290,11 @@ export function TemplateGeneratorTool() {
       opts?.strictExample || byVariationIds
         ? buildStrictExampleInstructions(exampleSamples.length > 0)
         : "";
-    const fillPrompt = [strictBlock, buildFillPromptFromChat(chatMessages, exampleRefText)]
+    const fillPrompt = [
+      strictBlock,
+      marketplace === "yandex" ? YANDEX_PHOTO_MANAGER_APPEND : "",
+      buildFillPromptFromChat(chatMessages, exampleRefText)
+    ]
       .filter(Boolean)
       .join("\n\n");
     const applyOverwrite =

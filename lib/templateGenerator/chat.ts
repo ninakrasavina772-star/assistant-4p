@@ -1,6 +1,7 @@
 import type { CsvColumnMap, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import type { CsvTable } from "@/lib/templateGenerator/csvIndex";
 import { parseVariationIdsFromList } from "@/lib/templateGenerator/parseVariationIds";
+import { YANDEX_PHOTO_MANAGER_APPEND } from "@/lib/templateGenerator/yandexRules";
 
 export type ChatRole = "user" | "assistant";
 
@@ -43,6 +44,7 @@ export type TemplateChatContext = {
   metabaseEnabled?: boolean;
   photoMin?: number;
   photoTarget?: number;
+  marketplace?: "ozon" | "yandex";
   columns?: TemplateColumnBrief[];
   productSamples?: TemplateProductSample[];
   uniqueBrands?: string[];
@@ -301,6 +303,10 @@ export function buildContextBlock(ctx: TemplateChatContext): string {
 
   if (ctx.selectedColumns?.length) {
     lines.push("", `Сейчас отмечены для AI: ${ctx.selectedColumns.join("; ")}`);
+  }
+
+  if (ctx.marketplace === "yandex") {
+    lines.push("", "Яндекс Маркет — правила foto (категорийный менеджер):", YANDEX_PHOTO_MANAGER_APPEND.trim());
   }
 
   if (ctx.photoEnabled) {
