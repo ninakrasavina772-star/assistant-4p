@@ -690,7 +690,7 @@ export function PodruzhkaOzonTool() {
             }
             if (!visionNote) {
               visionNote =
-                "Фото: CSV-галерея или Metabase (/huge/) при плохом Ozon-thumb, duo на белом. " +
+                "Макет html-figma-v40: защита белого колпачка, зачистка боковых полей. " +
                 `Параллельно ×${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
             }
             return {
@@ -1207,7 +1207,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v15).
+                      html-figma-v40).
                     </>
                   ) : null}
                 </p>

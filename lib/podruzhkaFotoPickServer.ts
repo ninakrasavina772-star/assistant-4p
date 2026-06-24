@@ -29,15 +29,15 @@ export type PerfumeFotoPickResult = {
 };
 
 const KIND_RANK: Record<PerfumeImageKind, number> = {
-  duo_white: 3,
-  single_white: 2,
+  single_white: 3,
+  duo_white: 2,
   other: 1
 };
 
 /** Сколько URL анализировать визуально (все типичные галереи 4Partners ≤ 20). */
 const VISUAL_ANALYZE_MAX = 17;
 
-/** Серверный выбор: duo на белом → один флакон → прочее. */
+/** Серверный выбор: один флакон на белом → duo (коробка+флакон) → прочее. */
 export async function pickBestPerfumeFotoServer(urls: string[]): Promise<{
   url: string;
   ranked: PerfumeFotoPickResult[];
