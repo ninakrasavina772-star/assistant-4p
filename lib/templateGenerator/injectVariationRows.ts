@@ -5,6 +5,7 @@ import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct
 import { fetchMetabaseProductBySku, sortImagesForComposite } from "@/lib/templateGenerator/metabaseProduct";
 import { formatImageCellValue, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
+import { filterYandexProductImageUrls } from "@/lib/templateGenerator/yandexImageFilter";
 import { findEanHeader } from "@/lib/templateGenerator/templateDuplicates";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import type { TemplateSheetScan } from "@/lib/templateGenerator/types";
@@ -96,6 +97,7 @@ export async function prefillYandexImageCells(
       const mb = await fetchMetabaseProductBySku(ctx.sku);
       if (!mb?.imageUrls.length) continue;
       let images = sortImagesForComposite(mb.imageUrls);
+      images = await filterYandexProductImageUrls(images);
       images = await rehostImageUrls(images, ctx.sku, rehostCache);
       if (!images.length) continue;
       setCell(ws, ctx.row, imageCol, formatImageCellValue(images));
@@ -146,6 +148,7 @@ export async function injectVariationProducts(
     const sku = String(p.variationId);
     let images = sortImagesForComposite(p.imageUrls);
     if (images.length) {
+      images = await filterYandexProductImageUrls(images);
       images = await rehostImageUrls(images, sku, rehostCache);
     }
     const imageText = images.length ? formatImageCellValue(images) : "";

@@ -20,16 +20,17 @@ import {
 import { mergeImageUrls, parseImageUrls } from "@/lib/templateGenerator/photos";
 import { normVariationSku } from "@/lib/templateGenerator/parseVariationIds";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
+import {
+  filterYandexProductImageUrls,
+  isLowQualityImageUrl
+} from "@/lib/templateGenerator/yandexImageFilter";
 
 const MAX_PACKSHOT_PROCESS = 5;
 const MAX_BACKGROUND = 4;
 const PACKSHOT_CONCURRENCY = 3;
 
 function isThumbOrSmallUrl(url: string): boolean {
-  const u = url.toLowerCase();
-  return /thumb|_small|_mini|preview|icon|multimedia-1-s\/|\/s\.jpg|50x50|100x100|150x150/.test(
-    u
-  );
+  return isLowQualityImageUrl(url);
 }
 
 function isCdnPackshotUrl(url: string): boolean {
@@ -264,6 +265,7 @@ export async function resolveYandexRowPhotos(
   }
 
   sourceUrls = sourceUrls.filter((u) => !isThumbOrSmallUrl(u));
+  sourceUrls = await filterYandexProductImageUrls(sourceUrls);
 
   const rehostCache: RehostCache = new Map();
   if (sourceUrls.length) {
