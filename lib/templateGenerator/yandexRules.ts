@@ -8,6 +8,13 @@ const DESCRIPTION_MIN_LEN = 600;
 const GENERIC_ADJ_RE =
   /\b(?:премиальн\w*|популярн\w*|оригинальн\w*|элегантн\w*|стильн\w*|эксклюзивн\w*|уникальн\w*|качественн\w*|шикарн\w*|надёжн\w*|надежн\w*|лучш\w*|топов\w*|бестселлер\w*|новинк\w*|рекомендуем\w*|профессиональн\w*|стойк\w*|загадочн\w*|солнечн\w*|насыщенн\w*|таинственн\w*|чувственн\w*|соблазнительн\w*|роскошн\w*|изысканн\w*|волшебн\w*|идеальн\w*|совершенн\w*|невероятн\w*|потрясающ\w*|божественн\w*|восхитительн\w*|завораживающ\w*|чарующ\w*|утонченн\w*|нежн\w*|ярк\w*|замечательн\w*)\b/gi;
 
+/** Английские типы/формулировки вместо русского типа товара */
+const EN_PRODUCT_TYPE_RE =
+  /\b(?:eau de parfum|eau de toilette|eau de cologne|edt|edp|extrait de parfum|parfum spray|parfum\b|toilette\b|for women|for men|for her|for him|women eau|men eau|unisex eau|vapo(?:risateur)?|vaporisateur|deodorant spray|body spray|eau fra[iî]che)\b/i;
+
+const RU_PRODUCT_TYPE_START =
+  /^(?:парфюмерная вода|туалетная вода|духи|одеколон|парфюмированный спрей|парфюмерия|женская парфюмерия|мужская парфюмерия|парфюмерия унисекс|крем|гель|лосьон|шампунь|маска|сыворотка|тональный крем|помада|тушь|пудра|консилер|бальзам|масло|скраб|пенка|спрей|дезодорант)/i;
+
 const VOLUME_RE =
   /\b\d+[\s.,]?\d*\s*(?:мл|ml|мл\.|л|l|г|g|кг|kg|шт\.?|pcs|уп\.?)\b/gi;
 const SHADE_RE =
@@ -60,19 +67,26 @@ export const YANDEX_SYSTEM_APPEND = `
 - Не подставляй одно и то же слово во все карточки (особенно «увлажняющий» для парфюма, декоративки и т.п.).
 
 НАЗВАНИЕ ТОВАРА (если поле в списке):
-- Структура: ТИП товара на русском + бренд + модель/линейка + при необходимости ровно 1 слово об ОБЪЕКТИВНОМ свойстве товара.
+- Язык: название на РУССКОМ. Английские слова допустимы ТОЛЬКО в бренде и модели/линейке (Calvin Klein, Si Passione, La Vie Est Belle).
+- Структура (строго): ТИП товара на русском + бренд + модель/линейка + ровно 1 прилагательное об ОБЪЕКТИВНОМ свойстве.
+- Тип товара — только по-русски: «Парфюмерная вода», «Туалетная вода», «Духи», «Парфюмированный спрей», «Крем для лица» и т.п.
+- ЗАПРЕЩЕНО в названии: Eau de Parfum, Eau de Toilette, EDT, EDP, for women, for men, Women, Men, Vapo, Spray как тип товара.
 - Длина: ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов. Не длиннее ${YANDEX_TITLE_MAX_LEN}!
 - Допустимое свойство — только факт о товаре, не реклама:
   • Парфюм: семейство аромата (цветочный, восточный, древесный, фруктовый, свежий, морской, пряный, амбровый, шипровый, цитрусовый).
-  • Косметика: функция или текстура (увлажняющий, питательный, матовый, с SPF и т.п. — только если это свойство формулы/покрытия).
+  • Косметика: функция или текстура (увлажняющий, питательный, матовый).
   • Если свойство неочевидно — не добавляй прилагательное, расширяй модель/линейкой.
-- ЗАПРЕЩЕНО (маркетинг, эмоции, оценка): стойкий, уникальный, загадочный, солнечный, насыщенный, премиальный, популярный, оригинальный, элегантный, лучший, топовый, эксклюзивный, роскошный, нежный, чувственный и любой рекламный шум.
+- ЗАПРЕЩЕНО (маркетинг): стойкий, уникальный, загадочный, солнечный, насыщенный, премиальный, популярный, оригинальный, элегантный, лучший, топовый, эксклюзивный.
 - ЗАПРЕЩЕНО: объём, оттенок, SPF, артикул, EAN.
-- Примеры:
+- Примеры ПРАВИЛЬНО:
   • Парфюмерная вода Giorgio Armani Si Passione цветочная
-  • Туалетная вода для мужчин Ferrari Scuderia Black морской
+  • Туалетная вода для женщин Lancôme La Vie Est Belle цветочная
+  • Парфюмерная вода Calvin Klein Eternity свежая
   • Крем для лица BIOTHERM Aquasource Night Spa питательный
-  • Помада для губ MAC Ruby Woo матовая
+- Примеры НЕПРАВИЛЬНО (так нельзя):
+  • Calvin Klein Women Eau de Parfum
+  • Lancome La Vie Est Belle - Eau de Parfum
+  • BOSS FEMME eau de parfum spray
 
 ОПИСАНИЕ ТОВАРА (если поле в списке):
 - Минимум ${DESCRIPTION_MIN_LEN} символов, лучше 800–1500.
@@ -81,7 +95,7 @@ export const YANDEX_SYSTEM_APPEND = `
 
 export function buildYandexFieldHint(header: string): string | null {
   if (isYandexTitleHeader(header)) {
-    return `Яндекс: тип + бренд + модель/линейка + 0–1 объективное свойство (семейство аромата или функция косметики), ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов; без стойкий/уникальный/загадочный/солнечный`;
+    return `Яндекс: тип на русском + бренд + модель + 1 свойство (цветочный/восточный…), ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} симв.; без Eau de Parfum/for women`;
   }
   if (isYandexDescriptionHeader(header)) {
     return `Яндекс: продающее описание по блокам, минимум ${DESCRIPTION_MIN_LEN} символов, как у категорийного менеджера`;
@@ -108,6 +122,20 @@ export function hasBannedTitleAdjectives(title: string): boolean {
   return GENERIC_ADJ_RE.test(title);
 }
 
+export function titleHasEnglishProductType(title: string): boolean {
+  return EN_PRODUCT_TYPE_RE.test(title);
+}
+
+export function yandexTitleLanguageNeedsFix(title: string): boolean {
+  const t = stripYandexTitleNoise(title).trim();
+  if (!t) return true;
+  if (titleHasEnglishProductType(t)) return true;
+  if (!RU_PRODUCT_TYPE_START.test(t)) return true;
+  const head = t.slice(0, 48);
+  if (!/[а-яё]/i.test(head)) return true;
+  return false;
+}
+
 function truncateAtWord(title: string, maxLen: number): string {
   if (title.length <= maxLen) return title;
   const cut = title.slice(0, maxLen);
@@ -129,6 +157,7 @@ export function padYandexTitle(title: string): string {
 export function yandexTitleNeedsFix(text: string): boolean {
   const raw = stripYandexTitleNoise(text);
   if (hasBannedTitleAdjectives(raw)) return true;
+  if (yandexTitleLanguageNeedsFix(raw)) return true;
   const t = stripGenericTitleAdjectives(raw);
   return t.length < YANDEX_TITLE_MIN_LEN || t.length > YANDEX_TITLE_MAX_LEN;
 }

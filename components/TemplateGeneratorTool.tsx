@@ -60,6 +60,12 @@ import {
 import { TemplateDuplicatesPanel } from "@/components/TemplateDuplicatesPanel";
 import type { MarketplaceId } from "@/lib/marketplace/types";
 import { YANDEX_PHOTO_MANAGER_APPEND } from "@/lib/templateGenerator/yandexRules";
+import { TemplatePhotoReviewPanel } from "@/components/TemplatePhotoReviewPanel";
+import {
+  applyPhotoReviewToWorkbook,
+  loadPhotoReviewFromWorkbook,
+  type PhotoReviewItem
+} from "@/lib/templateGenerator/photoReview";
 import { MARKETPLACE_LABELS } from "@/lib/marketplace/types";
 import { extractWorkbookListValidations, sanitizeOzonXlsxBuffer } from "@/lib/templateGenerator/xlsxValidations";
 import { TemplateGeneratorChat } from "@/components/TemplateGeneratorChat";
@@ -252,6 +258,7 @@ export function TemplateGeneratorTool() {
   const [dupsPhaseDone, setDupsPhaseDone] = useState(false);
   const [contentPhaseDone, setContentPhaseDone] = useState(false);
   const [photosFillOffset, setPhotosFillOffset] = useState(0);
+  const [photoReviewItems, setPhotoReviewItems] = useState<PhotoReviewItem[]>([]);
 
   const step2Ref = useRef<HTMLElement>(null);
   const scanRef = useRef<TemplateSheetScan | null>(null);
@@ -1172,15 +1179,6 @@ export function TemplateGeneratorTool() {
         const prefilled = await prefillYandexImageCells(ws, scan, fillableContexts);
         if (prefilled > 0) {
           bumpSheetScan();
-          if (imageHeader) {
-            await prefillPhotoReviewColumn(
-              ws,
-              scan,
-              fillableContexts,
-              { minCount: photoMin, targetCount: photoTarget },
-              imageHeader
-            );
-          }
         }
       } catch {
         /* optional */
@@ -1377,7 +1375,7 @@ export function TemplateGeneratorTool() {
           applyOverwrite,
           scan.imageCol
         );
-        if (!isPhotosStage && imageHeader) {
+        if (imageHeader && (isPhotosStage || marketplace !== "yandex")) {
           await prefillPhotoReviewColumn(
             ws,
             scan,
@@ -1419,6 +1417,10 @@ export function TemplateGeneratorTool() {
           setProgress(`Этап 3 готов: фото для ${totalRows} строк`);
           setDone(true);
           setStep(3);
+          if (imageHeader) {
+            const reviewItems = loadPhotoReviewFromWorkbook(ws, scan, { imageHeader });
+            setPhotoReviewItems(reviewItems);
+          }
           void eventReply(`Фото обработаны для всех ${totalRows} строк.`);
         } else {
           setProgress(`Этап 2 готов: контент для ${totalRows} строк`);
@@ -1586,6 +1588,42 @@ export function TemplateGeneratorTool() {
     const allDone = total > 0 && fillRowOffset >= total;
     return { total, remaining, nextBatch, rangeFrom, rangeTo, allDone };
   }, [liveRowCount, fillRowOffset, fillBatchSize]);
+
+
+  const imageHeaderName = useMemo(
+    () =>
+      scan?.columns.find((c) => c.header.toLowerCase().includes("ссылка на изображение"))?.header ??
+      null,
+    [scan]
+  );
+
+  const refreshPhotoReview = useCallback(() => {
+    const wb = wbRef.current;
+    const s = scanRef.current ?? scan;
+    if (!wb || !s || !imageHeaderName) {
+      setError("Нет шаблона или колонки «Ссылка на изображение»");
+      return;
+    }
+    const ws = wb.getWorksheet(s.sheetName)!;
+    const items = loadPhotoReviewFromWorkbook(ws, s, { imageHeader: imageHeaderName });
+    setPhotoReviewItems(items);
+    if (!items.length) {
+      setBatchNotice("В шаблоне пока нет доп. фото для проверки — сначала этап 3.");
+    }
+  }, [scan, imageHeaderName]);
+
+  const applyPhotoReview = useCallback(async () => {
+    const wb = wbRef.current;
+    const s = scanRef.current ?? scan;
+    if (!wb || !s || !imageHeaderName || !photoReviewItems.length) return;
+    const ws = wb.getWorksheet(s.sheetName)!;
+    const n = applyPhotoReviewToWorkbook(ws, s, photoReviewItems, {
+      imageHeader: imageHeaderName
+    });
+    bumpSheetScan();
+    setBatchNotice(`Доп. фото обновлены для ${n} строк`);
+    refreshPhotoReview();
+  }, [photoReviewItems, scan, imageHeaderName, bumpSheetScan, refreshPhotoReview]);
 
   const photosFillStats = useMemo(() => {
     const total = liveRowCount;
@@ -2537,6 +2575,17 @@ export function TemplateGeneratorTool() {
             ) : null}
           </div>
         </section>
+      ) : null}
+
+
+      {(contentPhaseDone || done) && photoEnabled ? (
+        <TemplatePhotoReviewPanel
+          items={photoReviewItems}
+          busy={busy}
+          onChange={setPhotoReviewItems}
+          onRefresh={refreshPhotoReview}
+          onApply={() => void applyPhotoReview()}
+        />
       ) : null}
 
       {done ? (
