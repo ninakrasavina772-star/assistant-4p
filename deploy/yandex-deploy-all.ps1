@@ -49,40 +49,44 @@ function Test-YcApi {
 }
 
 function Ensure-YcAuth {
-  if ((Invoke-Yc config list).Ok -and (Test-YcApi)) {
-    Write-Host "Yandex: uzhe voshli" -ForegroundColor Green
-    return
-  }
-
-  $oauthUrl = "https://oauth.yandex.ru/authorize?response_type=token&client_id=1a6990aa636648e9b2ef855fa7bec2fb"
+  $saKey = Join-Path $PSScriptRoot "yc-sa-key.json"
   $cloudId = "b1g1rlk43m94n1p2igbi"
   $folderId = "b1gfhds31e8d5eaccn57"
+  $profile = "assistant-sa"
 
-  Write-Host ""
-  Write-Host "=== Vhod v Yandex (odin raz) ===" -ForegroundColor Yellow
-  Write-Host ""
-  Write-Host "1. Otkroetsya brauzer - nazhmite Razreshit" -ForegroundColor White
-  Write-Host "2. Na beloy stranitse skopiruyte kod (stroka y0_...)" -ForegroundColor White
-  Write-Host ""
-  Start-Process $oauthUrl
-  Start-Sleep -Seconds 2
-  $token = Read-Host "3. VSTAVTE kod syuda i Enter"
-
-  if (-not $token -or $token.Trim().Length -lt 20) {
-    throw "Token pustoy. Zapustite skript snova."
+  if (-not (Test-Path $saKey)) {
+    $url = "https://console.cloud.yandex.ru/folders/$folderId/iam/service-accounts"
+    Write-Host ""
+    Write-Host "=== Odin raz: skachat fajl klyucha ===" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Otkryvayu stranicu servisnyh akkauntov..." -ForegroundColor Cyan
+    Start-Process $url
+    Start-Sleep -Seconds 2
+    Write-Host ""
+    Write-Host "Na otkryvshheysya stranitse:" -ForegroundColor White
+    Write-Host "  1) Nazhmite na servisnyy akkaunt (lyuboy v spiske)" -ForegroundColor White
+    Write-Host "  2) Vkladka Klyuchi avtorizatsii -> Sozdat avtorizovannyy klyuch" -ForegroundColor White
+    Write-Host "  3) Sozdat -> JSON fajl skachaetsya" -ForegroundColor White
+    Write-Host "  4) Perezapishite ego v papku deploy pod imenem:" -ForegroundColor White
+    Write-Host "     $saKey" -ForegroundColor Green
+    Write-Host ""
+    Read-Host "Kogda fajl na meste - nazhmite Enter"
+    if (-not (Test-Path $saKey)) {
+      throw "Ne nayden fajl: $saKey"
+    }
   }
-  $token = $token.Trim().Trim('"')
-  if ($token -match "access_token=([^&\s]+)") { $token = $Matches[1] }
 
-  Invoke-Yc config profile create default | Out-Null
-  Invoke-Yc config profile activate default | Out-Null
-  Invoke-Yc config set token $token | Out-Null
+  Invoke-Yc config profile create $profile | Out-Null
+  Invoke-Yc config profile activate $profile | Out-Null
+  Invoke-Yc config set service-account-key $saKey | Out-Null
   Invoke-Yc config set cloud-id $cloudId | Out-Null
   Invoke-Yc config set folder-id $folderId | Out-Null
   Invoke-Yc config set compute-default-zone $script:zone | Out-Null
 
   if (-not (Test-YcApi)) {
-    throw "Token ne podoshiel. Skopiruyte kod so stranicy Yandex i zapustite skript."
+    $err = (Invoke-Yc vpc subnet list).Out
+    Write-Host $err -ForegroundColor Red
+    throw "Klyuch ne rabotaet. U servisnogo akkaunta dolzhna byt rol editor v papke default."
   }
   Write-Host "Yandex: OK" -ForegroundColor Green
 }
@@ -118,8 +122,9 @@ function Ensure-SecurityGroup {
   $sg = $sgs | Where-Object { $_.name -eq "assistant-4p-sg" } | Select-Object -First 1
   if (-not $sg) {
     Write-Host "Creating security group (ports 22,80,443)..." -ForegroundColor Cyan
-    $sgJson = & $yc vpc security-group create --name assistant-4p-sg --network-id $NetworkId --rule "direction=ingress,port=22,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --rule "direction=ingress,port=80,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --rule "direction=ingress,port=443,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --format json
-    $sg = $sgJson | ConvertFrom-Json
+    $sgJson = Invoke-Yc vpc security-group create --name assistant-4p-sg --network-id $NetworkId --rule "direction=ingress,port=22,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --rule "direction=ingress,port=80,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --rule "direction=ingress,port=443,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --rule "direction=ingress,port=3000,protocol=tcp,v4-cidrs=[0.0.0.0/0]" --format json
+    if (-not $sgJson.Ok) { throw ($sgJson.Out -join "`n") }
+    $sg = $sgJson.Out | ConvertFrom-Json
   }
   return $sg.id
 }
@@ -228,6 +233,7 @@ curl -sf http://127.0.0.1:3000/api/health && echo OK
 }
 
 Write-Host "=== assistant-4p Yandex deploy ===" -ForegroundColor Green
+& (Join-Path $PSScriptRoot "prepare-env.ps1") | Out-Null
 Ensure-SshKey
 Ensure-Yc
 Ensure-YcAuth

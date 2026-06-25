@@ -11,3 +11,5 @@ out
 .vercel
 tsconfig.tsbuildinfo
 .env*
+deploy/yc-sa-key.json
+deploy/.env.production
