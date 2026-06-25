@@ -41,19 +41,20 @@ is_frontal — true если товар смотрит на зрителя: эт
 false ТОЛЬКО при явном 3/4 или профиле, когда заметно видна боковая грань корпуса (не крышечка).
 Лёгкий наклон крышки, блики или тень НЕ делают кадр нефронтальным.
 
-has_white_background — true если фон белый #FFFFFF или очень светлый однотонный студийный (не цветной, не градиент, не интерьер).
-has_box — true если в кадре видна картонная коробка/упаковка товара (прямоугольная коробка рядом с флаконом, за ним или под ним), даже частично. Один флакон/тюбик без коробки = false.
+has_white_background — true если фон белый #FFFFFF, очень светлый однотонный студийный, ИЛИ прозрачный PNG (только флакон без фона — типичный packshot с CDN).
+has_box — true если в кадре видна картонная коробка/упаковка (прямоугольная коробка рядом с флаконом, за ним или под ним), даже частично. Флакон + коробка в одном кадре = true. Один флакон/тюбик без коробки = false.
 has_product — true если в кадре виден флакон/тюбик/баночка товара. false для цветов, листьев, ткани, lifestyle без товара.
 has_infographic — текст, бейджи, коллаж, lifestyle с моделью.
 quality — 0–100: резкость (мутное < 45, чёткий packshot 75+).
 
 suitable — true ТОЛЬКО если: has_product=true, is_frontal=true, has_white_background=true, has_box=false, has_infographic=false, quality>=50.
+Прозрачный фон (PNG packshot) считается подходящим фоном.
 
 JSON: {"suitable":true,"has_box":false,"has_infographic":false,"has_product":true,"is_frontal":true,"has_white_background":true,"quality":82,"reason":"..."}`;
 
 const MIN_QUALITY = 50;
 const MIN_SHARPNESS = 18;
-const VISION_TOP = 12;
+const VISION_MAX = 20;
 
 async function imageToDataUrl(rawUrl: string): Promise<{ dataUrl: string; usedUrl: string } | null> {
   const fetched = await fetchLetualImageDetailed(rawUrl);
@@ -93,10 +94,10 @@ function combineScore(
   else score -= 150;
   if (hasWhiteBackground) score += 70;
   else score -= 120;
-  if (!hasBox) score += 15;
+  if (!hasBox) score += 120;
   if (!hasInfographic) score += 15;
   if (!hasProduct) score -= 500;
-  if (hasBox) score -= 80;
+  if (hasBox) score -= 400;
   if (hasInfographic) score -= 100;
   if (quality < MIN_QUALITY) score -= 40;
   if (sharpness < MIN_SHARPNESS) score -= 30;
@@ -182,21 +183,43 @@ async function scoreOneUrl(
   return combineScore(parsed, technical, img.usedUrl);
 }
 
+/** Флакон без коробки, фронт, достаточное качество — можно генерировать (в т.ч. прозрачный PNG). */
+export function isGoodPackshotSource(r: LetualPhotoScore): boolean {
+  return (
+    r.hasProduct &&
+    !r.hasBox &&
+    !r.hasInfographic &&
+    r.isFrontal &&
+    r.hasWhiteBackground &&
+    r.quality >= MIN_QUALITY &&
+    r.sharpness >= MIN_SHARPNESS
+  );
+}
+
+export function derivePickStatus(best: LetualPhotoScore | undefined): "ok" | "review" | "no_photo" {
+  if (!best || !best.hasProduct) return "no_photo";
+  if (best.suitable || isGoodPackshotSource(best)) return "ok";
+  return "review";
+}
+
 export function pickBestFromRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
   const clean = ranked.filter((r) => r.hasProduct && !r.hasInfographic);
   if (!clean.length) return undefined;
 
-  const suitable = clean.filter((r) => r.suitable);
+  const bottleOnly = clean.filter((r) => !r.hasBox);
+  const pool = bottleOnly.length ? bottleOnly : clean;
+
+  const suitable = pool.filter((r) => r.suitable);
   if (suitable.length) {
     return [...suitable].sort((a, b) => b.score - a.score)[0];
   }
 
-  const bottleOnly = clean.filter((r) => !r.hasBox);
-  const pool = bottleOnly.length ? bottleOnly : clean;
+  const goodPackshot = pool.filter((r) => isGoodPackshotSource(r));
+  if (goodPackshot.length) {
+    return [...goodPackshot].sort((a, b) => b.score - a.score)[0];
+  }
 
-  const whiteFrontal = pool.filter(
-    (r) => r.isFrontal && r.hasWhiteBackground
-  );
+  const whiteFrontal = pool.filter((r) => r.isFrontal && r.hasWhiteBackground);
   if (whiteFrontal.length) {
     return [...whiteFrontal].sort((a, b) => b.score - a.score)[0];
   }
@@ -230,7 +253,10 @@ export async function pickBestLetualPhoto(
     technicalRanked.map((t) => [t.originalUrl, t])
   );
 
-  const forVision = downloadable.slice(0, VISION_TOP);
+  const forVision =
+    downloadable.length <= VISION_MAX
+      ? downloadable
+      : technicalRanked.slice(0, VISION_MAX).map((t) => t.originalUrl);
 
   const ranked = (
     await Promise.all(
@@ -256,10 +282,20 @@ export async function pickSuitableLetualPhoto(
 ): Promise<{ url: string; ranked: LetualPhotoScore[]; best?: LetualPhotoScore }> {
   const picked = await pickBestLetualPhoto(urls, openaiApiKey);
   const best = pickBestFromRanked(picked.ranked);
-  const suitableUrl = best?.suitable ? best.url : "";
+  const suitableUrl =
+    best && (best.suitable || isGoodPackshotSource(best)) ? best.url : "";
   return {
     url: suitableUrl,
     ranked: picked.ranked,
     best
   };
+}
+
+/** Оценить список URL без выбора лучшего. */
+export async function scoreLetualPhotoUrls(
+  urls: string[],
+  openaiApiKey: string
+): Promise<LetualPhotoScore[]> {
+  const picked = await pickBestLetualPhoto(urls, openaiApiKey);
+  return picked.ranked;
 }

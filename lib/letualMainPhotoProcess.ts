@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import {
   cropToVisibleProduct,
   preprocessCosmeticsProductBufferEdge
@@ -13,9 +14,28 @@ export async function downloadImageBuffer(url: string): Promise<Buffer> {
   return fetched.buf;
 }
 
+async function hasSignificantTransparency(buf: Buffer): Promise<boolean> {
+  const meta = await sharp(buf).metadata();
+  if (!meta.hasAlpha) return false;
+  const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const total = info.width * info.height;
+  if (!total) return false;
+  let transparent = 0;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i]! < 128) transparent++;
+  }
+  return transparent / total > 0.12;
+}
+
 /** Снять фон и подогнать под требования Летуаль. */
 export async function processLetualMainPhotoFromUrl(sourceUrl: string): Promise<Buffer> {
   const raw = await downloadImageBuffer(sourceUrl);
+
+  if (await hasSignificantTransparency(raw)) {
+    const png = await sharp(raw).ensureAlpha().png().toBuffer();
+    return compositeLetualMainPhoto(png);
+  }
+
   const cutout = await preprocessCosmeticsProductBufferEdge(raw);
   const cropped = await cropToVisibleProduct(cutout, 8, 0.02, 4);
   return compositeLetualMainPhoto(cropped);

@@ -1,14 +1,26 @@
 import {
+  derivePickStatus,
   pickBestFromRanked,
   pickSuitableLetualPhoto,
+  scoreLetualPhotoUrls,
   type LetualPhotoScore
 } from "@/lib/letualPhotoAi";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
-import { fetchLetualVariations } from "@/lib/letualMetabase";
-import { pickFromSiblingCatalogPhotos } from "@/lib/letualSiblingPhotos";
-import { searchLetualWebImages, validateImageUrl, isSerpApiConfigured } from "@/lib/letualWebSearch";
+import {
+  fetchLetualVariations,
+  fetchSiblingVariationPhotos,
+  type LetualVariationRow
+} from "@/lib/letualMetabase";
 import { uploadLetualMainPhoto } from "@/lib/ozonImageStorage";
 import type { LetualResultRow } from "@/lib/letualMainPhotoExcel";
+import type {
+  LetualGalleryPhoto,
+  LetualGenerateItem,
+  LetualGenerateRow,
+  LetualPickRow,
+  LetualPickStatus
+} from "@/lib/letualPickTypes";
+import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
 
 function resolveOpenAiKey(clientKey?: string): string {
   const k = (clientKey ?? "").trim() || (process.env.OPENAI_API_KEY ?? "").trim();
@@ -16,148 +28,52 @@ function resolveOpenAiKey(clientKey?: string): string {
   return k;
 }
 
+function buildDbComment(best: LetualPhotoScore | undefined): string {
+  if (!best) return "";
+  if (best.suitable || derivePickStatus(best) === "ok") return best.reason || "Подходит";
+  const notes: string[] = [];
+  if (best.hasBox) notes.push("в кадре коробка");
+  if (!best.hasWhiteBackground) notes.push("фон не белый/прозрачный");
+  if (!best.isFrontal) notes.push("не фронтальный ракурс");
+  if (best.quality < 50) notes.push("низкое качество");
+  if (!best.hasProduct) notes.push("нет товара в кадре");
+  if (best.hasInfographic) notes.push("инфографика/lifestyle");
+  if (!notes.length && best.reason) notes.push(best.reason);
+  return notes.join("; ") || "Требует проверки";
+}
+
 async function processAndUpload(sourceUrl: string): Promise<string> {
   const jpeg = await processLetualMainPhotoFromUrl(sourceUrl);
   return uploadLetualMainPhoto(jpeg, "main.jpg");
 }
 
-async function tryProcessCandidates(
-  candidates: string[]
-): Promise<{ resultUrl: string; sourceUrl: string } | null> {
-  for (const url of candidates) {
-    if (!url) continue;
-    try {
-      const resultUrl = await processAndUpload(url);
-      return { resultUrl, sourceUrl: url };
-    } catch {
-      continue;
-    }
-  }
-  return null;
+function pickRowFromVariation(
+  row: LetualVariationRow,
+  best: LetualPhotoScore | undefined,
+  ranked: LetualPhotoScore[],
+  statusOverride?: LetualPickStatus
+): LetualPickRow {
+  const status = statusOverride ?? (best ? derivePickStatus(best) : "no_photo");
+  return {
+    variationId: row.variationId,
+    productName: row.productName,
+    brandName: row.brandName,
+    ean: row.ean,
+    sourceUrl: best?.url ?? "",
+    sourceLabel: "auto",
+    status,
+    comment: buildDbComment(best),
+    previewUrl: best?.url,
+    ranked
+  };
 }
 
-function buildDbComment(best: LetualPhotoScore | undefined): string {
-  if (!best || best.suitable) return "";
-  const notes: string[] = [];
-  if (best.hasBox) notes.push("в кадре коробка — вырезание флакона");
-  if (!best.hasWhiteBackground) notes.push("фон не белый — вырезание");
-  if (!best.isFrontal) notes.push("ракурс — проверить");
-  if (best.quality < 50) notes.push("низкое качество источника");
-  if (!notes.length && best.reason && best.reason !== "Не подходит") {
-    notes.push(best.reason);
-  }
-  if (!notes.length) return "";
-  return `Главное фото: ${notes.join("; ")}`;
-}
-
-function dbPhotoNeedsWebFallback(ranked: LetualPhotoScore[]): boolean {
-  if (!ranked.length) return true;
-  return !ranked.some((r) => r.hasProduct);
-}
-
-function findSuitableInRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
-  const suitable = ranked.filter((r) => r.suitable);
-  if (!suitable.length) return undefined;
-  return [...suitable].sort((a, b) => b.score - a.score)[0];
-}
-
-function lastResortDbUrls(urls: string[], mainImageUrl?: string | null): string[] {
-  const ordered = mainImageUrl ? [mainImageUrl, ...urls] : urls;
-  const own = ordered.filter((u) => /cdnru\.4stand|deloox/i.test(u));
-  const rest = ordered.filter((u) => !own.includes(u));
-  return [...new Set([...own, ...rest])];
-}
-
-function catalogFallbackComment(dbNote: string): string {
-  return dbNote
-    ? `${dbNote}; в каталоге лучше не найдено`
-    : "В каталоге не найдено лучшее фото — используем своё с вырезанием";
-}
-
-function webFallbackComment(dbNote: string): string {
-  if (!isSerpApiConfigured()) {
-    return catalogFallbackComment(dbNote);
-  }
-  return dbNote ? `${dbNote}; в интернете не найдено` : "В интернете не найдено — фото из БД с вырезанием";
-}
-
-function dbFallbackGoodEnoughForCutout(best: LetualPhotoScore): boolean {
-  return (
-    !best.hasBox &&
-    !best.hasInfographic &&
-    best.isFrontal &&
-    best.quality >= 40
-  );
-}
-
-async function pickFromWebImages(
-  images: Awaited<ReturnType<typeof searchLetualWebImages>>,
-  openaiKey: string
-): Promise<{ sourceUrl: string; comment: string; candidates: string[] }> {
-  const allRanked: LetualPhotoScore[] = [];
-  const sourceByUrl = new Map<string, string>();
-
-  for (const item of images) {
-    if (!(await validateImageUrl(item.url))) continue;
-    const scored = await pickSuitableLetualPhoto([item.url], openaiKey);
-    for (const r of scored.ranked) {
-      sourceByUrl.set(r.url, item.source);
-      allRanked.push(r);
-    }
-  }
-
-  const suitable = findSuitableInRanked(allRanked);
-  if (suitable?.url) {
-    const src = sourceByUrl.get(suitable.url) ?? "web";
-    return {
-      sourceUrl: suitable.url,
-      comment: `Фото из интернета (${src})`,
-      candidates: []
-    };
-  }
-
-  const webBest = pickBestFromRanked(allRanked);
-  if (webBest?.url) {
-    const src = sourceByUrl.get(webBest.url) ?? "web";
-    return {
-      sourceUrl: "",
-      comment: `Фото из интернета (${src}): ${webBest.reason || "проверить"}`,
-      candidates: [webBest.url]
-    };
-  }
-
-  return { sourceUrl: "", comment: "", candidates: [] };
-}
-
-export async function processLetualByUrl(
-  sourceUrl: string,
-  _openaiApiKey?: string
-): Promise<LetualResultRow> {
-  try {
-    const resultUrl = await processAndUpload(sourceUrl);
-    return {
-      sourceUrl,
-      resultUrl,
-      comment: "",
-      previewUrl: resultUrl,
-      ok: true
-    };
-  } catch (e) {
-    return {
-      sourceUrl,
-      resultUrl: "",
-      comment: "",
-      ok: false,
-      error: e instanceof Error ? e.message : String(e)
-    };
-  }
-}
-
-export async function processLetualByVariationId(
+/** Фаза A: только подбор фото из Metabase, без генерации. */
+export async function pickLetualVariationPhoto(
   variationId: number,
   openaiApiKey?: string,
   metabaseApiKey?: string
-): Promise<LetualResultRow> {
+): Promise<LetualPickRow> {
   const key = resolveOpenAiKey(openaiApiKey);
 
   try {
@@ -166,147 +82,219 @@ export async function processLetualByVariationId(
     if (!row) {
       return {
         variationId,
-        resultUrl: "",
+        productName: "",
+        brandName: "",
+        ean: null,
+        sourceUrl: "",
+        sourceLabel: "auto",
+        status: "no_photo",
         comment: "",
-        ok: false,
         error: `Вариация ${variationId} не найдена в БД`
       };
     }
 
-    let sourceUrl = "";
-    let comment = "";
-    const candidateUrls: string[] = [];
-    let rankedFromDb: LetualPhotoScore[] = [];
-    let dbFallback: LetualPhotoScore | undefined;
-
-    if (row.imageUrls.length) {
-      const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
-      rankedFromDb = picked.ranked;
-
-      const suitable = findSuitableInRanked(picked.ranked);
-      if (suitable?.url) {
-        sourceUrl = suitable.url;
-        comment = buildDbComment(suitable);
-      } else {
-        const best = pickBestFromRanked(picked.ranked);
-        if (best?.url) {
-          if (best.suitable) {
-            sourceUrl = best.url;
-          } else {
-            candidateUrls.push(best.url);
-          }
-          comment = buildDbComment(best);
-          dbFallback = best;
-        }
-      }
-    }
-
-    // Нет идеального фото → другие вариации в каталоге, затем SerpAPI (если есть)
-    if (!sourceUrl) {
-      if (dbFallback?.url && dbFallbackGoodEnoughForCutout(dbFallback)) {
-        candidateUrls.push(dbFallback.url);
-        comment = buildDbComment(dbFallback);
-      } else {
-        const exclude = [...row.imageUrls, row.mainImageUrl ?? ""].filter(Boolean);
-        const siblingPick = await pickFromSiblingCatalogPhotos(
-          variationId,
-          key,
-          { brandName: row.brandName, productName: row.productName },
-          exclude,
-          metabaseApiKey
-        );
-
-        if (siblingPick.sourceUrl) {
-          sourceUrl = siblingPick.sourceUrl;
-          comment = siblingPick.comment;
-        } else if (siblingPick.candidates.length) {
-          candidateUrls.push(...siblingPick.candidates);
-          comment = siblingPick.comment;
-        } else if (isSerpApiConfigured()) {
-          const web = await searchLetualWebImages(row.ean, row.productName, row.brandName);
-          const webPick = await pickFromWebImages(web, key);
-          if (webPick.sourceUrl) {
-            sourceUrl = webPick.sourceUrl;
-            comment = webPick.comment;
-          } else if (webPick.candidates.length) {
-            candidateUrls.push(...webPick.candidates);
-            comment = webPick.comment;
-          } else if (dbFallback?.url) {
-            candidateUrls.push(dbFallback.url);
-            comment = webFallbackComment(buildDbComment(dbFallback));
-          } else {
-            for (const u of lastResortDbUrls(row.imageUrls, row.mainImageUrl).slice(0, 4)) {
-              candidateUrls.push(u);
-            }
-            comment = webFallbackComment("");
-          }
-        } else if (dbFallback?.url) {
-          candidateUrls.push(dbFallback.url);
-          comment = catalogFallbackComment(buildDbComment(dbFallback));
-        } else {
-          for (const u of lastResortDbUrls(row.imageUrls, row.mainImageUrl).slice(0, 4)) {
-            candidateUrls.push(u);
-          }
-          comment = catalogFallbackComment("");
-        }
-      }
-    }
-
-    const tryList: string[] = [];
-    if (sourceUrl) tryList.push(sourceUrl);
-    for (const u of candidateUrls) {
-      if (u && !tryList.includes(u)) tryList.push(u);
-    }
-    const rankedSorted = [...rankedFromDb].sort((a, b) => b.score - a.score);
-    for (const r of rankedSorted) {
-      if (r.url && r.hasProduct && !tryList.includes(r.url)) {
-        tryList.push(r.url);
-      }
-    }
-
-    if (!tryList.length) {
-      const onlyBox =
-        rankedFromDb.length > 0 &&
-        rankedFromDb.every((r) => r.hasBox || r.hasInfographic);
-      const deadLinks = row.imageUrls.length
-        ? `В БД ${row.imageUrls.length} ссылок, но ни одна не скачивается (404/403). `
-        : "";
-      const boxNote = onlyBox ? "В БД только фото с коробкой/инфографикой. " : "";
+    if (!row.imageUrls.length) {
       return {
-        variationId,
-        resultUrl: "",
-        comment: "",
-        ok: false,
-        error: `${boxNote}${deadLinks}Нет подходящего фото в каталоге`
+        variationId: row.variationId,
+        productName: row.productName,
+        brandName: row.brandName,
+        ean: row.ean,
+        sourceUrl: "",
+        sourceLabel: "auto",
+        status: "no_photo",
+        comment: "В карточке нет фото",
+        ranked: []
       };
     }
 
-    const processed = await tryProcessCandidates(tryList);
-    if (!processed) {
-      return {
-        variationId,
-        resultUrl: "",
-        comment: "",
-        ok: false,
-        error: `Не удалось обработать фото (${tryList.length} кандидатов, ошибки скачивания)`
-      };
-    }
+    const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
+    const best = pickBestFromRanked(picked.ranked);
 
+    return pickRowFromVariation(row, best, picked.ranked);
+  } catch (e) {
     return {
       variationId,
-      sourceUrl: processed.sourceUrl,
-      resultUrl: processed.resultUrl,
-      comment,
-      previewUrl: processed.resultUrl,
+      productName: "",
+      brandName: "",
+      ean: null,
+      sourceUrl: "",
+      sourceLabel: "auto",
+      status: "no_photo",
+      comment: "",
+      error: e instanceof Error ? e.message : String(e)
+    };
+  }
+}
+
+/** Все фото вариации + same EAN для галереи. */
+export async function getLetualVariationGallery(
+  variationId: number,
+  metabaseApiKey?: string
+): Promise<{
+  variation: LetualVariationRow | null;
+  photos: LetualGalleryPhoto[];
+}> {
+  const rows = await fetchLetualVariations([variationId], metabaseApiKey);
+  const row = rows[0] ?? null;
+  if (!row) return { variation: null, photos: [] };
+
+  const seen = new Set<string>();
+  const photos: LetualGalleryPhoto[] = [];
+
+  const push = (url: string, vid: number, matchType: LetualGalleryPhoto["matchType"]) => {
+    const u = url.trim();
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    photos.push({ url: u, variationId: vid, matchType });
+  };
+
+  for (const url of row.imageUrls) push(url, row.variationId, "own");
+
+  const siblings = await fetchSiblingVariationPhotos(
+    variationId,
+    metabaseApiKey,
+    { brandName: row.brandName, productName: row.productName },
+    30
+  );
+
+  const eanIds = siblings.filter((s) => s.matchType === "same_ean").map((s) => s.variationId);
+  const productIds = siblings
+    .filter((s) => s.matchType === "same_product" && !eanIds.includes(s.variationId))
+    .map((s) => s.variationId);
+
+  if (eanIds.length) {
+    const eanRows = await fetchLetualVariations(eanIds, metabaseApiKey);
+    for (const er of eanRows) {
+      for (const url of er.imageUrls) push(url, er.variationId, "same_ean");
+    }
+  }
+
+  if (productIds.length) {
+    const prodRows = await fetchLetualVariations(productIds, metabaseApiKey);
+    for (const pr of prodRows) {
+      for (const url of pr.imageUrls) push(url, pr.variationId, "same_product");
+    }
+  }
+
+  return { variation: row, photos };
+}
+
+export type LetualSearchResult = {
+  url: string;
+  source: string;
+  score?: LetualPhotoScore;
+};
+
+/** Поиск фото в интернете + AI-оценка. */
+export async function searchLetualPhotosWithAi(
+  ean: string | null,
+  productName: string,
+  brandName: string,
+  openaiApiKey?: string
+): Promise<LetualSearchResult[]> {
+  const key = resolveOpenAiKey(openaiApiKey);
+  const images = await searchLetualWebImages(ean, productName, brandName);
+  const out: LetualSearchResult[] = [];
+
+  for (const img of images) {
+    if (!(await validateImageUrl(img.url))) continue;
+    const ranked = await scoreLetualPhotoUrls([img.url], key);
+    const score = ranked[0];
+    out.push({ url: img.url, source: img.source, score });
+    if (out.length >= 12) break;
+  }
+
+  out.sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0));
+  return out;
+}
+
+/** Фаза C: генерация по утверждённому sourceUrl. */
+export async function generateLetualFromSource(
+  item: LetualGenerateItem
+): Promise<LetualGenerateRow> {
+  const sourceUrl = item.sourceUrl?.trim();
+  if (!sourceUrl?.startsWith("http")) {
+    return {
+      variationId: item.variationId,
+      sourceUrl: sourceUrl ?? "",
+      resultUrl: "",
+      comment: "",
+      ok: false,
+      error: "Нет URL источника"
+    };
+  }
+
+  try {
+    const resultUrl = await processAndUpload(sourceUrl);
+    return {
+      variationId: item.variationId,
+      sourceUrl,
+      resultUrl,
+      comment: "",
+      previewUrl: resultUrl,
       ok: true
     };
   } catch (e) {
     return {
-      variationId,
+      variationId: item.variationId,
+      sourceUrl,
       resultUrl: "",
       comment: "",
       ok: false,
       error: e instanceof Error ? e.message : String(e)
     };
   }
+}
+
+export async function processLetualByUrl(
+  sourceUrl: string,
+  _openaiApiKey?: string
+): Promise<LetualResultRow> {
+  const r = await generateLetualFromSource({ sourceUrl });
+  return {
+    sourceUrl: r.sourceUrl,
+    resultUrl: r.resultUrl,
+    comment: r.comment,
+    previewUrl: r.previewUrl,
+    ok: r.ok,
+    error: r.error
+  };
+}
+
+/** Legacy: pick + generate в одном шаге. */
+export async function processLetualByVariationId(
+  variationId: number,
+  openaiApiKey?: string,
+  metabaseApiKey?: string
+): Promise<LetualResultRow> {
+  const pick = await pickLetualVariationPhoto(variationId, openaiApiKey, metabaseApiKey);
+
+  if (pick.error) {
+    return { variationId, resultUrl: "", comment: "", ok: false, error: pick.error };
+  }
+
+  if (!pick.sourceUrl) {
+    return {
+      variationId,
+      resultUrl: "",
+      comment: pick.comment,
+      ok: false,
+      error: pick.status === "no_photo" ? "Нет подходящего фото" : "Выберите фото вручную"
+    };
+  }
+
+  const gen = await generateLetualFromSource({
+    variationId,
+    sourceUrl: pick.sourceUrl
+  });
+
+  return {
+    variationId,
+    sourceUrl: gen.sourceUrl,
+    resultUrl: gen.resultUrl,
+    comment: pick.comment,
+    previewUrl: gen.previewUrl,
+    ok: gen.ok,
+    error: gen.error
+  };
 }
