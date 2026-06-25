@@ -34,6 +34,22 @@ npm run dev
 
 ## Деплой
 
-Подойдёт [Vercel](https://vercel.com) или любой Node-хостинг: задать те же переменные окружения, `NEXTAUTH_URL` на боевой домен.
+### Локально у коллег (временно, пока нет сервера)
+
+1. `git clone https://github.com/ninakrasavina772-star/assistant-4p.git`
+2. Администратор присылает `.env.local` (см. `deploy/pull-env-from-vercel.ps1`)
+3. Двойной клик **`start-local.bat`** → http://localhost:3000/ozon-images
+
+Подробно: **`deploy/КОЛЛЕГАМ.txt`**
+
+### Свой сервер (вместо Vercel)
+
+Docker + nginx: **`deploy/setup-server.sh`**, шаблон **`deploy/env.production.example`**.
+
+Секреты с Vercel: `deploy/pull-env-from-vercel.ps1` или `.sh`
+
+### Vercel (если разблокируют)
+
+Задать те же переменные окружения, `NEXTAUTH_URL` на боевой домен.
 
 API: [Partner Site API V1](https://api.4partners.io/v1/doc/index.json).

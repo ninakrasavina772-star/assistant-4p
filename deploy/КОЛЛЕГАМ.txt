@@ -1,0 +1,34 @@
+ИНФОГРАФИКА ПОДРУЖКА · OZON — ЛОКАЛЬНО НА ВАШЕМ ПК
+(пока переносим с Vercel на свой сервер)
+
+=== Что нужно один раз ===
+1. Node.js 20+ — https://nodejs.org/ (кнопка LTS)
+2. Git — https://git-scm.com/download/win (если ещё нет)
+
+=== Установка ===
+Откройте PowerShell и выполните:
+
+  git clone https://github.com/ninakrasavina772-star/assistant-4p.git
+  cd assistant-4p
+  .\deploy\setup-colleague-windows.ps1
+
+Администратор пришлёт файл .env.local (или значения для вставки).
+Положите .env.local в папку assistant-4p (рядом с package.json).
+
+=== Каждый рабочий день ===
+Двойной клик по файлу start-local.bat
+(или в PowerShell: .\start-local.ps1)
+
+Откроется браузер: http://localhost:3000/ozon-images
+
+Остановка: закройте чёрное окно или Ctrl+C.
+
+=== Обновление версии ===
+В папке assistant-4p:
+  git pull
+  npm install
+
+=== Если не работает ===
+• «Хранилище не настроено» — в .env.local нет YANDEX_S3_* (напишите администратору)
+• «OpenAI» — нет OPENAI_API_KEY в .env.local
+• Порт занят — закройте другие окна start-local

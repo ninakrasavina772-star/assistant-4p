@@ -9,7 +9,10 @@
     "start": "next start",
     "lint": "next lint",
     "cutouts": "npx tsx scripts/precompute-cutouts.mjs",
-    "postinstall": "node scripts/copy-podruzhka-fonts.mjs"
+    "postinstall": "node scripts/copy-podruzhka-fonts.mjs",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:logs": "docker compose logs -f"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",

@@ -3,15 +3,10 @@
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
-
-/** Боевой домен Vercel — в Google OAuth зарегистрирован только он. */
-const PRODUCTION_ORIGIN = "https://assistant-4p.vercel.app";
-
-function isVercelPreviewHost(hostname: string): boolean {
-  if (hostname === "localhost" || hostname === "127.0.0.1") return false;
-  if (hostname === "assistant-4p.vercel.app") return false;
-  return hostname.endsWith(".vercel.app");
-}
+import {
+  appOriginOrLegacy,
+  isVercelPreviewHostname
+} from "@/lib/appOrigin";
 
 function LoginInner() {
   const sp = useSearchParams();
@@ -21,15 +16,38 @@ function LoginInner() {
     rawCb.startsWith("/") && !rawCb.startsWith("//") ? rawCb : "/";
   const [previewHost, setPreviewHost] = useState(false);
 
+  const productionOrigin = useMemo(
+    () => process.env.NEXT_PUBLIC_APP_ORIGIN?.replace(/\/+$/, "") || appOriginOrLegacy(),
+    []
+  );
+  const oauthCallback = useMemo(
+    () => `${productionOrigin}/api/auth/callback/google`,
+    [productionOrigin]
+  );
+  const [siteOrigin, setSiteOrigin] = useState(productionOrigin);
+
   useEffect(() => {
-    setPreviewHost(isVercelPreviewHost(window.location.hostname));
+    const host = window.location.hostname;
+    const preview = isVercelPreviewHostname(host);
+    setPreviewHost(preview);
+    if (!preview) {
+      setSiteOrigin(window.location.origin);
+    }
   }, []);
 
   const productionLoginHref = useMemo(
     () =>
-      `${PRODUCTION_ORIGIN}/login?callbackUrl=${encodeURIComponent(callbackUrl)}`,
-    [callbackUrl]
+      `${siteOrigin}/login?callbackUrl=${encodeURIComponent(callbackUrl)}`,
+    [siteOrigin, callbackUrl]
   );
+
+  const productionHost = useMemo(() => {
+    try {
+      return new URL(siteOrigin).host;
+    } catch {
+      return siteOrigin;
+    }
+  }, [siteOrigin]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
@@ -53,20 +71,20 @@ function LoginInner() {
               href={productionLoginHref}
               className="inline-block w-full text-center rounded-lg bg-amber-800 text-white py-2 text-xs font-semibold hover:bg-amber-900 transition"
             >
-              Войти на боевом сайте (assistant-4p.vercel.app)
+              Войти на боевом сайте ({productionHost})
             </a>
           </div>
         )}
         {err && (
           <p className="text-sm text-red-600 text-center mb-4 whitespace-pre-line">
             {err === "AccessDenied"
-              ? "Доступ запрещён: ваш Google-email нет в ALLOWED_EMAILS (или список пуст). Проверьте точное совпадение адреса и что переменная задана для Production в Vercel, затем Redeploy."
+              ? "Доступ запрещён: ваш Google-email нет в ALLOWED_EMAILS (или список пуст). Проверьте точное совпадение адреса и переменную ALLOWED_EMAILS на сервере."
               : err === "Configuration"
-                ? "Ошибка конфигурации сервера: проверьте на Vercel NEXTAUTH_URL=https://assistant-4p.vercel.app, NEXTAUTH_SECRET, GOOGLE_CLIENT_ID/SECRET."
+                ? `Ошибка конфигурации сервера: проверьте NEXTAUTH_URL=${siteOrigin}, NEXTAUTH_SECRET, GOOGLE_CLIENT_ID/SECRET.`
                 : err === "OAuthSignin" || err === "OAuthCallback"
                   ? previewHost
-                    ? "Сбой OAuth: вы на preview-деплое. Откройте боевой сайт по кнопке выше — в Google зарегистрирован только https://assistant-4p.vercel.app/api/auth/callback/google"
-                    : "Сбой OAuth с Google: в Google Cloud добавьте redirect URI https://assistant-4p.vercel.app/api/auth/callback/google и проверьте NEXTAUTH_URL на Vercel."
+                    ? `Сбой OAuth: вы на preview-деплое. Откройте боевой сайт по кнопке выше — в Google зарегистрирован только ${oauthCallback}`
+                    : `Сбой OAuth с Google: в Google Cloud добавьте redirect URI ${oauthCallback} и проверьте NEXTAUTH_URL на сервере.`
                   : `Ошибка входа: ${err}`}
           </p>
         )}
