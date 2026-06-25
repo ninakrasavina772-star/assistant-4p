@@ -54,7 +54,7 @@ function Ensure-YcAuth {
     return
   }
 
-  & $yc config profile delete default --force 2>$null | Out-Null
+  Invoke-Yc config profile delete default | Out-Null
 
   $oauthUrl = "https://oauth.yandex.ru/authorize?response_type=token&client_id=1a6990aa636648e9b2ef855fa7bec2fb"
   $cloudId = "b1g1rlk43m94n1p2igbi"
