@@ -24,18 +24,34 @@ function Ensure-Yc {
   }
 }
 
-function Ensure-YcAuth {
-  $cfg = & $yc config list 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "=== STEP A: Yandex login (browser) ===" -ForegroundColor Yellow
-    Write-Host "A browser window will open. Log in and click Allow." -ForegroundColor Yellow
-    Write-Host "Then pick cloud: cloud-krasavina-ninochka, folder: default" -ForegroundColor Yellow
-    Write-Host ""
-    Read-Host "Press Enter to open login"
-    & $yc init
-    if ($LASTEXITCODE -ne 0) { throw "yc init failed" }
+function Invoke-Yc {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+  $old = $ErrorActionPreference
+  $ErrorActionPreference = "SilentlyContinue"
+  $out = & $yc @Args 2>&1
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = $old
+  if ($code -ne 0) {
+    return @{ Ok = $false; Out = $out; Code = $code }
   }
+  return @{ Ok = $true; Out = $out; Code = 0 }
+}
+
+function Ensure-YcAuth {
+  $check = Invoke-Yc config list
+  if ($check.Ok) { return }
+
+  Write-Host ""
+  Write-Host "=== Vhod v Yandex (odin raz) ===" -ForegroundColor Yellow
+  Write-Host "Otkroetsya brauzer. Voydite v Yandex i nazhmite Razreshit." -ForegroundColor Yellow
+  Write-Host "Oblako: cloud-krasavina-ninochka, papka: default, zona: ru-central1-b" -ForegroundColor Yellow
+  Write-Host ""
+  Read-Host "Nazhmite Enter"
+  & $yc init
+  if ($LASTEXITCODE -ne 0) { throw "yc init failed - poprobuyte snova" }
+
+  $check2 = Invoke-Yc config list
+  if (-not $check2.Ok) { throw "Yandex CLI ne nastroen posle init" }
 }
 
 function Get-SubnetId {
