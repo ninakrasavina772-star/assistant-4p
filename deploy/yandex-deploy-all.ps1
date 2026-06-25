@@ -41,17 +41,37 @@ function Ensure-YcAuth {
   $check = Invoke-Yc config list
   if ($check.Ok) { return }
 
+  $oauthUrl = "https://oauth.yandex.ru/authorize?response_type=token&client_id=1a6990aa636648e9b2ef855fa7bec2fb"
+  $cloudId = "b1g1rlk43m94n1p2igbi"
+  $folderId = "b1gfhds31e8d5eaccn57"
+
   Write-Host ""
   Write-Host "=== Vhod v Yandex (odin raz) ===" -ForegroundColor Yellow
-  Write-Host "Otkroetsya brauzer. Voydite v Yandex i nazhmite Razreshit." -ForegroundColor Yellow
-  Write-Host "Oblako: cloud-krasavina-ninochka, papka: default, zona: ru-central1-b" -ForegroundColor Yellow
   Write-Host ""
-  Read-Host "Nazhmite Enter"
-  & $yc init
-  if ($LASTEXITCODE -ne 0) { throw "yc init failed - poprobuyte snova" }
+  Write-Host "1. Seychas otkroetsya brauzer - voydite v Yandex" -ForegroundColor White
+  Write-Host "2. Nazhmite 'Razreshit' / 'Allow'" -ForegroundColor White
+  Write-Host "3. V adresnoy stroke brauzera poявится dlinnaya stroka s access_token=..." -ForegroundColor White
+  Write-Host "   Skopiruyte VSE bukvy POSLE access_token= (do & esli est)" -ForegroundColor White
+  Write-Host ""
+  Start-Process $oauthUrl
+  Start-Sleep -Seconds 2
+  $token = Read-Host "4. VSTAVTE token syuda i nazhmite Enter"
+
+  if (-not $token -or $token.Trim().Length -lt 20) {
+    throw "Token pustoy. Zapustite skript snova."
+  }
+  $token = $token.Trim()
+  if ($token -match "access_token=([^&]+)") { $token = $Matches[1] }
+
+  & $yc config profile create default 2>$null
+  & $yc config set token $token
+  & $yc config set cloud-id $cloudId
+  & $yc config set folder-id $folderId
+  & $yc config set compute-default-zone $zone
 
   $check2 = Invoke-Yc config list
-  if (-not $check2.Ok) { throw "Yandex CLI ne nastroen posle init" }
+  if (-not $check2.Ok) { throw "Ne udalos voyti v Yandex - proverite token" }
+  Write-Host "Yandex: OK" -ForegroundColor Green
 }
 
 function Get-SubnetId {
