@@ -690,7 +690,7 @@ export function PodruzhkaOzonTool() {
             }
             if (!visionNote) {
               visionNote =
-                "Макет html-figma-v40: защита белого колпачка, зачистка боковых полей. " +
+                "Макет html-figma-v41: колпачок без белого блока, стекло/цвет сохраняются. " +
                 `Параллельно ×${PODRUZHKA_RENDER_PARALLEL}, Excel каждые ${PODRUZHKA_RENDER_FLUSH_EVERY} ссылок.`;
             }
             return {
@@ -1207,7 +1207,7 @@ export function PodruzhkaOzonTool() {
                     <>
                       {" "}
                       Макет: <code className="text-xs">{layoutVersion}</code> (актуально:{" "}
-                      html-figma-v40).
+                      html-figma-v41).
                     </>
                   ) : null}
                 </p>

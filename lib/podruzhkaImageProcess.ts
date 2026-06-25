@@ -580,6 +580,88 @@ function cullWhiteOnlyOpaqueColumns(pixels: Buffer, w: number, h: number): void 
   }
 }
 
+/**
+ * Белые колонки только СНАРУЖИ цветного силуэта (не трогаем стекло/колпачок внутри bbox).
+ */
+function cullExteriorWhiteOnlyColumns(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  if (coreMaxX < coreMinX) return;
+
+  const padX = Math.max(6, Math.round((coreMaxX - coreMinX + 1) * 0.04));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
+
+  for (let x = 0; x < w; x++) {
+    if (x >= x0 && x <= x1) continue;
+    let hasColor = false;
+    let hasOpaque = false;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      hasOpaque = true;
+      if (!readNearWhiteRgb(pixels, pi, 234, 34)) {
+        hasColor = true;
+        break;
+      }
+    }
+    if (!hasOpaque || hasColor) continue;
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(pixels, pi, 234, 34)) pixels[pi + 3] = 0;
+    }
+  }
+}
+
+/** Зачистка белого Ozon над колпачком + боковых полей (парфюм, in-place). */
+function finalizePerfumeCapAndMarginCleanup(
+  pixels: Buffer,
+  src: Buffer,
+  w: number,
+  h: number
+): void {
+  clampColumnWhiteToProductSpan(pixels, src, w, h);
+  clearFullWidthTopWhiteBands(pixels, src, w, h);
+  purgeUnconnectedExteriorWhite(pixels, src, w, h);
+  cullExteriorWhiteOnlyColumns(pixels, src, w, h);
+}
+
+/** Полупрозрачные цветные пиксели (стекло, жидкость) → непрозрачные. */
+function solidifyColoredSemiTransparent(pixels: Buffer, w: number, h: number): void {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const a = pixels[i + 3]!;
+      if (a < 16 || a >= 250) continue;
+      const r = pixels[i]!;
+      const g = pixels[i + 1]!;
+      const b = pixels[i + 2]!;
+      const avg = (r + g + b) / 3;
+      const spread = Math.max(r, g, b) - Math.min(r, g, b);
+      const warmth = r - b;
+      if (readNearWhiteRgb(pixels, i, 236, 28)) continue;
+      if (spread >= 8 || warmth >= 5 || avg < 228) {
+        pixels[i + 3] = 255;
+      }
+    }
+  }
+}
+
 /** Восстановить белый колпачок только там, где strip сделал прозрачным. */
 function restoreStrippedWhiteCaps(pixels: Buffer, src: Buffer, w: number, h: number): void {
   let coreMinX = w;
@@ -1177,18 +1259,14 @@ export async function rebuildProductAlphaByColumn(
     for (let y = yFillFrom; y <= yBot; y++) {
       const pi = (y * w + x) * 4;
       if (opaqueAt(x, y)) continue;
-      if (!readNearWhiteRgb(src, pi, 236, 28)) continue;
-      if (isPaddingRow(src, w, y, x0, x1)) continue;
-      restoreAt(x, y);
+      if (readNearWhiteRgb(src, pi, 236, 28)) {
+        if (isPaddingRow(src, w, y, x0, x1)) continue;
+        restoreAt(x, y);
+        continue;
+      }
+      if (isSubstantiveSourcePixel(src, pi)) restoreAt(x, y);
     }
 
-    for (let y = yTopColored - 1; y >= yFillFrom; y--) {
-      const pi = (y * w + x) * 4;
-      if (opaqueAt(x, y)) continue;
-      if (!readNearWhiteRgb(src, pi, 228, 40)) break;
-      if (isPaddingRow(src, w, y, x0, x1)) break;
-      restoreAt(x, y);
-    }
   }
 
   return sharp(pixels, {
@@ -1298,10 +1376,78 @@ async function stripProductPackshotBackground(input: Buffer): Promise<Buffer> {
   buf = await stripProductEdgeBackground(buf, capOpts);
   buf = await rebuildProductAlphaByColumn(buf, input);
   buf = await reclaimPerfumeWhiteCapsFromSource(buf, input);
+  buf = await restoreColumnProductPixelsFromSource(buf, input);
   return buf;
 }
 
-/** Зачистка боковых белых полей Ozon + колонок без цвета (парфюм). */
+
+/** Восстановить цветное тело/стекло в колонках, где cut-out снял alpha (Burberry vial и т.п.). */
+async function restoreColumnProductPixelsFromSource(
+  cutout: Buffer,
+  source: Buffer
+): Promise<Buffer> {
+  const { data, info } = await sharp(cutout)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const src = Buffer.from(await sharp(source).ensureAlpha().raw().toBuffer());
+  const w = info.width;
+  const h = info.height;
+  if (!w || !h || src.length !== data.length) return cutout;
+
+  const pixels = Buffer.from(data);
+  let coreMinX = w;
+  let coreMaxX = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      coreMinX = Math.min(coreMinX, x);
+      coreMaxX = Math.max(coreMaxX, x);
+    }
+  }
+  if (coreMaxX < coreMinX) return cutout;
+
+  const padX = Math.max(3, Math.round((coreMaxX - coreMinX + 1) * 0.05));
+  const x0 = Math.max(0, coreMinX - padX);
+  const x1 = Math.min(w - 1, coreMaxX + padX);
+
+  const restoreAt = (x: number, y: number) => {
+    const i = (y * w + x) * 4;
+    pixels[i] = src[i]!;
+    pixels[i + 1] = src[i + 1]!;
+    pixels[i + 2] = src[i + 2]!;
+    pixels[i + 3] = 255;
+  };
+
+  for (let x = x0; x <= x1; x++) {
+    const coloredY: number[] = [];
+    for (let y = 0; y < h; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! < 128) continue;
+      if (readNearWhiteRgb(src, pi, 234, 34)) continue;
+      coloredY.push(y);
+    }
+    if (!coloredY.length) continue;
+    const yTop = Math.min(...coloredY);
+    const yBot = Math.max(...coloredY);
+    for (let y = yTop; y <= yBot; y++) {
+      const pi = (y * w + x) * 4;
+      if (pixels[pi + 3]! >= 128) continue;
+      if (!isSubstantiveSourcePixel(src, pi)) continue;
+      restoreAt(x, y);
+    }
+  }
+
+  return sharp(pixels, {
+    raw: { width: w, height: h, channels: 4 }
+  })
+    .png()
+    .toBuffer();
+}
+
+/** Зачистка боковых белых полей Ozon (парфюм). */
 async function applyPerfumeMarginCleanup(cutout: Buffer, source: Buffer): Promise<Buffer> {
   const { data, info } = await sharp(cutout)
     .ensureAlpha()
@@ -1315,7 +1461,8 @@ async function applyPerfumeMarginCleanup(cutout: Buffer, source: Buffer): Promis
   const pixels = Buffer.from(data);
   const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
   trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
-  cullWhiteOnlyOpaqueColumns(pixels, w, h);
+  finalizePerfumeCapAndMarginCleanup(pixels, src, w, h);
+  solidifyColoredSemiTransparent(pixels, w, h);
   trimHorizontalWhiteMargins(pixels, src, w, h, whiteCapKeep);
 
   return sharp(pixels, {
@@ -1325,7 +1472,7 @@ async function applyPerfumeMarginCleanup(cutout: Buffer, source: Buffer): Promis
     .toBuffer();
 }
 
-/** Восстановить белый колпачок после strip с верхнего края (парфюм). */
+/** Восстановить белый колпачок только там, где strip снял alpha (парфюм). */
 async function reclaimPerfumeWhiteCapsFromSource(
   cutout: Buffer,
   source: Buffer
@@ -1342,19 +1489,23 @@ async function reclaimPerfumeWhiteCapsFromSource(
   const pixels = Buffer.from(data);
   const whiteCapKeep = buildVerticalWhiteCapKeepMask(src, w, h);
   reclaimOpaqueWhiteCapAboveBody(pixels, src, whiteCapKeep, w, h, {
-    maxRiseFrac: 0.52,
-    maxRiseCap: 220,
+    maxRiseFrac: 0.2,
+    maxRiseCap: 96,
     minColoredRowsFrac: 0.08
   });
 
   for (let idx = 0; idx < w * h; idx++) {
     if (whiteCapKeep[idx] !== 1) continue;
     const pi = idx * 4;
+    if (pixels[pi + 3]! >= 128) continue;
+    if (!readNearWhiteRgb(src, pi, 228, 40)) continue;
     pixels[pi] = src[pi]!;
     pixels[pi + 1] = src[pi + 1]!;
     pixels[pi + 2] = src[pi + 2]!;
     pixels[pi + 3] = 255;
   }
+
+  finalizePerfumeCapAndMarginCleanup(pixels, src, w, h);
 
   return sharp(pixels, {
     raw: { width: w, height: h, channels: 4 }
@@ -2189,7 +2340,7 @@ export async function finalizeProductCutout(input: Buffer): Promise<Buffer> {
   const w = info.width ?? 0;
   const h = info.height ?? 0;
   if (w && h) {
-    cullWhiteOnlyOpaqueColumns(pixels, w, h);
+    solidifyColoredSemiTransparent(pixels, w, h);
     buf = await sharp(pixels, {
       raw: { width: w, height: h, channels: 4 }
     })
