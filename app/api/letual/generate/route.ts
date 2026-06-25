@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { LETUAL_API_CHUNK } from "@/lib/letualMainPhotoConstants";
-import { generateLetualFromSource } from "@/lib/letualMainPhotoServer";
+import { generateLetualFromSourcesBatch } from "@/lib/letualMainPhotoServer";
 import type { LetualGenerateItem } from "@/lib/letualPickTypes";
 
 export const maxDuration = 300;
@@ -27,9 +27,6 @@ export async function POST(req: Request) {
     );
   }
 
-  const results = [];
-  for (const item of items) {
-    results.push(await generateLetualFromSource(item));
-  }
+  const results = await generateLetualFromSourcesBatch(items);
   return NextResponse.json({ results });
 }

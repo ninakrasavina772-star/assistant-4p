@@ -1,10 +1,9 @@
+import { mapPool } from "@/lib/letualAsyncPool";
 import {
-  derivePickStatus,
-  pickBestFromRanked,
-  pickSuitableLetualPhoto,
-  scoreLetualPhotoUrls,
-  type LetualPhotoScore
-} from "@/lib/letualPhotoAi";
+  LETUAL_GENERATE_CONCURRENCY,
+  LETUAL_PICK_CONCURRENCY,
+  LETUAL_VISION_TOP
+} from "@/lib/letualMainPhotoConstants";
 import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import {
   fetchLetualVariations,
@@ -21,6 +20,13 @@ import type {
   LetualPickStatus
 } from "@/lib/letualPickTypes";
 import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
+import {
+  derivePickStatus,
+  pickBestFromRanked,
+  pickSuitableLetualPhoto,
+  scoreLetualPhotoUrls,
+  type LetualPhotoScore
+} from "@/lib/letualPhotoAi";
 
 function resolveOpenAiKey(clientKey?: string): string {
   const k = (clientKey ?? "").trim() || (process.env.OPENAI_API_KEY ?? "").trim();
@@ -68,6 +74,29 @@ function pickRowFromVariation(
   };
 }
 
+async function pickFromVariationRow(
+  row: LetualVariationRow,
+  openaiApiKey: string
+): Promise<LetualPickRow> {
+  if (!row.imageUrls.length) {
+    return {
+      variationId: row.variationId,
+      productName: row.productName,
+      brandName: row.brandName,
+      ean: row.ean,
+      sourceUrl: "",
+      sourceLabel: "auto",
+      status: "no_photo",
+      comment: "В карточке нет фото",
+      ranked: []
+    };
+  }
+
+  const picked = await pickSuitableLetualPhoto(row.imageUrls, openaiApiKey);
+  const best = pickBestFromRanked(picked.ranked);
+  return pickRowFromVariation(row, best, picked.ranked);
+}
+
 /** Фаза A: только подбор фото из Metabase, без генерации. */
 export async function pickLetualVariationPhoto(
   variationId: number,
@@ -93,24 +122,7 @@ export async function pickLetualVariationPhoto(
       };
     }
 
-    if (!row.imageUrls.length) {
-      return {
-        variationId: row.variationId,
-        productName: row.productName,
-        brandName: row.brandName,
-        ean: row.ean,
-        sourceUrl: "",
-        sourceLabel: "auto",
-        status: "no_photo",
-        comment: "В карточке нет фото",
-        ranked: []
-      };
-    }
-
-    const picked = await pickSuitableLetualPhoto(row.imageUrls, key);
-    const best = pickBestFromRanked(picked.ranked);
-
-    return pickRowFromVariation(row, best, picked.ranked);
+    return await pickFromVariationRow(row, key);
   } catch (e) {
     return {
       variationId,
@@ -123,6 +135,66 @@ export async function pickLetualVariationPhoto(
       comment: "",
       error: e instanceof Error ? e.message : String(e)
     };
+  }
+}
+
+/** Пакетный подбор: один запрос Metabase + параллельный AI. */
+export async function pickLetualVariationPhotosBatch(
+  variationIds: number[],
+  openaiApiKey?: string,
+  metabaseApiKey?: string
+): Promise<LetualPickRow[]> {
+  const key = resolveOpenAiKey(openaiApiKey);
+  const uniqueIds = [...new Set(variationIds.filter((id) => id > 0))];
+
+  try {
+    const rows = await fetchLetualVariations(uniqueIds, metabaseApiKey);
+    const rowById = new Map(rows.map((r) => [r.variationId, r]));
+
+    return mapPool(uniqueIds, LETUAL_PICK_CONCURRENCY, async (variationId) => {
+      const row = rowById.get(variationId);
+      if (!row) {
+        return {
+          variationId,
+          productName: "",
+          brandName: "",
+          ean: null,
+          sourceUrl: "",
+          sourceLabel: "auto",
+          status: "no_photo" as const,
+          comment: "",
+          error: `Вариация ${variationId} не найдена в БД`
+        };
+      }
+      try {
+        return await pickFromVariationRow(row, key);
+      } catch (e) {
+        return {
+          variationId,
+          productName: row.productName,
+          brandName: row.brandName,
+          ean: row.ean,
+          sourceUrl: "",
+          sourceLabel: "auto",
+          status: "no_photo" as const,
+          comment: "",
+          error: e instanceof Error ? e.message : String(e)
+        };
+      }
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return uniqueIds.map((variationId) => ({
+      variationId,
+      productName: "",
+      brandName: "",
+      ean: null,
+      sourceUrl: "",
+      sourceLabel: "auto",
+      status: "no_photo" as const,
+      comment: "",
+      error: msg
+    }));
   }
 }
 
@@ -185,7 +257,7 @@ export type LetualSearchResult = {
   score?: LetualPhotoScore;
 };
 
-/** Поиск фото в интернете + AI-оценка. */
+/** Поиск фото в интернете + AI-оценка (параллельно). */
 export async function searchLetualPhotosWithAi(
   ean: string | null,
   productName: string,
@@ -194,18 +266,28 @@ export async function searchLetualPhotosWithAi(
 ): Promise<LetualSearchResult[]> {
   const key = resolveOpenAiKey(openaiApiKey);
   const images = await searchLetualWebImages(ean, productName, brandName);
-  const out: LetualSearchResult[] = [];
+  const validated = await mapPool(images.slice(0, 18), 6, async (img) => {
+    if (!(await validateImageUrl(img.url))) return null;
+    return img;
+  });
+  const ok = validated.filter((x): x is NonNullable<typeof x> => x !== null).slice(0, 12);
 
-  for (const img of images) {
-    if (!(await validateImageUrl(img.url))) continue;
-    const ranked = await scoreLetualPhotoUrls([img.url], key);
-    const score = ranked[0];
-    out.push({ url: img.url, source: img.source, score });
-    if (out.length >= 12) break;
-  }
+  const scored = await mapPool(ok, 4, async (img) => {
+    const ranked = await scoreLetualPhotoUrls([img.url], key, LETUAL_VISION_TOP);
+    return { url: img.url, source: img.source, score: ranked[0] };
+  });
 
-  out.sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0));
-  return out;
+  scored.sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0));
+  return scored;
+}
+
+/** Пакетная генерация с параллелизмом. */
+export async function generateLetualFromSourcesBatch(
+  items: LetualGenerateItem[]
+): Promise<LetualGenerateRow[]> {
+  return mapPool(items, LETUAL_GENERATE_CONCURRENCY, (item) =>
+    generateLetualFromSource(item)
+  );
 }
 
 /** Фаза C: генерация по утверждённому sourceUrl. */

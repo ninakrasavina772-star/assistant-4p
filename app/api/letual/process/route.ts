@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { LETUAL_API_CHUNK } from "@/lib/letualMainPhotoConstants";
 import {
-  processLetualByUrl,
-  processLetualByVariationId
+  generateLetualFromSourcesBatch,
+  pickLetualVariationPhotosBatch
 } from "@/lib/letualMainPhotoServer";
 
 export const maxDuration = 300;
@@ -36,16 +36,41 @@ export async function POST(req: Request) {
       );
     }
 
-    const results = [];
-    for (const variationId of ids) {
-      results.push(
-        await processLetualByVariationId(
-          variationId,
-          body.openaiApiKey,
-          body.metabaseApiKey
-        )
-      );
-    }
+    const picks = await pickLetualVariationPhotosBatch(
+      ids,
+      body.openaiApiKey,
+      body.metabaseApiKey
+    );
+
+    const toGen = picks
+      .filter((p) => p.sourceUrl && !p.error)
+      .map((p) => ({ variationId: p.variationId, sourceUrl: p.sourceUrl }));
+
+    const genRows = await generateLetualFromSourcesBatch(toGen);
+    const genById = new Map(genRows.map((g) => [g.variationId, g]));
+
+    const results = picks.map((pick) => {
+      const gen = genById.get(pick.variationId);
+      if (!gen) {
+        return {
+          variationId: pick.variationId,
+          resultUrl: "",
+          comment: pick.comment,
+          ok: false,
+          error: pick.error ?? (pick.sourceUrl ? "Ошибка генерации" : "Нет фото")
+        };
+      }
+      return {
+        variationId: pick.variationId,
+        sourceUrl: gen.sourceUrl,
+        resultUrl: gen.resultUrl,
+        comment: pick.comment,
+        previewUrl: gen.previewUrl,
+        ok: gen.ok,
+        error: gen.error
+      };
+    });
+
     return NextResponse.json({ results });
   }
 
@@ -59,9 +84,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const results = [];
-  for (const sourceUrl of urls) {
-    results.push(await processLetualByUrl(sourceUrl, body.openaiApiKey));
-  }
+  const results = await generateLetualFromSourcesBatch(
+    urls.map((sourceUrl) => ({ sourceUrl }))
+  );
   return NextResponse.json({ results });
 }

@@ -13,8 +13,9 @@ export default function LetualMainPhotoPage() {
       title="Главное фото · Летуаль"
       description={
         <>
-          Квадрат <strong>1000×1000</strong>, белый фон, без инфографики. Два режима: пакет по{" "}
-          <strong>variation_id</strong> (Metabase + AI) или подгонка по своим <strong>URL</strong>.
+          Квадрат <strong>1000×1000</strong>, белый фон, без инфографики. Пакет до{" "}
+          <strong>50 variation_id</strong>: сначала подбор фото, затем генерация. Или подгонка по своим{" "}
+          <strong>URL</strong>.
         </>
       }
     >

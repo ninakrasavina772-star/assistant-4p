@@ -501,7 +501,7 @@ export function LetualMainPhotoTool() {
       <section className={homeCard}>
         <div className={homeCardHeader}>
           <h2 className={homeCardTitle}>
-            {tab === "variations" ? "ID вариаций (до 20)" : "Ссылки на фото"}
+            {tab === "variations" ? `ID вариаций (до ${LETUAL_BATCH_MAX})` : `Ссылки на фото (до ${LETUAL_BATCH_MAX})`}
           </h2>
         </div>
         <div className={`${homeCardBody} space-y-4`}>

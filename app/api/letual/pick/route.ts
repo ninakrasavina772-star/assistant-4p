@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { LETUAL_API_CHUNK } from "@/lib/letualMainPhotoConstants";
-import { pickLetualVariationPhoto } from "@/lib/letualMainPhotoServer";
+import { pickLetualVariationPhotosBatch } from "@/lib/letualMainPhotoServer";
 
 export const maxDuration = 300;
 
@@ -28,15 +28,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const results = [];
-  for (const variationId of ids) {
-    results.push(
-      await pickLetualVariationPhoto(
-        variationId,
-        body.openaiApiKey,
-        body.metabaseApiKey
-      )
-    );
-  }
+  const results = await pickLetualVariationPhotosBatch(
+    ids,
+    body.openaiApiKey,
+    body.metabaseApiKey
+  );
   return NextResponse.json({ results });
 }

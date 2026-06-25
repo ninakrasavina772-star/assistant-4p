@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { LETUAL_VISION_TOP } from "@/lib/letualMainPhotoConstants";
 import { getLetualVariationGallery } from "@/lib/letualMainPhotoServer";
 import { scoreLetualPhotoUrls } from "@/lib/letualPhotoAi";
 
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
     let scored: Awaited<ReturnType<typeof scoreLetualPhotoUrls>> | undefined;
     if (score && openaiKey?.trim()) {
       const urls = photos.map((p) => p.url);
-      scored = await scoreLetualPhotoUrls(urls, openaiKey.trim());
+      scored = await scoreLetualPhotoUrls(urls, openaiKey.trim(), LETUAL_VISION_TOP);
     }
 
     const scoreByUrl = new Map(scored?.map((s) => [s.url, s]) ?? []);

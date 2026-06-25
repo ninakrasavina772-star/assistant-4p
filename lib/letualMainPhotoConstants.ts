@@ -14,7 +14,25 @@ export const LETUAL_SIDE_MARGIN_WIDE_LOW = 50;
 /** Верхний и нижний отступ для вертикальных флаконов (тип A). */
 export const LETUAL_VERTICAL_MARGIN = 100;
 
-export const LETUAL_BATCH_MAX = 20;
-export const LETUAL_API_CHUNK = 3;
+/** Максимум variation_id за одну сессию в UI. */
+export const LETUAL_BATCH_MAX = 50;
+
+/** Сколько позиций за один HTTP-запрос к API. */
+export const LETUAL_API_CHUNK = 10;
+
+/** Параллельный подбор фото (вариаций) на сервере. */
+export const LETUAL_PICK_CONCURRENCY = 5;
+
+/** Параллельная генерация JPG на сервере. */
+export const LETUAL_GENERATE_CONCURRENCY = 3;
+
+/** Параллельное скачивание URL. */
+export const LETUAL_DOWNLOAD_CONCURRENCY = 8;
+
+/** Сколько лучших URL отправлять в OpenAI Vision (после техоценки). */
+export const LETUAL_VISION_TOP = 6;
+
+/** Сколько vision-запросов одновременно внутри одной вариации. */
+export const LETUAL_VISION_BATCH = 3;
 
 export type LetualLayoutType = "vertical" | "square_wide" | "wide_low";

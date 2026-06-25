@@ -1,10 +1,14 @@
+import sharp from "sharp";
 import {
-  fetchLetualImageDetailed,
-  normalizeLetualSourceUrl,
   filterDownloadableLetualUrls,
   rankLetualUrlsByTechnicalQuality,
+  type LetualFetchedImage,
   type LetualTechnicalScore
 } from "@/lib/letualFotoQuality";
+import {
+  LETUAL_VISION_BATCH,
+  LETUAL_VISION_TOP
+} from "@/lib/letualMainPhotoConstants";
 
 export type LetualPhotoScore = {
   url: string;
@@ -54,14 +58,23 @@ JSON: {"suitable":true,"has_box":false,"has_infographic":false,"has_product":tru
 
 const MIN_QUALITY = 50;
 const MIN_SHARPNESS = 18;
-const VISION_MAX = 20;
+const VISION_PREVIEW_PX = 512;
 
-async function imageToDataUrl(rawUrl: string): Promise<{ dataUrl: string; usedUrl: string } | null> {
-  const fetched = await fetchLetualImageDetailed(rawUrl);
-  if (!fetched) return null;
-  const b64 = fetched.buf.toString("base64");
-  const mime = fetched.usedUrl.toLowerCase().includes(".png") ? "image/png" : "image/jpeg";
-  return { dataUrl: `data:${mime};base64,${b64}`, usedUrl: fetched.usedUrl };
+async function bufferToVisionDataUrl(buf: Buffer, usedUrl: string): Promise<string> {
+  const meta = await sharp(buf).metadata();
+  const w = meta.width ?? 1;
+  const h = meta.height ?? 1;
+  const resized = await sharp(buf)
+    .resize({
+      width: w >= h ? VISION_PREVIEW_PX : undefined,
+      height: h > w ? VISION_PREVIEW_PX : undefined,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .jpeg({ quality: 82 })
+    .toBuffer();
+  const b64 = resized.toString("base64");
+  return `data:image/jpeg;base64,${b64}`;
 }
 
 function combineScore(
@@ -132,14 +145,13 @@ function combineScore(
   };
 }
 
-async function scoreOneUrl(
-  rawUrl: string,
+async function scoreOneFetched(
+  fetched: LetualFetchedImage,
   technical: LetualTechnicalScore | undefined,
   openaiApiKey: string,
   model: string
 ): Promise<LetualPhotoScore | null> {
-  const img = await imageToDataUrl(rawUrl);
-  if (!img) return null;
+  const dataUrl = await bufferToVisionDataUrl(fetched.buf, fetched.usedUrl);
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -160,12 +172,12 @@ async function scoreOneUrl(
               type: "text",
               text: "Оцени packshot для главного фото Летуаль. Белый фон и фронтальный ракурс обязательны."
             },
-            { type: "image_url", image_url: { url: img.dataUrl, detail: "high" } }
+            { type: "image_url", image_url: { url: dataUrl, detail: "low" } }
           ]
         }
       ]
     }),
-    signal: AbortSignal.timeout(60_000)
+    signal: AbortSignal.timeout(45_000)
   });
 
   if (!res.ok) return null;
@@ -180,7 +192,57 @@ async function scoreOneUrl(
     parsed = {};
   }
 
-  return combineScore(parsed, technical, img.usedUrl);
+  return combineScore(parsed, technical, fetched.usedUrl);
+}
+
+function fetchedByOriginal(
+  fetched: LetualFetchedImage[]
+): Map<string, LetualFetchedImage> {
+  const map = new Map<string, LetualFetchedImage>();
+  for (const f of fetched) {
+    map.set(f.originalUrl, f);
+    map.set(f.usedUrl, f);
+  }
+  return map;
+}
+
+function isGoodEnoughToStop(ranked: LetualPhotoScore[]): boolean {
+  const best = pickBestFromRanked(ranked);
+  return Boolean(best && (best.suitable || isGoodPackshotSource(best)));
+}
+
+async function scoreWithEarlyExit(
+  orderedOriginalUrls: string[],
+  fetchedMap: Map<string, LetualFetchedImage>,
+  technicalByRaw: Map<string, LetualTechnicalScore>,
+  openaiApiKey: string,
+  model: string,
+  visionTop: number
+): Promise<LetualPhotoScore[]> {
+  const ranked: LetualPhotoScore[] = [];
+  const pool = orderedOriginalUrls.slice(0, visionTop);
+
+  for (let i = 0; i < pool.length; i += LETUAL_VISION_BATCH) {
+    const batch = pool.slice(i, i + LETUAL_VISION_BATCH);
+    const batchResults = await Promise.all(
+      batch.map(async (originalUrl) => {
+        const fetched = fetchedMap.get(originalUrl);
+        if (!fetched) return null;
+        const technical =
+          technicalByRaw.get(originalUrl) ?? technicalByRaw.get(fetched.usedUrl);
+        return scoreOneFetched(fetched, technical, openaiApiKey, model);
+      })
+    );
+
+    for (const r of batchResults) {
+      if (r) ranked.push(r);
+    }
+    ranked.sort((a, b) => b.score - a.score);
+
+    if (isGoodEnoughToStop(ranked)) break;
+  }
+
+  return ranked;
 }
 
 /** Флакон без коробки, фронт, достаточное качество — можно генерировать (в т.ч. прозрачный PNG). */
@@ -241,38 +303,34 @@ export function pickBestFromRanked(ranked: LetualPhotoScore[]): LetualPhotoScore
 export async function pickBestLetualPhoto(
   urls: string[],
   openaiApiKey: string,
-  model = "gpt-4o-mini"
+  model = "gpt-4o-mini",
+  visionTop = LETUAL_VISION_TOP
 ): Promise<{ url: string; ranked: LetualPhotoScore[]; downloadableCount: number }> {
-  const downloadable = await filterDownloadableLetualUrls(urls);
-  if (!downloadable.length) {
+  const { ranked: technicalRanked, fetched } = await rankLetualUrlsByTechnicalQuality(urls);
+  if (!technicalRanked.length) {
     return { url: "", ranked: [], downloadableCount: 0 };
   }
 
-  const technicalRanked = await rankLetualUrlsByTechnicalQuality(downloadable);
   const technicalByRaw = new Map(
     technicalRanked.map((t) => [t.originalUrl, t])
   );
+  const fetchedMap = fetchedByOriginal(fetched);
+  const orderedUrls = technicalRanked.map((t) => t.originalUrl);
 
-  const forVision =
-    downloadable.length <= VISION_MAX
-      ? downloadable
-      : technicalRanked.slice(0, VISION_MAX).map((t) => t.originalUrl);
-
-  const ranked = (
-    await Promise.all(
-      forVision.map((raw) =>
-        scoreOneUrl(raw, technicalByRaw.get(raw), openaiApiKey, model)
-      )
-    )
-  ).filter((x): x is LetualPhotoScore => x !== null);
-
-  ranked.sort((a, b) => b.score - a.score);
+  const ranked = await scoreWithEarlyExit(
+    orderedUrls,
+    fetchedMap,
+    technicalByRaw,
+    openaiApiKey,
+    model,
+    visionTop
+  );
 
   const best = pickBestFromRanked(ranked);
   return {
     url: best?.url ?? "",
     ranked,
-    downloadableCount: downloadable.length
+    downloadableCount: technicalRanked.length
   };
 }
 
@@ -291,11 +349,15 @@ export async function pickSuitableLetualPhoto(
   };
 }
 
-/** Оценить список URL без выбора лучшего. */
+/** Оценить список URL (топ по техоценке, с early exit). */
 export async function scoreLetualPhotoUrls(
   urls: string[],
-  openaiApiKey: string
+  openaiApiKey: string,
+  visionTop = LETUAL_VISION_TOP
 ): Promise<LetualPhotoScore[]> {
-  const picked = await pickBestLetualPhoto(urls, openaiApiKey);
+  const picked = await pickBestLetualPhoto(urls, openaiApiKey, "gpt-4o-mini", visionTop);
   return picked.ranked;
 }
+
+// Re-export for callers that only need downloadable check
+export { filterDownloadableLetualUrls };

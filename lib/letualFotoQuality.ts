@@ -4,6 +4,8 @@ import {
   dedupeAndNormalizeFotoUrls,
   normalize4standHugeWebp
 } from "@/lib/podruzhkaFotoPick";
+import { mapPool } from "@/lib/letualAsyncPool";
+import { LETUAL_DOWNLOAD_CONCURRENCY } from "@/lib/letualMainPhotoConstants";
 
 export type LetualTechnicalScore = {
   url: string;
@@ -15,6 +17,12 @@ export type LetualTechnicalScore = {
   sharpness: number;
   technicalScore: number;
   downloadable: true;
+};
+
+export type LetualFetchedImage = {
+  originalUrl: string;
+  usedUrl: string;
+  buf: Buffer;
 };
 
 /** Максимальное разрешение: 4stand huge, Ozon -f. */
@@ -104,12 +112,42 @@ export async function measureImageSharpness(buf: Buffer): Promise<number> {
   return Math.max(0, variance);
 }
 
-export async function measureLetualTechnicalScore(
-  rawUrl: string
-): Promise<LetualTechnicalScore | null> {
-  const fetched = await fetchLetualImageDetailed(rawUrl);
-  if (!fetched) return null;
+/** Только URL, которые реально скачиваются (параллельно). */
+export async function filterDownloadableLetualUrls(urls: string[]): Promise<string[]> {
+  const fetched = await fetchLetualImagesParallel(urls);
+  return fetched.map((f) => f.originalUrl);
+}
 
+/** Скачать URL параллельно, один раз на URL. */
+export async function fetchLetualImagesParallel(
+  urls: string[],
+  concurrency = LETUAL_DOWNLOAD_CONCURRENCY
+): Promise<LetualFetchedImage[]> {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const raw of urls) {
+    const t = raw.trim();
+    if (!t.startsWith("http") || seen.has(t)) continue;
+    seen.add(t);
+    unique.push(t);
+  }
+
+  const results = await mapPool(unique, concurrency, async (url) => {
+    const fetched = await fetchLetualImageDetailed(url);
+    if (!fetched?.buf?.length) return null;
+    return {
+      originalUrl: fetched.originalUrl,
+      usedUrl: fetched.usedUrl,
+      buf: fetched.buf
+    };
+  });
+
+  return results.filter((x): x is LetualFetchedImage => x !== null);
+}
+
+export async function technicalScoreFromBuffer(
+  fetched: LetualFetchedImage
+): Promise<LetualTechnicalScore> {
   const meta = await sharp(fetched.buf).metadata();
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
@@ -137,31 +175,28 @@ export async function measureLetualTechnicalScore(
   };
 }
 
-/** Только URL, которые реально скачиваются. */
-export async function filterDownloadableLetualUrls(urls: string[]): Promise<string[]> {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of urls) {
-    const t = raw.trim();
-    if (!t.startsWith("http") || seen.has(t)) continue;
-    const ok = await fetchLetualImageDetailed(t);
-    if (ok) {
-      seen.add(t);
-      out.push(t);
-    }
-  }
-  return out;
-}
-
-/** Предварительный ранжир по разрешению и резкости (без AI). */
+/** Предварительный ранжир по разрешению и резкости (без AI), одно скачивание на URL. */
 export async function rankLetualUrlsByTechnicalQuality(
   urls: string[]
-): Promise<LetualTechnicalScore[]> {
-  const downloadable = await filterDownloadableLetualUrls(urls);
+): Promise<{ ranked: LetualTechnicalScore[]; fetched: LetualFetchedImage[] }> {
+  const fetched = await fetchLetualImagesParallel(urls);
   const measured = (
-    await Promise.all(downloadable.map((url) => measureLetualTechnicalScore(url)))
+    await Promise.all(fetched.map((f) => technicalScoreFromBuffer(f)))
   ).filter((x): x is LetualTechnicalScore => x !== null);
 
   measured.sort((a, b) => b.technicalScore - a.technicalScore);
-  return measured;
+  return { ranked: measured, fetched };
+}
+
+/** @deprecated Используйте rankLetualUrlsByTechnicalQuality — оставлено для совместимости. */
+export async function measureLetualTechnicalScore(
+  rawUrl: string
+): Promise<LetualTechnicalScore | null> {
+  const fetched = await fetchLetualImageDetailed(rawUrl);
+  if (!fetched) return null;
+  return technicalScoreFromBuffer({
+    originalUrl: fetched.originalUrl,
+    usedUrl: fetched.usedUrl,
+    buf: fetched.buf
+  });
 }
