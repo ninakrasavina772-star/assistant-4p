@@ -33,7 +33,8 @@ export async function processLetualMainPhotoFromUrl(sourceUrl: string): Promise<
 
   if (await hasSignificantTransparency(raw)) {
     const png = await sharp(raw).ensureAlpha().png().toBuffer();
-    return compositeLetualMainPhoto(png);
+    const cropped = await cropToVisibleProduct(png, 8, 0.02, 4);
+    return compositeLetualMainPhoto(cropped);
   }
 
   const cutout = await preprocessCosmeticsProductBufferEdge(raw);

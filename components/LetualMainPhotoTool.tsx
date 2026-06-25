@@ -27,7 +27,9 @@ type Tab = "variations" | "urls";
 
 type UiRow = LetualPickRow & {
   resultUrl?: string;
+  resultPreviewUrl?: string;
   generated?: boolean;
+  generateError?: string;
 };
 
 type GalleryPhoto = {
@@ -349,7 +351,10 @@ export function LetualMainPhotoTool() {
             if (!row) continue;
             row.resultUrl = res.ok ? res.resultUrl : undefined;
             row.generated = res.ok;
-            row.comment = res.ok ? row.comment : (res.error ?? "ошибка генерации");
+            row.generateError = res.ok ? undefined : (res.error ?? "ошибка генерации");
+            if (res.ok && res.resultUrl) {
+              row.resultPreviewUrl = res.resultUrl;
+            }
             updated.set(res.variationId, row);
             done++;
           }
@@ -598,7 +603,7 @@ export function LetualMainPhotoTool() {
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                   <th className="pb-2 pr-3">ID</th>
-                  <th className="pb-2 pr-3">Фото</th>
+                  <th className="pb-2 pr-3">Источник</th>
                   <th className="pb-2 pr-3">Статус</th>
                   <th className="pb-2 pr-3">Комментарий</th>
                   <th className="pb-2 pr-3">Результат</th>
@@ -610,11 +615,12 @@ export function LetualMainPhotoTool() {
                   <tr key={r.variationId}>
                     <td className="py-3 pr-3 align-top font-mono">{r.variationId}</td>
                     <td className="py-3 pr-3 align-top">
-                      {(r.previewUrl || r.sourceUrl) ? (
+                      {r.sourceUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={r.previewUrl || r.sourceUrl}
+                          src={r.sourceUrl}
                           alt=""
+                          title="Исходник"
                           className="h-20 w-20 rounded border border-slate-200 bg-white object-contain"
                         />
                       ) : (
@@ -632,11 +638,27 @@ export function LetualMainPhotoTool() {
                       {r.error ?? r.comment}
                     </td>
                     <td className="py-3 pr-3 align-top">
-                      {r.resultUrl ? (
-                        <a href={r.resultUrl} target="_blank" rel="noreferrer" className="text-sky-700 text-xs break-all">
-                          {r.generated ? "готово" : ""}
+                      {r.resultUrl && r.generated ? (
+                        <a
+                          href={r.resultUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block w-24"
+                          title="Открыть результат"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={r.resultUrl}
+                            alt=""
+                            className="h-24 w-24 rounded border border-emerald-200 bg-white object-contain"
+                          />
+                          <span className="mt-1 block text-[10px] text-sky-700">открыть</span>
                         </a>
-                      ) : null}
+                      ) : r.generateError ? (
+                        <span className="text-xs text-red-700">{r.generateError}</span>
+                      ) : (
+                        <span className="text-slate-400 text-xs">ещё не сгенерировано</span>
+                      )}
                     </td>
                     <td className="py-3 align-top">
                       <div className="flex flex-col gap-1">
@@ -678,6 +700,33 @@ export function LetualMainPhotoTool() {
                 ))}
               </tbody>
             </table>
+
+            {rows.some((r) => r.generated && r.resultUrl) ? (
+              <div className="mt-6 border-t border-slate-100 pt-4">
+                <h3 className="mb-3 text-sm font-semibold text-slate-800">Превью результатов</h3>
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+                  {rows
+                    .filter((r) => r.generated && r.resultUrl)
+                    .map((r) => (
+                      <a
+                        key={r.variationId}
+                        href={r.resultUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-lg border border-slate-200 bg-white p-2 hover:border-emerald-300"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={r.resultUrl}
+                          alt=""
+                          className="mx-auto h-40 w-full object-contain"
+                        />
+                        <p className="mt-2 text-center font-mono text-xs text-slate-600">{r.variationId}</p>
+                      </a>
+                    ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
       ) : null}
