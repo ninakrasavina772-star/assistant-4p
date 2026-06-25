@@ -8,19 +8,28 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 FROM base AS deps
 COPY package.json package-lock.json ./
+COPY scripts/copy-podruzhka-fonts.mjs ./scripts/copy-podruzhka-fonts.mjs
 RUN npm ci
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG NEXT_PUBLIC_APP_ORIGIN=
+ARG BUILD_TIME=dev
+ARG BUILD_ID=local
 ENV NEXT_PUBLIC_APP_ORIGIN=$NEXT_PUBLIC_APP_ORIGIN
+ENV BUILD_TIME=$BUILD_TIME
+ENV BUILD_ID=$BUILD_ID
 RUN npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+ARG BUILD_TIME=dev
+ARG BUILD_ID=local
+ENV BUILD_TIME=$BUILD_TIME
+ENV BUILD_ID=$BUILD_ID
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 --ingroup nodejs nextjs
 COPY --from=builder /app/public ./public
