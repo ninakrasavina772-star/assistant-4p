@@ -47,7 +47,7 @@ export async function fetchBestProductSource(urls: string[]): Promise<Buffer> {
   const merged = [...new Set([...normalized, ...sorted])].filter((u) => /^https?:\/\//i.test(u));
   if (!merged.length) throw new Error("Нет URL foto");
 
-  const ranked = await rankLetualUrlsByTechnicalQuality(merged.slice(0, 12));
+  const { ranked } = await rankLetualUrlsByTechnicalQuality(merged.slice(0, 12));
   const tryUrls = ranked.length ? ranked.map((r) => r.url) : merged.slice(0, 6);
 
   for (const url of tryUrls) {
