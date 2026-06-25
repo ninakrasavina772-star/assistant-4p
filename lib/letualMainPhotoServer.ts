@@ -23,7 +23,7 @@ import type {
 import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
 import {
   derivePickStatus,
-  pickLetualPhotoInstant,
+  pickLetualPhotoFast,
   pickLetualPhotoWithFallback,
   scoreLetualPhotoUrls,
   type LetualPhotoScore
@@ -95,7 +95,7 @@ async function pickFromSiblingUrls(
 
   try {
     const { best, ranked } = quickPick
-      ? pickLetualPhotoInstant(siblingUrls)
+      ? await pickLetualPhotoFast(siblingUrls)
       : await pickLetualPhotoWithFallback(siblingUrls, resolveOpenAiKey(openaiApiKey));
     const match = gallery.photos.find((p) => p.url === best.url);
     return {
@@ -146,7 +146,7 @@ async function pickFromVariationRow(
 
   try {
     const { best, ranked } = quickPick
-      ? pickLetualPhotoInstant(row.imageUrls)
+      ? await pickLetualPhotoFast(row.imageUrls)
       : await pickLetualPhotoWithFallback(row.imageUrls, resolveOpenAiKey(openaiApiKey));
     const picked = pickRowFromVariation(row, best, ranked);
     if (picked.status === "ok") return picked;

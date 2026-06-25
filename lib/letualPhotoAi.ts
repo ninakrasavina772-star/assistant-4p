@@ -1,9 +1,11 @@
 import sharp from "sharp";
 import {
   filterDownloadableLetualUrls,
+  measurePackshotSignals,
   rankLetualUrlsByTechnicalQuality,
   type LetualFetchedImage,
-  type LetualTechnicalScore
+  type LetualTechnicalScore,
+  type PackshotSignals
 } from "@/lib/letualFotoQuality";
 import {
   LETUAL_VISION_BATCH,
@@ -345,24 +347,60 @@ function pickLooseFromRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | und
   if (!ranked.length) return undefined;
   const withProduct = ranked.filter((r) => r.hasProduct);
   const pool = withProduct.length ? withProduct : ranked;
-  return [...pool].sort((a, b) => b.score - a.score)[0];
+  const noBox = pool.filter((r) => !r.hasBox);
+  const finalPool = noBox.length ? noBox : pool;
+  return [...finalPool].sort((a, b) => b.score - a.score)[0];
 }
 
-export function scoreFromTechnicalFallback(t: LetualTechnicalScore): LetualPhotoScore {
+export function scoreFromPackshotAnalysis(
+  t: LetualTechnicalScore,
+  signals: PackshotSignals | null
+): LetualPhotoScore {
+  const hasTransparentBg = signals?.hasTransparentBg ?? false;
+  const hasWhiteBackground =
+    Boolean(signals && (signals.whiteRatio >= 0.42 || hasTransparentBg)) ||
+    /cdnru\.4stand|deloox/i.test(t.url);
+  const hasBox = signals?.likelyHasBox ?? false;
+  const isSingle = signals?.likelySingleBottle ?? false;
+
+  let score = t.technicalScore;
+  if (isSingle && !hasBox && hasWhiteBackground) score += 220;
+  if (hasBox) score -= 400;
+  if (hasWhiteBackground) score += 50;
+  if (hasTransparentBg) score += 40;
+
+  const suitable =
+    isSingle &&
+    !hasBox &&
+    hasWhiteBackground &&
+    !signals?.likelyHasBox &&
+    t.sharpness >= MIN_SHARPNESS;
+
+  let reason = "Автовыбор по качеству файла";
+  if (isSingle && !hasBox && hasWhiteBackground) reason = "Флакон на белом фоне";
+  else if (hasBox) reason = "В кадре коробка — есть варианты без неё";
+
   return {
     url: t.url,
-    score: t.technicalScore,
-    suitable: false,
-    hasBox: false,
+    score,
+    suitable,
+    hasBox,
     hasInfographic: false,
     hasProduct: true,
     isFrontal: true,
-    hasWhiteBackground: /cdnru\.4stand|deloox/i.test(t.url),
-    quality: Math.min(75, Math.max(50, Math.round(t.sharpness / 2))),
+    hasWhiteBackground,
+    quality: Math.min(80, Math.max(50, Math.round(t.sharpness / 2))),
     sharpness: t.sharpness,
     pixels: t.pixels,
-    reason: "Автовыбор по качеству файла"
+    reason
   };
+}
+
+export function scoreFromTechnicalFallback(
+  t: LetualTechnicalScore,
+  signals?: PackshotSignals | null
+): LetualPhotoScore {
+  return scoreFromPackshotAnalysis(t, signals ?? null);
 }
 
 function preferCdnUrl(urls: string[]): string {
@@ -376,8 +414,8 @@ function scoreFromUrlHeuristic(url: string, reason: string): LetualPhotoScore {
   return {
     url,
     score: isCdnHuge ? 85 : 45,
-    suitable: isCdnHuge,
-    hasBox: false,
+    suitable: false,
+    hasBox: true,
     hasInfographic: false,
     hasProduct: true,
     isFrontal: true,
@@ -400,6 +438,43 @@ export function pickLetualPhotoInstant(urls: string[]): {
   return { best, ranked: [best] };
 }
 
+/** Быстрый подбор: скачать все URL, выбрать флакон на белом фоне без коробки. */
+export async function pickLetualPhotoFast(
+  urls: string[]
+): Promise<{ best: LetualPhotoScore; ranked: LetualPhotoScore[] }> {
+  const { ranked: technicalRanked, fetched } = await rankLetualUrlsByTechnicalQuality(urls);
+  const bufByOriginal = new Map(fetched.map((f) => [f.originalUrl, f.buf]));
+
+  const ranked: LetualPhotoScore[] = [];
+  for (const t of technicalRanked) {
+    const buf = bufByOriginal.get(t.originalUrl);
+    const signals = buf ? await measurePackshotSignals(buf) : null;
+    ranked.push(scoreFromPackshotAnalysis(t, signals));
+  }
+  ranked.sort((a, b) => b.score - a.score);
+
+  let best = pickBestFromRanked(ranked) ?? pickLooseFromRanked(ranked);
+
+  if (!best && technicalRanked[0]) {
+    const buf = bufByOriginal.get(technicalRanked[0].originalUrl);
+    const signals = buf ? await measurePackshotSignals(buf) : null;
+    best = scoreFromPackshotAnalysis(technicalRanked[0], signals);
+  }
+
+  if (!best) {
+    const url = preferCdnUrl(urls);
+    if (url) {
+      best = scoreFromUrlHeuristic(url, "Первое фото из карточки");
+      best.hasBox = true;
+      best.suitable = false;
+      best.reason = "Не удалось проверить кадры — проверьте вручную";
+    }
+  }
+
+  if (!best) throw new Error("Нет URL для подбора");
+  return { best, ranked };
+}
+
 function isCdnPackshotUrl(url: string): boolean {
   return /cdnru\.4stand\.com\/huge\//i.test(url);
 }
@@ -409,40 +484,25 @@ export async function pickLetualPhotoWithFallback(
   urls: string[],
   openaiApiKey: string
 ): Promise<{ best: LetualPhotoScore; ranked: LetualPhotoScore[] }> {
-  const picked = await pickBestLetualPhoto(urls, openaiApiKey);
-  let best =
-    pickBestFromRanked(picked.ranked) ??
-    pickLooseFromRanked(picked.ranked);
+  const [fast, picked] = await Promise.all([
+    pickLetualPhotoFast(urls),
+    pickBestLetualPhoto(urls, openaiApiKey)
+  ]);
 
-  if (!best && picked.technicalTop) {
-    best = scoreFromTechnicalFallback(picked.technicalTop);
-  }
-
-  if (!best) {
-    const url = preferCdnUrl(urls);
-    if (url) {
-      best = {
-        url,
-        score: 0,
-        suitable: false,
-        hasBox: false,
-        hasInfographic: false,
-        hasProduct: true,
-        isFrontal: true,
-        hasWhiteBackground: true,
-        quality: 50,
-        sharpness: 0,
-        pixels: 0,
-        reason: "Первое фото из карточки"
-      };
-    }
-  }
+  const aiBest = pickBestFromRanked(picked.ranked) ?? pickLooseFromRanked(picked.ranked);
+  const candidates = [fast.best, aiBest].filter((c): c is LetualPhotoScore => Boolean(c));
+  const noBox = candidates.filter((c) => !c.hasBox);
+  const pool = noBox.length ? noBox : candidates;
+  const best = [...pool].sort((a, b) => b.score - a.score)[0];
 
   if (!best) {
     throw new Error("Нет URL для подбора");
   }
 
-  return { best, ranked: picked.ranked };
+  return {
+    best,
+    ranked: picked.ranked.length >= fast.ranked.length ? picked.ranked : fast.ranked
+  };
 }
 
 export async function pickSuitableLetualPhoto(

@@ -188,6 +188,108 @@ export async function rankLetualUrlsByTechnicalQuality(
   return { ranked: measured, fetched };
 }
 
+export type PackshotSignals = {
+  whiteRatio: number;
+  contentWidthRatio: number;
+  likelyHasBox: boolean;
+  likelySingleBottle: boolean;
+  hasTransparentBg: boolean;
+};
+
+function isBackgroundPixel(r: number, g: number, b: number, a: number): boolean {
+  if (a < 20) return true;
+  return r > 232 && g > 232 && b > 232;
+}
+
+/** Быстрый анализ packshot без AI: белый фон, один флакон, коробка в кадре. */
+export async function measurePackshotSignals(buf: Buffer): Promise<PackshotSignals> {
+  const { data, info } = await sharp(buf)
+    .resize(240, 240, { fit: "inside", withoutEnlargement: true })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width ?? 1;
+  const h = info.height ?? 1;
+  const colDensity = new Float64Array(w);
+  let bgPixels = 0;
+  let minX = w;
+  let maxX = 0;
+  let minY = h;
+  let maxY = 0;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const r = data[i]!;
+      const g = data[i + 1]!;
+      const b = data[i + 2]!;
+      const a = data[i + 3]!;
+      if (isBackgroundPixel(r, g, b, a)) {
+        bgPixels++;
+        continue;
+      }
+      colDensity[x]! += 1;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  const total = w * h;
+  const whiteRatio = bgPixels / total;
+  const hasTransparentBg = whiteRatio > 0.55 && bgPixels > total * 0.45;
+
+  if (maxX < minX) {
+    return {
+      whiteRatio: 1,
+      contentWidthRatio: 0,
+      likelyHasBox: false,
+      likelySingleBottle: false,
+      hasTransparentBg: true
+    };
+  }
+
+  const bboxW = maxX - minX + 1;
+  const bboxH = maxY - minY + 1;
+  const contentWidthRatio = bboxW / w;
+  const contentHeightRatio = bboxH / h;
+
+  let peaks = 0;
+  let inPeak = false;
+  const threshold = Math.max(...colDensity) * 0.28;
+  for (let x = 0; x < w; x++) {
+    const dense = colDensity[x]! >= threshold;
+    if (dense && !inPeak) {
+      peaks++;
+      inPeak = true;
+    } else if (!dense) {
+      inPeak = false;
+    }
+  }
+
+  const wideContent = contentWidthRatio > 0.5;
+  const multiPeak = peaks >= 2 && contentWidthRatio > 0.38;
+  const flatWide = contentWidthRatio > 0.62 && contentHeightRatio < 0.72;
+  const likelyHasBox = wideContent && (multiPeak || flatWide);
+
+  const likelySingleBottle =
+    !likelyHasBox &&
+    contentWidthRatio >= 0.1 &&
+    contentWidthRatio <= 0.46 &&
+    contentHeightRatio >= 0.35 &&
+    (whiteRatio >= 0.42 || hasTransparentBg);
+
+  return {
+    whiteRatio,
+    contentWidthRatio,
+    likelyHasBox,
+    likelySingleBottle,
+    hasTransparentBg
+  };
+}
+
 /** @deprecated Используйте rankLetualUrlsByTechnicalQuality — оставлено для совместимости. */
 export async function measureLetualTechnicalScore(
   rawUrl: string
