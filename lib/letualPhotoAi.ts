@@ -305,7 +305,12 @@ export async function pickBestLetualPhoto(
   openaiApiKey: string,
   model = "gpt-4o-mini",
   visionTop = LETUAL_VISION_TOP
-): Promise<{ url: string; ranked: LetualPhotoScore[]; downloadableCount: number }> {
+): Promise<{
+  url: string;
+  ranked: LetualPhotoScore[];
+  downloadableCount: number;
+  technicalTop?: LetualTechnicalScore;
+}> {
   const { ranked: technicalRanked, fetched } = await rankLetualUrlsByTechnicalQuality(urls);
   if (!technicalRanked.length) {
     return { url: "", ranked: [], downloadableCount: 0 };
@@ -326,25 +331,94 @@ export async function pickBestLetualPhoto(
     visionTop
   );
 
-  const best = pickBestFromRanked(ranked);
+  const best = pickBestFromRanked(ranked) ?? pickLooseFromRanked(ranked);
   return {
     url: best?.url ?? "",
     ranked,
-    downloadableCount: technicalRanked.length
+    downloadableCount: technicalRanked.length,
+    technicalTop: technicalRanked[0]
   };
+}
+
+/** Если строгий отбор ничего не дал — взять лучшее из того, что оценил AI. */
+function pickLooseFromRanked(ranked: LetualPhotoScore[]): LetualPhotoScore | undefined {
+  if (!ranked.length) return undefined;
+  const withProduct = ranked.filter((r) => r.hasProduct);
+  const pool = withProduct.length ? withProduct : ranked;
+  return [...pool].sort((a, b) => b.score - a.score)[0];
+}
+
+export function scoreFromTechnicalFallback(t: LetualTechnicalScore): LetualPhotoScore {
+  return {
+    url: t.url,
+    score: t.technicalScore,
+    suitable: false,
+    hasBox: false,
+    hasInfographic: false,
+    hasProduct: true,
+    isFrontal: true,
+    hasWhiteBackground: /cdnru\.4stand|deloox/i.test(t.url),
+    quality: Math.min(75, Math.max(50, Math.round(t.sharpness / 2))),
+    sharpness: t.sharpness,
+    pixels: t.pixels,
+    reason: "Автовыбор по качеству файла"
+  };
+}
+
+function preferCdnUrl(urls: string[]): string {
+  const cdn = urls.find((u) => /cdnru\.4stand\.com\/huge\//i.test(u));
+  return cdn ?? urls.find((u) => /^https?:\/\//i.test(u)) ?? "";
+}
+
+/** Подбор с гарантированным fallback: в карточке есть URL → почти всегда будет sourceUrl. */
+export async function pickLetualPhotoWithFallback(
+  urls: string[],
+  openaiApiKey: string
+): Promise<{ best: LetualPhotoScore; ranked: LetualPhotoScore[] }> {
+  const picked = await pickBestLetualPhoto(urls, openaiApiKey);
+  let best =
+    pickBestFromRanked(picked.ranked) ??
+    pickLooseFromRanked(picked.ranked);
+
+  if (!best && picked.technicalTop) {
+    best = scoreFromTechnicalFallback(picked.technicalTop);
+  }
+
+  if (!best) {
+    const url = preferCdnUrl(urls);
+    if (url) {
+      best = {
+        url,
+        score: 0,
+        suitable: false,
+        hasBox: false,
+        hasInfographic: false,
+        hasProduct: true,
+        isFrontal: true,
+        hasWhiteBackground: true,
+        quality: 50,
+        sharpness: 0,
+        pixels: 0,
+        reason: "Первое фото из карточки"
+      };
+    }
+  }
+
+  if (!best) {
+    throw new Error("Нет URL для подбора");
+  }
+
+  return { best, ranked: picked.ranked };
 }
 
 export async function pickSuitableLetualPhoto(
   urls: string[],
   openaiApiKey: string
 ): Promise<{ url: string; ranked: LetualPhotoScore[]; best?: LetualPhotoScore }> {
-  const picked = await pickBestLetualPhoto(urls, openaiApiKey);
-  const best = pickBestFromRanked(picked.ranked);
-  const suitableUrl =
-    best && (best.suitable || isGoodPackshotSource(best)) ? best.url : "";
+  const { best, ranked } = await pickLetualPhotoWithFallback(urls, openaiApiKey);
   return {
-    url: suitableUrl,
-    ranked: picked.ranked,
+    url: best.url,
+    ranked,
     best
   };
 }

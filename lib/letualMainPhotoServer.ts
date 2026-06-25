@@ -22,8 +22,7 @@ import type {
 import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
 import {
   derivePickStatus,
-  pickBestFromRanked,
-  pickSuitableLetualPhoto,
+  pickLetualPhotoWithFallback,
   scoreLetualPhotoUrls,
   type LetualPhotoScore
 } from "@/lib/letualPhotoAi";
@@ -55,30 +54,66 @@ async function processAndUpload(sourceUrl: string): Promise<string> {
 
 function pickRowFromVariation(
   row: LetualVariationRow,
-  best: LetualPhotoScore | undefined,
+  best: LetualPhotoScore,
   ranked: LetualPhotoScore[],
   statusOverride?: LetualPickStatus
 ): LetualPickRow {
-  const status = statusOverride ?? (best ? derivePickStatus(best) : "no_photo");
+  const status = statusOverride ?? derivePickStatus(best);
   return {
     variationId: row.variationId,
     productName: row.productName,
     brandName: row.brandName,
     ean: row.ean,
-    sourceUrl: best?.url ?? "",
+    sourceUrl: best.url,
     sourceLabel: "auto",
-    status,
+    status: status === "no_photo" ? "review" : status,
     comment: buildDbComment(best),
-    previewUrl: best?.url,
+    previewUrl: best.url,
     ranked
   };
 }
 
+async function pickFromSiblingUrls(
+  variationId: number,
+  row: LetualVariationRow,
+  openaiApiKey: string,
+  metabaseApiKey?: string
+): Promise<LetualPickRow | null> {
+  const gallery = await getLetualVariationGallery(variationId, metabaseApiKey);
+  const siblingUrls = gallery.photos
+    .filter((p) => p.matchType !== "own")
+    .map((p) => p.url);
+  if (!siblingUrls.length) return null;
+
+  try {
+    const { best, ranked } = await pickLetualPhotoWithFallback(siblingUrls, openaiApiKey);
+    const match = gallery.photos.find((p) => p.url === best.url);
+    return {
+      variationId: row.variationId,
+      productName: row.productName,
+      brandName: row.brandName,
+      ean: row.ean,
+      sourceUrl: best.url,
+      sourceLabel: match?.matchType === "same_ean" ? "same_ean" : "same_product",
+      status: derivePickStatus(best) === "ok" ? "ok" : "review",
+      comment: `Из другой вариации (${match?.variationId ?? "?"}): ${buildDbComment(best)}`,
+      previewUrl: best.url,
+      ranked
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function pickFromVariationRow(
   row: LetualVariationRow,
-  openaiApiKey: string
+  openaiApiKey: string,
+  metabaseApiKey?: string
 ): Promise<LetualPickRow> {
   if (!row.imageUrls.length) {
+    const fromSibling = await pickFromSiblingUrls(row.variationId, row, openaiApiKey, metabaseApiKey);
+    if (fromSibling) return fromSibling;
+
     return {
       variationId: row.variationId,
       productName: row.productName,
@@ -92,9 +127,31 @@ async function pickFromVariationRow(
     };
   }
 
-  const picked = await pickSuitableLetualPhoto(row.imageUrls, openaiApiKey);
-  const best = pickBestFromRanked(picked.ranked);
-  return pickRowFromVariation(row, best, picked.ranked);
+  try {
+    const { best, ranked } = await pickLetualPhotoWithFallback(row.imageUrls, openaiApiKey);
+    const picked = pickRowFromVariation(row, best, ranked);
+    if (picked.status === "ok") return picked;
+
+    const fromSibling = await pickFromSiblingUrls(row.variationId, row, openaiApiKey, metabaseApiKey);
+    if (fromSibling && fromSibling.status === "ok") return fromSibling;
+
+    return picked;
+  } catch {
+    const fromSibling = await pickFromSiblingUrls(row.variationId, row, openaiApiKey, metabaseApiKey);
+    if (fromSibling) return fromSibling;
+
+    return {
+      variationId: row.variationId,
+      productName: row.productName,
+      brandName: row.brandName,
+      ean: row.ean,
+      sourceUrl: "",
+      sourceLabel: "auto",
+      status: "no_photo",
+      comment: "Не удалось подобрать фото",
+      ranked: []
+    };
+  }
 }
 
 /** Фаза A: только подбор фото из Metabase, без генерации. */
@@ -122,7 +179,7 @@ export async function pickLetualVariationPhoto(
       };
     }
 
-    return await pickFromVariationRow(row, key);
+    return await pickFromVariationRow(row, key, metabaseApiKey);
   } catch (e) {
     return {
       variationId,
@@ -167,7 +224,7 @@ export async function pickLetualVariationPhotosBatch(
         };
       }
       try {
-        return await pickFromVariationRow(row, key);
+        return await pickFromVariationRow(row, key, metabaseApiKey);
       } catch (e) {
         return {
           variationId,
