@@ -4,8 +4,9 @@ export const YANDEX_TITLE_MIN_LEN = 60;
 export const YANDEX_TITLE_MAX_LEN = 80;
 const DESCRIPTION_MIN_LEN = 600;
 
+/** Субъективные / маркетинговые прилагательные — не свойства товара */
 const GENERIC_ADJ_RE =
-  /\b(?:премиальн\w*|популярн\w*|оригинальн\w*|элегантн\w*|стильн\w*|эксклюзивн\w*|уникальн\w*|качественн\w*|шикарн\w*|надёжн\w*|надежн\w*|лучш\w*|топов\w*|бестселлер\w*|новинк\w*|рекомендуем\w*|профессиональн\w*)\b/gi;
+  /\b(?:премиальн\w*|популярн\w*|оригинальн\w*|элегантн\w*|стильн\w*|эксклюзивн\w*|уникальн\w*|качественн\w*|шикарн\w*|надёжн\w*|надежн\w*|лучш\w*|топов\w*|бестселлер\w*|новинк\w*|рекомендуем\w*|профессиональн\w*|стойк\w*|загадочн\w*|солнечн\w*|насыщенн\w*|таинственн\w*|чувственн\w*|соблазнительн\w*|роскошн\w*|изысканн\w*|волшебн\w*|идеальн\w*|совершенн\w*|невероятн\w*|потрясающ\w*|божественн\w*|восхитительн\w*|завораживающ\w*|чарующ\w*|утонченн\w*|нежн\w*|ярк\w*|замечательн\w*)\b/gi;
 
 const VOLUME_RE =
   /\b\d+[\s.,]?\d*\s*(?:мл|ml|мл\.|л|l|г|g|кг|kg|шт\.?|pcs|уп\.?)\b/gi;
@@ -59,14 +60,18 @@ export const YANDEX_SYSTEM_APPEND = `
 - Не подставляй одно и то же слово во все карточки (особенно «увлажняющий» для парфюма, декоративки и т.п.).
 
 НАЗВАНИЕ ТОВАРА (если поле в списке):
-- Структура: ТИП товара на русском + бренд + модель/линейка + при необходимости ровно 1 прилагательное о СВОЙСТВЕ товара.
+- Структура: ТИП товара на русском + бренд + модель/линейка + при необходимости ровно 1 слово об ОБЪЕКТИВНОМ свойстве товара.
 - Длина: ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов. Не длиннее ${YANDEX_TITLE_MAX_LEN}!
-- Прилагательное — только если оно правда про товар: «увлажняющий» для крема, «стойкий» для парфюма, «морской» для аромата с морскими нотами. Если не уместно — не добавляй.
-- ЗАПРЕЩЕНО: премиальный, популярный, оригинальный, элегантный, стильный, лучший, топовый, эксклюзивный и любой маркетинговый шум.
+- Допустимое свойство — только факт о товаре, не реклама:
+  • Парфюм: семейство аромата (цветочный, восточный, древесный, фруктовый, свежий, морской, пряный, амбровый, шипровый, цитрусовый).
+  • Косметика: функция или текстура (увлажняющий, питательный, матовый, с SPF и т.п. — только если это свойство формулы/покрытия).
+  • Если свойство неочевидно — не добавляй прилагательное, расширяй модель/линейкой.
+- ЗАПРЕЩЕНО (маркетинг, эмоции, оценка): стойкий, уникальный, загадочный, солнечный, насыщенный, премиальный, популярный, оригинальный, элегантный, лучший, топовый, эксклюзивный, роскошный, нежный, чувственный и любой рекламный шум.
 - ЗАПРЕЩЕНО: объём, оттенок, SPF, артикул, EAN.
 - Примеры:
-  • Крем для лица BIOTHERM Aquasource Night Spa питательный
+  • Парфюмерная вода Giorgio Armani Si Passione цветочная
   • Туалетная вода для мужчин Ferrari Scuderia Black морской
+  • Крем для лица BIOTHERM Aquasource Night Spa питательный
   • Помада для губ MAC Ruby Woo матовая
 
 ОПИСАНИЕ ТОВАРА (если поле в списке):
@@ -76,7 +81,7 @@ export const YANDEX_SYSTEM_APPEND = `
 
 export function buildYandexFieldHint(header: string): string | null {
   if (isYandexTitleHeader(header)) {
-    return `Яндекс: тип + бренд + модель/линейка + 0–1 прилагательное по смыслу товара (не шаблонное), ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов`;
+    return `Яндекс: тип + бренд + модель/линейка + 0–1 объективное свойство (семейство аромата или функция косметики), ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов; без стойкий/уникальный/загадочный/солнечный`;
   }
   if (isYandexDescriptionHeader(header)) {
     return `Яндекс: продающее описание по блокам, минимум ${DESCRIPTION_MIN_LEN} символов, как у категорийного менеджера`;
@@ -94,7 +99,13 @@ export function stripYandexTitleNoise(title: string): string {
 }
 
 export function stripGenericTitleAdjectives(title: string): string {
+  GENERIC_ADJ_RE.lastIndex = 0;
   return title.replace(GENERIC_ADJ_RE, " ").replace(/\s+/g, " ").trim();
+}
+
+export function hasBannedTitleAdjectives(title: string): boolean {
+  GENERIC_ADJ_RE.lastIndex = 0;
+  return GENERIC_ADJ_RE.test(title);
 }
 
 function truncateAtWord(title: string, maxLen: number): string {
@@ -117,10 +128,7 @@ export function padYandexTitle(title: string): string {
 
 export function yandexTitleNeedsFix(text: string): boolean {
   const raw = stripYandexTitleNoise(text);
-  if (GENERIC_ADJ_RE.test(raw)) {
-    GENERIC_ADJ_RE.lastIndex = 0;
-    return true;
-  }
+  if (hasBannedTitleAdjectives(raw)) return true;
   const t = stripGenericTitleAdjectives(raw);
   return t.length < YANDEX_TITLE_MIN_LEN || t.length > YANDEX_TITLE_MAX_LEN;
 }

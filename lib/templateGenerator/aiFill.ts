@@ -353,7 +353,7 @@ async function resolveExtraPhotos(
     const urls = photo.imageUrls;
     const capped = urls.slice(0, batch.photoSettings.targetCount);
     return {
-      extraPhotos: capped.length > 1 ? capped.slice(1) : [],
+      extraPhotos: [],
       imageUrls: capped.length ? capped : undefined,
       sources
     };
@@ -538,7 +538,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           }) +
           "\n\nЭти поля остались пустыми — заполни их обязательно на основе названия, CSV и сайта бренда. Не оставляй пустыми." +
           (isYandex
-            ? "\nДля Яндекс Маркета: описание ≥600 символов. Название 60–80 символов: тип + бренд + модель/линейка + 0–1 прилагательное только если уместно по типу товара. Не подставляй «увлажняющий» всем подряд — расширяй за счёт линейки и модели. Без премиальный/популярный и без объёма."
+            ? "\nДля Яндекс Маркета: описание ≥600 символов. Название 60–80 символов: тип + бренд + модель/линейка + 0–1 объективное свойство (семейство аромата или функция косметики). Запрещены стойкий, уникальный, загадочный, солнечный, насыщенный, премиальный, популярный и любой маркетинговый шум — расширяй за счёт линейки и модели. Без объёма."
             : "");
         const json2 = await callOpenAi(
           batch.openaiApiKey,
