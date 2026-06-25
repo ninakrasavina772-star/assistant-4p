@@ -54,8 +54,6 @@ function Ensure-YcAuth {
     return
   }
 
-  Invoke-Yc config profile delete default | Out-Null
-
   $oauthUrl = "https://oauth.yandex.ru/authorize?response_type=token&client_id=1a6990aa636648e9b2ef855fa7bec2fb"
   $cloudId = "b1g1rlk43m94n1p2igbi"
   $folderId = "b1gfhds31e8d5eaccn57"
@@ -63,13 +61,12 @@ function Ensure-YcAuth {
   Write-Host ""
   Write-Host "=== Vhod v Yandex (odin raz) ===" -ForegroundColor Yellow
   Write-Host ""
-  Write-Host "1. Otkroetsya brauzer - voydite v Yandex, nazhmite Razreshit" -ForegroundColor White
-  Write-Host "2. V ADRESNOY STROKE skopiruyte vse posle access_token=" -ForegroundColor White
-  Write-Host "   (primer: y0_AgAAAAA... dlinsaya stroka)" -ForegroundColor DarkGray
+  Write-Host "1. Otkroetsya brauzer - nazhmite Razreshit" -ForegroundColor White
+  Write-Host "2. Na beloy stranitse skopiruyte kod (stroka y0_...)" -ForegroundColor White
   Write-Host ""
   Start-Process $oauthUrl
   Start-Sleep -Seconds 2
-  $token = Read-Host "3. VSTAVTE token syuda i Enter"
+  $token = Read-Host "3. VSTAVTE kod syuda i Enter"
 
   if (-not $token -or $token.Trim().Length -lt 20) {
     throw "Token pustoy. Zapustite skript snova."
@@ -77,15 +74,15 @@ function Ensure-YcAuth {
   $token = $token.Trim().Trim('"')
   if ($token -match "access_token=([^&\s]+)") { $token = $Matches[1] }
 
-  & $yc config profile create default 2>$null | Out-Null
-  & $yc config profile activate default | Out-Null
-  & $yc config set token $token | Out-Null
-  & $yc config set cloud-id $cloudId | Out-Null
-  & $yc config set folder-id $folderId | Out-Null
-  & $yc config set compute-default-zone $script:zone | Out-Null
+  Invoke-Yc config profile create default | Out-Null
+  Invoke-Yc config profile activate default | Out-Null
+  Invoke-Yc config set token $token | Out-Null
+  Invoke-Yc config set cloud-id $cloudId | Out-Null
+  Invoke-Yc config set folder-id $folderId | Out-Null
+  Invoke-Yc config set compute-default-zone $script:zone | Out-Null
 
   if (-not (Test-YcApi)) {
-    throw "Token ne podoshiel. Skopiruyte token iz brauzera zanovo i zapustite skript."
+    throw "Token ne podoshiel. Skopiruyte kod so stranicy Yandex i zapustite skript."
   }
   Write-Host "Yandex: OK" -ForegroundColor Green
 }
