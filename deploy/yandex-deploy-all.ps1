@@ -6,7 +6,7 @@ $yc = Join-Path $env:USERPROFILE "yandex-cloud\bin\yc.exe"
 $sshPub = Join-Path $env:USERPROFILE ".ssh\id_ed25519_yc.pub"
 $sshKey = Join-Path $env:USERPROFILE ".ssh\id_ed25519_yc"
 $vmName = "assistant-4p"
-$zone = "ru-central1-b"
+$script:zone = "ru-central1-a"
 
 function Ensure-SshKey {
   if (-not (Test-Path $sshPub)) {
@@ -37,9 +37,24 @@ function Invoke-Yc {
   return @{ Ok = $true; Out = $out; Code = 0 }
 }
 
+function Test-YcApi {
+  $r = Invoke-Yc vpc subnet list --format json
+  if (-not $r.Ok) { return $false }
+  try {
+    $subs = @($r.Out | ConvertFrom-Json)
+    return ($subs.Count -ge 0)
+  } catch {
+    return $false
+  }
+}
+
 function Ensure-YcAuth {
-  $check = Invoke-Yc config list
-  if ($check.Ok) { return }
+  if ((Invoke-Yc config list).Ok -and (Test-YcApi)) {
+    Write-Host "Yandex: uzhe voshli" -ForegroundColor Green
+    return
+  }
+
+  & $yc config profile delete default --force 2>$null | Out-Null
 
   $oauthUrl = "https://oauth.yandex.ru/authorize?response_type=token&client_id=1a6990aa636648e9b2ef855fa7bec2fb"
   $cloudId = "b1g1rlk43m94n1p2igbi"
@@ -48,37 +63,56 @@ function Ensure-YcAuth {
   Write-Host ""
   Write-Host "=== Vhod v Yandex (odin raz) ===" -ForegroundColor Yellow
   Write-Host ""
-  Write-Host "1. Seychas otkroetsya brauzer - voydite v Yandex" -ForegroundColor White
-  Write-Host "2. Nazhmite 'Razreshit' / 'Allow'" -ForegroundColor White
-  Write-Host "3. V adresnoy stroke brauzera poявится dlinnaya stroka s access_token=..." -ForegroundColor White
-  Write-Host "   Skopiruyte VSE bukvy POSLE access_token= (do & esli est)" -ForegroundColor White
+  Write-Host "1. Otkroetsya brauzer - voydite v Yandex, nazhmite Razreshit" -ForegroundColor White
+  Write-Host "2. V ADRESNOY STROKE skopiruyte vse posle access_token=" -ForegroundColor White
+  Write-Host "   (primer: y0_AgAAAAA... dlinsaya stroka)" -ForegroundColor DarkGray
   Write-Host ""
   Start-Process $oauthUrl
   Start-Sleep -Seconds 2
-  $token = Read-Host "4. VSTAVTE token syuda i nazhmite Enter"
+  $token = Read-Host "3. VSTAVTE token syuda i Enter"
 
   if (-not $token -or $token.Trim().Length -lt 20) {
     throw "Token pustoy. Zapustite skript snova."
   }
-  $token = $token.Trim()
-  if ($token -match "access_token=([^&]+)") { $token = $Matches[1] }
+  $token = $token.Trim().Trim('"')
+  if ($token -match "access_token=([^&\s]+)") { $token = $Matches[1] }
 
-  & $yc config profile create default 2>$null
-  & $yc config set token $token
-  & $yc config set cloud-id $cloudId
-  & $yc config set folder-id $folderId
-  & $yc config set compute-default-zone $zone
+  & $yc config profile create default 2>$null | Out-Null
+  & $yc config profile activate default | Out-Null
+  & $yc config set token $token | Out-Null
+  & $yc config set cloud-id $cloudId | Out-Null
+  & $yc config set folder-id $folderId | Out-Null
+  & $yc config set compute-default-zone $script:zone | Out-Null
 
-  $check2 = Invoke-Yc config list
-  if (-not $check2.Ok) { throw "Ne udalos voyti v Yandex - proverite token" }
+  if (-not (Test-YcApi)) {
+    throw "Token ne podoshiel. Skopiruyte token iz brauzera zanovo i zapustite skript."
+  }
   Write-Host "Yandex: OK" -ForegroundColor Green
 }
 
-function Get-SubnetId {
-  $json = & $yc vpc subnet list --format json | ConvertFrom-Json
-  $subnet = $json | Where-Object { $_.zone_id -eq $zone } | Select-Object -First 1
-  if (-not $subnet) { throw "No subnet in $zone" }
-  return $subnet.id
+function Resolve-SubnetId {
+  $r = Invoke-Yc vpc subnet list --format json
+  if (-not $r.Ok) {
+    throw "Net dostupa k Yandex. Zapustite skript i vstavte token zanovo."
+  }
+  $subs = @($r.Out | ConvertFrom-Json)
+  if ($subs.Count -eq 0) {
+    throw "V papke net podsetey. Sozdayte VPC v console.cloud.yandex.ru (default set)."
+  }
+
+  foreach ($z in @("ru-central1-a", "ru-central1-b", "ru-central1-c")) {
+    $hit = $subs | Where-Object { $_.zone_id -eq $z } | Select-Object -First 1
+    if ($hit) {
+      $script:zone = $z
+      Write-Host "Zona: $z" -ForegroundColor DarkGray
+      return $hit.id
+    }
+  }
+
+  $any = $subs | Select-Object -First 1
+  $script:zone = $any.zone_id
+  Write-Host "Zona: $($any.zone_id)" -ForegroundColor DarkGray
+  return $any.id
 }
 
 function Ensure-SecurityGroup {
@@ -101,7 +135,7 @@ function Get-OrCreateVm {
     return $vm.id
   }
 
-  $subnetId = Get-SubnetId
+  $subnetId = Resolve-SubnetId
   $subnet = (& $yc vpc subnet get $subnetId --format json | ConvertFrom-Json)
   $networkId = $subnet.network_id
   $sgId = Ensure-SecurityGroup -NetworkId $networkId -SubnetId $subnetId
@@ -114,7 +148,7 @@ function Get-OrCreateVm {
 
   $out = & $yc compute instance create `
     --name $vmName `
-    --zone $zone `
+    --zone $script:zone `
     --cores 2 `
     --memory 4 `
     --create-boot-disk "size=20,image-family=ubuntu-2404-lts,image-folder-id=standard-images" `
