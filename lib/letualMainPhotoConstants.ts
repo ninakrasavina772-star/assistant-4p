@@ -23,6 +23,9 @@ export const LETUAL_API_CHUNK = 10;
 /** Параллельный подбор фото (вариаций) на сервере. */
 export const LETUAL_PICK_CONCURRENCY = 5;
 
+/** Параллельная подгрузка галерей Metabase (только SQL, без AI). */
+export const LETUAL_GALLERY_CONCURRENCY = 8;
+
 /** Параллельная генерация JPG на сервере. */
 export const LETUAL_GENERATE_CONCURRENCY = 3;
 

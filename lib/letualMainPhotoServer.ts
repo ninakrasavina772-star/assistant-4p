@@ -1,6 +1,7 @@
 import { mapPool } from "@/lib/letualAsyncPool";
 import {
   LETUAL_GENERATE_CONCURRENCY,
+  LETUAL_GALLERY_CONCURRENCY,
   LETUAL_PICK_CONCURRENCY,
   LETUAL_VISION_TOP
 } from "@/lib/letualMainPhotoConstants";
@@ -22,13 +23,19 @@ import type {
 import { searchLetualWebImages, validateImageUrl } from "@/lib/letualWebSearch";
 import {
   derivePickStatus,
+  pickLetualPhotoInstant,
   pickLetualPhotoWithFallback,
   scoreLetualPhotoUrls,
   type LetualPhotoScore
 } from "@/lib/letualPhotoAi";
 
-function resolveOpenAiKey(clientKey?: string): string {
+function resolveOpenAiKeyOptional(clientKey?: string): string | undefined {
   const k = (clientKey ?? "").trim() || (process.env.OPENAI_API_KEY ?? "").trim();
+  return k || undefined;
+}
+
+function resolveOpenAiKey(clientKey?: string): string {
+  const k = resolveOpenAiKeyOptional(clientKey);
   if (!k) throw new Error("Нужен OpenAI API key (в интерфейсе или OPENAI_API_KEY на сервере)");
   return k;
 }
@@ -77,7 +84,8 @@ async function pickFromSiblingUrls(
   variationId: number,
   row: LetualVariationRow,
   openaiApiKey: string,
-  metabaseApiKey?: string
+  metabaseApiKey?: string,
+  quickPick = true
 ): Promise<LetualPickRow | null> {
   const gallery = await getLetualVariationGallery(variationId, metabaseApiKey);
   const siblingUrls = gallery.photos
@@ -86,7 +94,9 @@ async function pickFromSiblingUrls(
   if (!siblingUrls.length) return null;
 
   try {
-    const { best, ranked } = await pickLetualPhotoWithFallback(siblingUrls, openaiApiKey);
+    const { best, ranked } = quickPick
+      ? pickLetualPhotoInstant(siblingUrls)
+      : await pickLetualPhotoWithFallback(siblingUrls, resolveOpenAiKey(openaiApiKey));
     const match = gallery.photos.find((p) => p.url === best.url);
     return {
       variationId: row.variationId,
@@ -107,11 +117,18 @@ async function pickFromSiblingUrls(
 
 async function pickFromVariationRow(
   row: LetualVariationRow,
-  openaiApiKey: string,
-  metabaseApiKey?: string
+  openaiApiKey: string | undefined,
+  metabaseApiKey?: string,
+  quickPick = true
 ): Promise<LetualPickRow> {
   if (!row.imageUrls.length) {
-    const fromSibling = await pickFromSiblingUrls(row.variationId, row, openaiApiKey, metabaseApiKey);
+    const fromSibling = await pickFromSiblingUrls(
+      row.variationId,
+      row,
+      openaiApiKey ?? "",
+      metabaseApiKey,
+      quickPick
+    );
     if (fromSibling) return fromSibling;
 
     return {
@@ -128,16 +145,30 @@ async function pickFromVariationRow(
   }
 
   try {
-    const { best, ranked } = await pickLetualPhotoWithFallback(row.imageUrls, openaiApiKey);
+    const { best, ranked } = quickPick
+      ? pickLetualPhotoInstant(row.imageUrls)
+      : await pickLetualPhotoWithFallback(row.imageUrls, resolveOpenAiKey(openaiApiKey));
     const picked = pickRowFromVariation(row, best, ranked);
     if (picked.status === "ok") return picked;
 
-    const fromSibling = await pickFromSiblingUrls(row.variationId, row, openaiApiKey, metabaseApiKey);
-    if (fromSibling && fromSibling.status === "ok") return fromSibling;
+    const fromSibling = await pickFromSiblingUrls(
+      row.variationId,
+      row,
+      openaiApiKey ?? "",
+      metabaseApiKey,
+      quickPick
+    );
+    if (fromSibling && (fromSibling.status === "ok" || !picked.sourceUrl)) return fromSibling;
 
     return picked;
   } catch {
-    const fromSibling = await pickFromSiblingUrls(row.variationId, row, openaiApiKey, metabaseApiKey);
+    const fromSibling = await pickFromSiblingUrls(
+      row.variationId,
+      row,
+      openaiApiKey ?? "",
+      metabaseApiKey,
+      quickPick
+    );
     if (fromSibling) return fromSibling;
 
     return {
@@ -158,10 +189,9 @@ async function pickFromVariationRow(
 export async function pickLetualVariationPhoto(
   variationId: number,
   openaiApiKey?: string,
-  metabaseApiKey?: string
+  metabaseApiKey?: string,
+  quickPick = true
 ): Promise<LetualPickRow> {
-  const key = resolveOpenAiKey(openaiApiKey);
-
   try {
     const rows = await fetchLetualVariations([variationId], metabaseApiKey);
     const row = rows[0];
@@ -179,7 +209,7 @@ export async function pickLetualVariationPhoto(
       };
     }
 
-    return await pickFromVariationRow(row, key, metabaseApiKey);
+    return await pickFromVariationRow(row, openaiApiKey, metabaseApiKey, quickPick);
   } catch (e) {
     return {
       variationId,
@@ -195,13 +225,20 @@ export async function pickLetualVariationPhoto(
   }
 }
 
-/** Пакетный подбор: один запрос Metabase + параллельный AI. */
+export type LetualPickOptions = {
+  quickPick?: boolean;
+};
+
+/** Пакетный подбор: один запрос Metabase + параллельная обработка. */
 export async function pickLetualVariationPhotosBatch(
   variationIds: number[],
   openaiApiKey?: string,
-  metabaseApiKey?: string
+  metabaseApiKey?: string,
+  options: LetualPickOptions = {}
 ): Promise<LetualPickRow[]> {
-  const key = resolveOpenAiKey(openaiApiKey);
+  const quickPick = options.quickPick !== false;
+  if (!quickPick) resolveOpenAiKey(openaiApiKey);
+
   const uniqueIds = [...new Set(variationIds.filter((id) => id > 0))];
 
   try {
@@ -224,7 +261,7 @@ export async function pickLetualVariationPhotosBatch(
         };
       }
       try {
-        return await pickFromVariationRow(row, key, metabaseApiKey);
+        return await pickFromVariationRow(row, openaiApiKey, metabaseApiKey, quickPick);
       } catch (e) {
         return {
           variationId,
@@ -306,6 +343,73 @@ export async function getLetualVariationGallery(
   }
 
   return { variation: row, photos };
+}
+
+function assembleGalleryPhotos(
+  seed: LetualVariationRow,
+  siblings: Awaited<ReturnType<typeof fetchSiblingVariationPhotos>>,
+  siblingRows: LetualVariationRow[]
+): LetualGalleryPhoto[] {
+  const seen = new Set<string>();
+  const photos: LetualGalleryPhoto[] = [];
+  const siblingRowById = new Map(siblingRows.map((r) => [r.variationId, r]));
+
+  const push = (url: string, vid: number, matchType: LetualGalleryPhoto["matchType"]) => {
+    const u = url.trim();
+    if (!u || seen.has(u)) return;
+    seen.add(u);
+    photos.push({ url: u, variationId: vid, matchType });
+  };
+
+  for (const url of seed.imageUrls) push(url, seed.variationId, "own");
+
+  for (const s of siblings) {
+    const sr = siblingRowById.get(s.variationId);
+    if (!sr) continue;
+    for (const url of sr.imageUrls) push(url, sr.variationId, s.matchType);
+  }
+
+  return photos;
+}
+
+/** Массовая подгрузка галерей из Metabase (без скачивания и AI). */
+export async function getLetualGalleriesBatch(
+  variationIds: number[],
+  metabaseApiKey?: string
+): Promise<Record<number, LetualGalleryPhoto[]>> {
+  const uniqueIds = [...new Set(variationIds.filter((id) => id > 0))];
+  if (!uniqueIds.length) return {};
+
+  const seedRows = await fetchLetualVariations(uniqueIds, metabaseApiKey);
+  const rowById = new Map(seedRows.map((r) => [r.variationId, r]));
+
+  const siblingLists = await mapPool(seedRows, LETUAL_GALLERY_CONCURRENCY, async (row) => ({
+    variationId: row.variationId,
+    siblings: await fetchSiblingVariationPhotos(row.variationId, metabaseApiKey, undefined, 30)
+  }));
+
+  const allSiblingIds = new Set<number>();
+  for (const item of siblingLists) {
+    for (const s of item.siblings) allSiblingIds.add(s.variationId);
+  }
+
+  const siblingRows = allSiblingIds.size
+    ? await fetchLetualVariations([...allSiblingIds], metabaseApiKey)
+    : [];
+
+  const siblingBySeed = new Map(siblingLists.map((x) => [x.variationId, x.siblings]));
+  const out: Record<number, LetualGalleryPhoto[]> = {};
+
+  for (const vid of uniqueIds) {
+    const seed = rowById.get(vid);
+    if (!seed) {
+      out[vid] = [];
+      continue;
+    }
+    out[vid] = assembleGalleryPhotos(seed, siblingBySeed.get(vid) ?? [], siblingRows);
+  }
+
+  return out;
 }
 
 export type LetualSearchResult = {

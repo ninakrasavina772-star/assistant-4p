@@ -65,15 +65,33 @@ const MATCH_LABEL: Record<GalleryPhoto["matchType"], string> = {
   same_product: "та же карточка"
 };
 
-async function pickChunk(ids: number[], openaiKey: string): Promise<LetualPickRow[]> {
+async function pickChunk(
+  ids: number[],
+  openaiKey: string,
+  quickPick: boolean
+): Promise<LetualPickRow[]> {
   const res = await fetch("/api/letual/pick", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ variationIds: ids, openaiApiKey: openaiKey })
+    body: JSON.stringify({ variationIds: ids, openaiApiKey: openaiKey || undefined, quickPick })
   });
   const data = (await res.json()) as { results?: LetualPickRow[]; error?: string };
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data.results ?? [];
+}
+
+async function galleriesChunk(ids: number[]): Promise<Record<number, GalleryPhoto[]>> {
+  const res = await fetch("/api/letual/galleries", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variationIds: ids })
+  });
+  const data = (await res.json()) as {
+    galleries?: Record<number, GalleryPhoto[]>;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data.galleries ?? {};
 }
 
 async function generateChunk(
@@ -129,6 +147,10 @@ export function LetualMainPhotoTool() {
   const [galleryFor, setGalleryFor] = useState<number | null>(null);
   const [galleryPhotos, setGalleryPhotos] = useState<GalleryPhoto[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryCache, setGalleryCache] = useState<Record<number, GalleryPhoto[]>>({});
+
+  const [aiPick, setAiPick] = useState(false);
+  const [preloadGalleries, setPreloadGalleries] = useState(true);
 
   const [searchFor, setSearchFor] = useState<UiRow | null>(null);
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
@@ -193,8 +215,8 @@ export function LetualMainPhotoTool() {
 
   const runPick = useCallback(async () => {
     const key = openaiKey.trim();
-    if (!key) {
-      setError("Укажите OpenAI API key для отбора фото");
+    if (aiPick && !key) {
+      setError("Укажите OpenAI API key для AI-подбора");
       return;
     }
     if (status && !status.metabase) {
@@ -212,15 +234,27 @@ export function LetualMainPhotoTool() {
     setError(null);
     setRows([]);
     setResultBlob(null);
+    setGalleryCache({});
 
     const all: UiRow[] = [];
     try {
       for (let i = 0; i < ids.length; i += LETUAL_API_CHUNK) {
         const chunk = ids.slice(i, i + LETUAL_API_CHUNK);
         setProgress(`Подбор фото ${i + 1}–${i + chunk.length} из ${ids.length}…`);
-        const part = await pickChunk(chunk, key);
+        const part = await pickChunk(chunk, key, !aiPick);
         all.push(...part);
         setRows([...all]);
+      }
+
+      if (preloadGalleries) {
+        const cache: Record<number, GalleryPhoto[]> = {};
+        for (let i = 0; i < ids.length; i += LETUAL_API_CHUNK) {
+          const chunk = ids.slice(i, i + LETUAL_API_CHUNK);
+          setProgress(`Галереи Metabase ${i + 1}–${i + chunk.length} из ${ids.length}…`);
+          const part = await galleriesChunk(chunk);
+          Object.assign(cache, part);
+          setGalleryCache({ ...cache });
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка подбора");
@@ -228,7 +262,7 @@ export function LetualMainPhotoTool() {
       setBusy(false);
       setProgress(null);
     }
-  }, [openaiKey, status, text]);
+  }, [aiPick, openaiKey, preloadGalleries, status, text]);
 
   const selectPhoto = useCallback(
     (variationId: number, url: string, label: string) => {
@@ -260,21 +294,23 @@ export function LetualMainPhotoTool() {
 
   const openGallery = useCallback(
     async (row: UiRow) => {
-      const key = openaiKey.trim();
-      if (!key) {
-        setError("Нужен OpenAI key для оценки фото в галерее");
+      setGalleryFor(row.variationId);
+      const cached = galleryCache[row.variationId];
+      if (cached?.length) {
+        setGalleryPhotos(cached);
+        setGalleryLoading(false);
         return;
       }
-      setGalleryFor(row.variationId);
+
       setGalleryLoading(true);
       setGalleryPhotos([]);
       try {
-        const res = await fetch(
-          `/api/letual/photos?variationId=${row.variationId}&score=1&openaiApiKey=${encodeURIComponent(key)}`
-        );
+        const res = await fetch(`/api/letual/photos?variationId=${row.variationId}`);
         const data = (await res.json()) as { photos?: GalleryPhoto[]; error?: string };
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-        setGalleryPhotos(data.photos ?? []);
+        const photos = data.photos ?? [];
+        setGalleryPhotos(photos);
+        setGalleryCache((prev) => ({ ...prev, [row.variationId]: photos }));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Не удалось загрузить фото");
         setGalleryFor(null);
@@ -282,14 +318,20 @@ export function LetualMainPhotoTool() {
         setGalleryLoading(false);
       }
     },
-    [openaiKey]
+    [galleryCache]
   );
 
   const openSearch = useCallback(
     async (row: UiRow) => {
+      if (status && !status.serpapi) {
+        setError(
+          "Поиск в интернете не настроен: добавьте SERPAPI_KEY в deploy/.env.production на сервере (serpapi.com)"
+        );
+        return;
+      }
       const key = openaiKey.trim();
       if (!key) {
-        setError("Нужен OpenAI key для поиска");
+        setError("Нужен OpenAI key для оценки результатов поиска");
         return;
       }
       setSearchFor(row);
@@ -316,7 +358,7 @@ export function LetualMainPhotoTool() {
         setSearchLoading(false);
       }
     },
-    [openaiKey]
+    [openaiKey, status]
   );
 
   const runGenerate = useCallback(
@@ -471,7 +513,9 @@ export function LetualMainPhotoTool() {
             {" · "}
             Поиск в интернете:{" "}
             <strong className={status.serpapi ? "text-emerald-700" : "text-slate-600"}>
-              {status.serpapi ? "SerpAPI" : "не подключён"}
+              {status.serpapi
+                ? "SerpAPI OK"
+                : "не подключён (нужен SERPAPI_KEY на сервере)"}
             </strong>
           </p>
         </div>
@@ -532,17 +576,47 @@ export function LetualMainPhotoTool() {
           />
 
           {tab === "variations" ? (
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium text-slate-700">OpenAI API key</span>
-              <input
-                type="password"
-                className={homeInput}
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-                placeholder="sk-…"
-                autoComplete="off"
-              />
-            </label>
+            <>
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-slate-700">
+                  OpenAI API key
+                  <span className="font-normal text-slate-500"> (для AI-подбора и поиска в интернете)</span>
+                </span>
+                <input
+                  type="password"
+                  className={homeInput}
+                  value={openaiKey}
+                  onChange={(e) => setOpenaiKey(e.target.value)}
+                  placeholder="sk-…"
+                  autoComplete="off"
+                />
+              </label>
+              <div className="space-y-2 text-sm text-slate-700">
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={preloadGalleries}
+                    onChange={(e) => setPreloadGalleries(e.target.checked)}
+                  />
+                  <span>
+                    <strong>Сразу подгрузить все фото из Metabase</strong> — один раз после подбора,
+                    чтобы «Другие фото» открывались мгновенно
+                  </span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={aiPick}
+                    onChange={(e) => setAiPick(e.target.checked)}
+                  />
+                  <span>
+                    <strong>AI-оценка при подборе</strong> — медленнее, но точнее отбор packshot
+                  </span>
+                </label>
+              </div>
+            </>
           ) : null}
 
           <div className="flex flex-wrap gap-2">
@@ -668,10 +742,21 @@ export function LetualMainPhotoTool() {
                           onClick={() => void openGallery(r)}
                         >
                           Другие фото
+                          {galleryCache[r.variationId]?.length
+                            ? ` (${galleryCache[r.variationId].length})`
+                            : ""}
                         </button>
                         <button
                           type="button"
-                          className="text-left text-xs text-sky-700 hover:underline"
+                          className={`text-left text-xs hover:underline ${
+                            status?.serpapi ? "text-sky-700" : "text-slate-400 cursor-not-allowed"
+                          }`}
+                          disabled={!status?.serpapi}
+                          title={
+                            status?.serpapi
+                              ? undefined
+                              : "Нужен SERPAPI_KEY на сервере"
+                          }
                           onClick={() => void openSearch(r)}
                         >
                           Поиск в интернете
@@ -741,7 +826,9 @@ export function LetualMainPhotoTool() {
               </button>
             </div>
             {galleryLoading ? (
-              <p className="text-sm text-slate-500">Загрузка и оценка…</p>
+              <p className="text-sm text-slate-500">Загрузка фото из Metabase…</p>
+            ) : galleryPhotos.length === 0 ? (
+              <p className="text-sm text-slate-500">Нет фото в Metabase для этой вариации</p>
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {galleryPhotos.map((p) => (

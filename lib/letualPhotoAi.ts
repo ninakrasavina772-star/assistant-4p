@@ -370,6 +370,40 @@ function preferCdnUrl(urls: string[]): string {
   return cdn ?? urls.find((u) => /^https?:\/\//i.test(u)) ?? "";
 }
 
+function scoreFromUrlHeuristic(url: string, reason: string): LetualPhotoScore {
+  const isCdnHuge = /cdnru\.4stand\.com\/huge\//i.test(url);
+  const hasWhiteBg = isCdnHuge || /deloox/i.test(url);
+  return {
+    url,
+    score: isCdnHuge ? 85 : 45,
+    suitable: isCdnHuge,
+    hasBox: false,
+    hasInfographic: false,
+    hasProduct: true,
+    isFrontal: true,
+    hasWhiteBackground: hasWhiteBg,
+    quality: isCdnHuge ? 72 : 50,
+    sharpness: 0,
+    pixels: 0,
+    reason
+  };
+}
+
+/** Мгновенный подбор по URL из Metabase — без скачивания и без OpenAI. */
+export function pickLetualPhotoInstant(urls: string[]): {
+  best: LetualPhotoScore;
+  ranked: LetualPhotoScore[];
+} {
+  const url = preferCdnUrl(urls);
+  if (!url) throw new Error("Нет URL");
+  const best = scoreFromUrlHeuristic(url, isCdnPackshotUrl(url) ? "CDN packshot из Metabase" : "Первое фото из карточки");
+  return { best, ranked: [best] };
+}
+
+function isCdnPackshotUrl(url: string): boolean {
+  return /cdnru\.4stand\.com\/huge\//i.test(url);
+}
+
 /** Подбор с гарантированным fallback: в карточке есть URL → почти всегда будет sourceUrl. */
 export async function pickLetualPhotoWithFallback(
   urls: string[],
