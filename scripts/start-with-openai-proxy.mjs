@@ -7,10 +7,15 @@ const proxy = (
 ).trim();
 
 if (proxy) {
-  process.env.HTTP_PROXY = proxy;
-  process.env.HTTPS_PROXY = proxy;
-  const { ProxyAgent, setGlobalDispatcher } = await import("node:undici");
-  setGlobalDispatcher(new ProxyAgent(proxy));
+  try {
+    process.env.HTTP_PROXY = proxy;
+    process.env.HTTPS_PROXY = proxy;
+    const { ProxyAgent, setGlobalDispatcher } = await import("undici");
+    setGlobalDispatcher(new ProxyAgent(proxy));
+    console.log("[openai-proxy] enabled:", proxy);
+  } catch (e) {
+    console.error("[openai-proxy] setup failed, starting without proxy:", e);
+  }
 }
 
 await import("./server.js");

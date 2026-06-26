@@ -36,6 +36,8 @@ RUN addgroup --system --gid 1001 nodejs \
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/node_modules/undici ./node_modules/undici
+COPY --from=builder /app/node_modules/@fastify ./node_modules/@fastify
 COPY --from=builder /app/scripts/start-with-openai-proxy.mjs ./start-with-openai-proxy.mjs
 USER nextjs
 EXPOSE 3000
