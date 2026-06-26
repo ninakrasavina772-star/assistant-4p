@@ -161,7 +161,7 @@ export function prefillFromCsvData(
     const existing = templateCells[field.header]?.trim();
     if (existing && keepTemplate) {
       if (isYandexTitleHeader(field.header) && yandexTitleNeedsFix(existing)) {
-        /* английское/короткое название из шаблона — не считаем заполненным */
+        /* английское название в шаблоне — не блокируем фид/AI */
       } else {
         values[field.header] = existing;
         sources.push(`${field.header}: шаблон`);

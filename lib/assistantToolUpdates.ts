@@ -4,8 +4,8 @@ export const ASSISTANT_TOOL_UPDATES: Record<
   { updatedAt: string; note?: string }
 > = {
   "/template-generator": {
-    updatedAt: "2026-06-25T21:15:00+03:00",
-    note: "ЯМ: русские названия, автозаполнение контента"
+    updatedAt: "2026-06-26T12:00:00+03:00",
+    note: "Восстановлен фид; русские названия ЯМ"
   },
   "/letual-main-photo": {
     updatedAt: "2026-06-25T12:00:00+03:00",

@@ -59,8 +59,6 @@ export type FillBatchIn = {
   marketplace?: MarketplaceId;
   /** Поэтапно: только контент, только фото, или всё сразу */
   fillStage?: "full" | "content_only" | "photos_only";
-  /** Все редактируемые столбцы шаблона (для серверного merge контента ЯМ) */
-  editableColumns?: ColumnSelection[];
 };
 
 type AiFieldSpec = {
@@ -420,10 +418,11 @@ function applyYandexPostProcess(
 function ensureYandexTitleInValues(
   values: Record<string, string>,
   fields: AiFieldSpec[],
-  row: FillRowInput
+  row: FillRowInput,
+  aiHeaders: string[]
 ): void {
   const titleField = fields.find((f) => isYandexTitleHeader(f.header));
-  if (!titleField) return;
+  if (!titleField || !aiHeaders.includes(titleField.header)) return;
 
   const current = values[titleField.header]?.trim() ?? "";
   if (current && !yandexTitleNeedsFix(current)) return;
@@ -451,15 +450,24 @@ function ensureYandexTitleInValues(
   }
 }
 
-function fieldValueNeedsFill(
-  header: string,
-  value: string | undefined,
-  yandex: boolean
-): boolean {
-  const v = value?.trim() ?? "";
-  if (!v) return true;
-  if (yandex && isYandexTitleHeader(header) && yandexTitleNeedsFix(v)) return true;
-  return false;
+function yandexHeadersNeedingAi(
+  fields: AiFieldSpec[],
+  row: FillRowInput,
+  values: Record<string, string>,
+  aiHeaders: string[]
+): string[] {
+  const out = [...aiHeaders];
+  for (const field of fields) {
+    if (!isYandexTitleHeader(field.header)) continue;
+    const v =
+      values[field.header]?.trim() ||
+      row.cells[field.header]?.trim() ||
+      "";
+    if (!v || yandexTitleNeedsFix(v)) {
+      if (!out.includes(field.header)) out.push(field.header);
+    }
+  }
+  return out;
 }
 
 export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResult[]> {
@@ -477,18 +485,6 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
   for (const row of batch.rows) {
     const brand = pickBrand(row);
     const domain = guessBrandDomain(brand);
-
-    if (fields.length === 0) {
-      out.push({
-        row: row.row,
-        ok: false,
-        values: {},
-        extraPhotos: [],
-        sources: [],
-        error: "Не выбраны столбцы для заполнения — обновите страницу (Ctrl+F5)"
-      });
-      continue;
-    }
 
     let extraPhotos: string[] = [];
     let imageUrls: string[] | undefined;
@@ -530,17 +526,19 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       const values: Record<string, string> = { ...csvPrefill.values };
       const sources = [...csvPrefill.sources, ...photoSources];
 
-      const aiHeaders = rowNeedsAiForHeaders(
-        rowCtx.cells,
-        fields.map((f) => f.header),
-        workMode === "from_scratch" || batch.overwriteFilled === true,
-        { yandex: isYandex }
-      );
-      if (isYandex) ensureYandexTitleInValues(values, fields, rowCtx);
-      let missing = fields
-        .filter(
-          (f) => aiHeaders.includes(f.header) && fieldValueNeedsFill(f.header, values[f.header], isYandex)
+      const aiHeaders = yandexHeadersNeedingAi(
+        fields,
+        rowCtx,
+        values,
+        rowNeedsAiForHeaders(
+          rowCtx.cells,
+          fields.map((f) => f.header),
+          workMode === "from_scratch" || batch.overwriteFilled === true
         )
+      );
+      if (isYandex) ensureYandexTitleInValues(values, fields, rowCtx, aiHeaders);
+      let missing = fields
+        .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header)
         .slice(0, 14);
 
@@ -549,7 +547,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         if (
           titleField &&
           aiHeaders.includes(titleField.header) &&
-          fieldValueNeedsFill(titleField.header, values[titleField.header], true)
+          (!values[titleField.header]?.trim() || yandexTitleNeedsFix(values[titleField.header]!))
         ) {
           missing = [titleField.header];
         }
@@ -587,10 +585,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
       missing = fields
-        .filter(
-          (f) =>
-            aiHeaders.includes(f.header) && fieldValueNeedsFill(f.header, values[f.header], isYandex)
-        )
+        .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header)
         .slice(0, 14);
 
@@ -642,10 +637,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       }
 
       const stillMissing = fields
-        .filter(
-          (f) =>
-            aiHeaders.includes(f.header) && fieldValueNeedsFill(f.header, values[f.header], isYandex)
-        )
+        .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header);
       if (isYandex) {
         const titleHeader = fields.find((f) => isYandexTitleHeader(f.header))?.header;
