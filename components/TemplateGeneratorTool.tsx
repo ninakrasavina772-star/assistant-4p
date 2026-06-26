@@ -67,6 +67,7 @@ import {
   applyPhotoReviewToWorkbook,
   buildPhotoReviewItems,
   loadPhotoReviewFromWorkbook,
+  mergeAutoPickIntoItems,
   type PhotoReviewItem
 } from "@/lib/templateGenerator/photoReview";
 import { MARKETPLACE_LABELS } from "@/lib/marketplace/types";
@@ -184,6 +185,39 @@ function filledDownloadName(fileName: string, part?: number): string {
   const base = fileName.replace(/\.xlsx?$/i, "") || "template";
   if (part && part > 0) return `${base}-filled-part${String(part).padStart(2, "0")}.xlsx`;
   return `${base}-filled.xlsx`;
+}
+
+
+async function autoPickPhotoReviewBatch(
+  items: PhotoReviewItem[],
+  onProgress?: (msg: string) => void
+): Promise<PhotoReviewItem[]> {
+  if (!items.length) return items;
+  const picks: Record<number, { mainUrl: string; extraUrls: string[] }> = {};
+  const rows = items.map((it) => ({
+    variationId: it.variationId,
+    urls: it.candidates.map((c) => c.url)
+  }));
+
+  for (let i = 0; i < rows.length; i += LETUAL_API_CHUNK) {
+    const chunk = rows.slice(i, i + LETUAL_API_CHUNK);
+    onProgress?.(
+      `AI: подбор фото ${Math.min(i + chunk.length, rows.length)} / ${rows.length}…`
+    );
+    const res = await fetch("/api/template-generator/photo-review/auto-pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: chunk })
+    });
+    const data = (await res.json()) as {
+      picks?: Record<number, { mainUrl: string; extraUrls: string[] }>;
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    Object.assign(picks, data.picks ?? {});
+  }
+
+  return mergeAutoPickIntoItems(items, picks);
 }
 
 export function TemplateGeneratorTool() {
@@ -1651,7 +1685,7 @@ export function TemplateGeneratorTool() {
         Object.assign(galleries, data.galleries ?? {});
       }
 
-      const items = buildPhotoReviewItems(contexts, galleries, ws, s, imageHeaderName);
+      let items = buildPhotoReviewItems(contexts, galleries, ws, s, imageHeaderName);
       if (!items.length) {
         const fallback = loadPhotoReviewFromWorkbook(ws, s, { imageHeader: imageHeaderName });
         setPhotoReviewItems(fallback);
@@ -1661,8 +1695,11 @@ export function TemplateGeneratorTool() {
             : "Фото не найдены ни в Metabase, ни в шаблоне"
         );
       } else {
+        items = await autoPickPhotoReviewBatch(items, setPhotoReviewProgress);
         setPhotoReviewItems(items);
-        setBatchNotice(`Загружено ${items.length} карточек с фото (своя + EAN)`);
+        setBatchNotice(
+          `Загружено ${items.length} карточек · AI отметил главное и доп. фото`
+        );
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки фото");
@@ -1682,15 +1719,17 @@ export function TemplateGeneratorTool() {
     try {
       const selectedUrls = [
         ...new Set(
-          photoReviewItems.flatMap((it) =>
-            it.candidates.filter((c) => c.selected).map((c) => c.url)
-          )
+          photoReviewItems.flatMap((it) => {
+            const main = it.candidates.find((c) => c.isMain)?.url;
+            const extras = it.candidates.filter((c) => c.selected && !c.isMain).map((c) => c.url);
+            return main ? [main, ...extras] : extras;
+          })
         )
       ];
       const processedBySource = new Map<string, string>();
 
       for (let i = 0; i < selectedUrls.length; i += LETUAL_API_CHUNK) {
-        const chunk = selectedUrls.slice(i, i + 20);
+        const chunk = selectedUrls.slice(i, i + LETUAL_API_CHUNK);
         setPhotoReviewProgress(
           `Летуаль: обработка ${Math.min(i + chunk.length, selectedUrls.length)} / ${selectedUrls.length}…`
         );
@@ -1709,13 +1748,26 @@ export function TemplateGeneratorTool() {
         }
       }
 
-      const updated = photoReviewItems.map((it) => ({
-        ...it,
-        candidates: it.candidates.map((c) => ({
-          ...c,
-          processedUrl: c.selected ? processedBySource.get(c.url) ?? c.processedUrl : c.processedUrl
-        }))
-      }));
+      const updated = photoReviewItems.map((it) => {
+        const touched = it.candidates.some((c) => c.isMain || c.selected);
+        return {
+          ...it,
+          processed: touched ? true : it.processed,
+          mainUrl:
+            it.candidates.find((c) => c.isMain)?.processedUrl ||
+            it.candidates.find((c) => c.isMain)?.url ||
+            it.mainUrl,
+          candidates: it.candidates.map((c) => {
+            const needsProcess = c.isMain || c.selected;
+            return {
+              ...c,
+              processedUrl: needsProcess
+                ? processedBySource.get(c.url) ?? c.processedUrl
+                : c.processedUrl
+            };
+          })
+        };
+      });
 
       const ws = wb.getWorksheet(s.sheetName)!;
       const n = applyPhotoReviewToWorkbook(ws, s, updated, { imageHeader: imageHeaderName });
