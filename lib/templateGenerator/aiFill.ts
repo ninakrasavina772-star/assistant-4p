@@ -122,8 +122,8 @@ function buildUserMessage(
 
   const lines = [
     `Артикул SKU: ${row.sku}`,
-    `Название: ${row.productName}`,
-    `Бренд: ${row.brand}`,
+    `Название: ${pickProductName(row)}`,
+    `Бренд: ${pickBrand(row)}`,
     "",
     "Текущие данные в шаблоне:",
     JSON.stringify(row.cells, null, 0),
@@ -514,7 +514,13 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
     }
 
     try {
-      const csvPrefill = prefillFromCsvData(row.csvData, fields, row.cells, {
+      const rowCtx: FillRowInput = {
+        ...row,
+        productName: pickProductName(row),
+        brand: pickBrand(row)
+      };
+
+      const csvPrefill = prefillFromCsvData(rowCtx.csvData, fields, rowCtx.cells, {
         keepTemplateFilled
       });
       const values: Record<string, string> = { ...csvPrefill.values };
@@ -522,15 +528,15 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
 
       const aiHeaders = yandexHeadersNeedingAi(
         fields,
-        row,
+        rowCtx,
         values,
         rowNeedsAiForHeaders(
-          row.cells,
+          rowCtx.cells,
           fields.map((f) => f.header),
           workMode === "from_scratch" || batch.overwriteFilled === true
         )
       );
-      if (isYandex) ensureYandexTitleInValues(values, fields, row, aiHeaders);
+      if (isYandex) ensureYandexTitleInValues(values, fields, rowCtx, aiHeaders);
       let missing = fields
         .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header)
@@ -548,7 +554,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       }
 
       if (missing.length === 0) {
-        if (isYandex) applyYandexPostProcess(values, row);
+        if (isYandex) applyYandexPostProcess(values, rowCtx);
         out.push({
           row: row.row,
           ok: true,
@@ -567,15 +573,15 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       );
       if (officialSnippet) sources.push("сайт бренда");
 
-      const user = buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
+      const user = buildUserMessage(rowCtx, fields, batch.userPrompt, officialSnippet, {
         contentFocus,
         onlyHeaders: missing,
         prefilled: values,
         yandex: isYandex
       });
       const json = await callOpenAi(batch.openaiApiKey, user, batch.model, batch.marketplace);
-      Object.assign(values, parseAiFields(json, fields, row.sku));
-      applyYandexPostProcess(values, row);
+      Object.assign(values, parseAiFields(json, fields, rowCtx.sku));
+      applyYandexPostProcess(values, rowCtx);
       sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
       missing = fields
@@ -609,7 +615,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
 
       if (missing.length > 0) {
         const retryUser =
-          buildUserMessage(row, fields, batch.userPrompt, officialSnippet, {
+          buildUserMessage(rowCtx, fields, batch.userPrompt, officialSnippet, {
             contentFocus: true,
             onlyHeaders: missing,
             prefilled: values,
@@ -625,8 +631,8 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           batch.model,
           batch.marketplace
         );
-        Object.assign(values, parseAiFields(json2, fields, row.sku));
-        applyYandexPostProcess(values, row);
+        Object.assign(values, parseAiFields(json2, fields, rowCtx.sku));
+        applyYandexPostProcess(values, rowCtx);
         sources.push(...(json2.sources ?? []).map((s) => `AI retry: ${s}`));
       }
 
@@ -636,7 +642,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       if (isYandex) {
         const titleHeader = fields.find((f) => isYandexTitleHeader(f.header))?.header;
         if (titleHeader && values[titleHeader]?.trim()) {
-          values[titleHeader] = finalizeYandexTitle(values[titleHeader]!, row);
+          values[titleHeader] = finalizeYandexTitle(values[titleHeader]!, rowCtx);
           if (yandexTitleNeedsFix(values[titleHeader]!)) {
             out.push({
               row: row.row,

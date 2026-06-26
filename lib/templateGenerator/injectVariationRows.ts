@@ -122,13 +122,11 @@ export async function injectVariationProducts(
   const skipImages = opts?.skipImages === true;
 
   const skuCol = scan.skuCol ?? 1;
-  const modelHeader = findHeader(scan, [/название модели/i]);
-  const titleHeader =
+  const nameHeader =
     findHeader(scan, [/название товара/i]) ??
     findHeader(scan, [/name/i]);
   const brandHeader = findHeader(scan, [/бренд/i, /brand/i]);
-  const modelCol = colForHeader(scan, modelHeader);
-  const titleCol = colForHeader(scan, titleHeader);
+  const nameCol = colForHeader(scan, nameHeader);
   const brandCol = colForHeader(scan, brandHeader);
   const imageCol = scan.imageCol;
   const eanHeader = findEanHeader(scan);
@@ -169,11 +167,7 @@ export async function injectVariationProducts(
     }
 
     setCell(ws, row, skuCol, sku);
-    if (modelCol) {
-      setCell(ws, row, modelCol, p.productName);
-    } else if (titleCol) {
-      setCell(ws, row, titleCol, p.productName);
-    }
+    setCell(ws, row, nameCol, p.productName);
     setCell(ws, row, brandCol, p.brandName);
     if (p.ean) setCell(ws, row, eanCol, p.ean);
     if (!skipImages && imageText && imageCol) setCell(ws, row, imageCol, imageText);

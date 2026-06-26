@@ -60,11 +60,7 @@ export function mergePrefsWithColumns(
   restored: boolean;
 } {
   if (!saved) {
-    const enabled: Record<string, boolean> = {};
-    for (const h of headers) {
-      enabled[h] = Boolean(defaults.enabled[h]);
-    }
-    return { enabled, strict: defaults.strict, dropdownSource: defaults.dropdownSource, restored: false };
+    return { ...defaults, enabled: Object.fromEntries(headers.map((h) => [h, false])), restored: false };
   }
 
   const enabled: Record<string, boolean> = {};
