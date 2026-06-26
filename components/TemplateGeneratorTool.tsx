@@ -477,9 +477,20 @@ export function TemplateGeneratorTool() {
           ? `Этап 1: ${groupCount} групп дублей просмотрены — дубли оставлены в шаблоне.`
           : "Этап 1: дублей не найдено (по EAN и артикулу)."
     );
-    setProgress("Этап 2: отметьте столбцы и нажмите «Заполнить контент».");
+    if (marketplace === "yandex" && scanRef.current) {
+      setEnabledCols((prev) => {
+        const next = { ...prev };
+        for (const s of buildDefaultSelection(scanRef.current!)) {
+          next[s.header] = true;
+        }
+        return next;
+      });
+      setProgress("Этап 2: нажмите «Заполнить контент» — контентные поля отмечены.");
+    } else {
+      setProgress("Этап 2: отметьте столбцы и нажмите «Заполнить контент».");
+    }
     setError("");
-  }, [scan, rowsMarkedForRemoval, refreshDupGroups, bumpSheetScan]);
+  }, [rowsMarkedForRemoval, refreshDupGroups, bumpSheetScan, marketplace]);
 
   const chatContext = useMemo((): TemplateChatContext => {
     const selected = scan
@@ -1358,6 +1369,15 @@ export function TemplateGeneratorTool() {
 
     const stageLabel = isPhotosStage ? "Фото" : "Контент";
 
+    const editableColumns = scan.columns
+      .filter((c) => !c.readonly)
+      .map((c) => ({
+        header: c.header,
+        col: c.col,
+        mode: (strictDropdown[c.header] ? "dropdown_strict" : "ai") as "ai" | "dropdown_strict",
+        dropdownSource: dropdownSource[c.header] ?? defaultDropdownSource(c)
+      }));
+
     let doneRows = 0;
     try {
       const fillParallel = isPhotosStage ? FILL_PARALLEL_PHOTOS : FILL_PARALLEL_CONTENT;
@@ -1382,6 +1402,7 @@ export function TemplateGeneratorTool() {
                   userPrompt: fillPrompt,
                   columns: activeSelection,
                   columnMeta,
+                  editableColumns,
                   rows,
                   skipWebContext: false,
                   contentFocus: true,
@@ -1467,7 +1488,15 @@ export function TemplateGeneratorTool() {
       }
       setBatchesCompleted(batchNum);
       const okCount = allResults.filter((r) => r.ok).length;
+      const wroteValues = allResults.filter((r) => Object.keys(r.values).length > 0).length;
       const remaining = totalRows - newOffset;
+
+      if (!isPhotosStage && allResults.length > 0 && wroteValues === 0) {
+        const firstErr =
+          allResults.find((r) => r.error)?.error ??
+          "Контент не записан. Обновите страницу (Ctrl+F5) и повторите этап 2.";
+        setError(firstErr);
+      }
 
       if (remaining <= 0) {
         if (isPhotosStage) {

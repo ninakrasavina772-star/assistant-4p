@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { AssistantBrand } from "@/components/AssistantBrand";
+import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
 import { HomeUserProjects } from "@/components/HomeUserProjects";
 import {
   homeCard,
@@ -101,6 +102,7 @@ export default function AssistantHome() {
                     <span className="block text-[0.95rem] font-semibold leading-snug text-slate-900 sm:text-base">
                       {it.title}
                     </span>
+                    <AssistantToolUpdatedBadge href={it.href} className="mt-0.5" />
                     {it.requiresAuth ? (
                       <span className="mt-0.5 block text-xs font-normal text-slate-500">
                         Нужен вход через Google (список ALLOWED_EMAILS)
@@ -141,6 +143,26 @@ export default function AssistantHome() {
               — композитинг флакона на фон, как в инфографике (следующий этап).
             </span>
           </p>
+        </section>
+
+        <section className={homeCard} aria-label="Разбудить ассистент">
+          <div className={homeCardHeader}>
+            <h2 className={homeCardTitle}>Сервер спит?</h2>
+          </div>
+          <p className="px-4 py-3 text-sm leading-relaxed text-slate-600 sm:px-5 sm:py-4">
+            Если страница не открывается, сервер мог остановиться для экономии. Нажмите кнопку,
+            подождите 1–2 минуты и обновите сайт.
+          </p>
+          <div className="border-t border-slate-100 px-4 py-4 sm:px-5">
+            <a
+              href="https://d5drvboljjrb9q4j640r.z2ka767n.apigw.yandexcloud.net/"
+              className="inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 sm:w-auto"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Разбудить ассистент
+            </a>
+          </div>
         </section>
 
         <HomeUserProjects />

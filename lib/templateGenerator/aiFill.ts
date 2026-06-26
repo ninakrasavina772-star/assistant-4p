@@ -59,6 +59,8 @@ export type FillBatchIn = {
   marketplace?: MarketplaceId;
   /** Поэтапно: только контент, только фото, или всё сразу */
   fillStage?: "full" | "content_only" | "photos_only";
+  /** Все редактируемые столбцы шаблона (для серверного merge контента ЯМ) */
+  editableColumns?: ColumnSelection[];
 };
 
 type AiFieldSpec = {
@@ -418,11 +420,10 @@ function applyYandexPostProcess(
 function ensureYandexTitleInValues(
   values: Record<string, string>,
   fields: AiFieldSpec[],
-  row: FillRowInput,
-  aiHeaders: string[]
+  row: FillRowInput
 ): void {
   const titleField = fields.find((f) => isYandexTitleHeader(f.header));
-  if (!titleField || !aiHeaders.includes(titleField.header)) return;
+  if (!titleField) return;
 
   const current = values[titleField.header]?.trim() ?? "";
   if (current && !yandexTitleNeedsFix(current)) return;
@@ -477,6 +478,18 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
     const brand = pickBrand(row);
     const domain = guessBrandDomain(brand);
 
+    if (fields.length === 0) {
+      out.push({
+        row: row.row,
+        ok: false,
+        values: {},
+        extraPhotos: [],
+        sources: [],
+        error: "Не выбраны столбцы для заполнения — обновите страницу (Ctrl+F5)"
+      });
+      continue;
+    }
+
     let extraPhotos: string[] = [];
     let imageUrls: string[] | undefined;
     let photoSources: string[] = [];
@@ -523,7 +536,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         workMode === "from_scratch" || batch.overwriteFilled === true,
         { yandex: isYandex }
       );
-      if (isYandex) ensureYandexTitleInValues(values, fields, rowCtx, aiHeaders);
+      if (isYandex) ensureYandexTitleInValues(values, fields, rowCtx);
       let missing = fields
         .filter(
           (f) => aiHeaders.includes(f.header) && fieldValueNeedsFill(f.header, values[f.header], isYandex)

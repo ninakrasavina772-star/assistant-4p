@@ -1,4 +1,6 @@
 import { AssistantSubpageShell } from "@/components/AssistantSubpageShell";
+import { AssistantBuildStamp } from "@/components/AssistantBuildStamp";
+import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
 import { TemplateGeneratorTool } from "@/components/TemplateGeneratorTool";
 
 export const metadata = {
@@ -15,6 +17,8 @@ export default function TemplateGeneratorPage() {
         <>
           Загрузите шаблон Excel и CSV, общайтесь с ассистентом в чате — он запомнит задание.
           Ниже выберите столбцы и нажмите «Запустить AI».
+          <AssistantToolUpdatedBadge href="/template-generator" className="mt-2" />
+          <AssistantBuildStamp className="mt-1" />
         </>
       }
     >
