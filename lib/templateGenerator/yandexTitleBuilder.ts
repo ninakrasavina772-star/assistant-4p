@@ -118,13 +118,34 @@ function extractModel(productName: string, brand: string): string {
     m = m.slice(b.length).trim();
   }
   m = m.replace(
-    /\b(?:eau de parfum|eau de toilette|eau de cologne|extrait|edt|edp|for women|for men|for her|for him|women|men|unisex|vapo(?:risateur)?|spray|parfum|toilette|femme|homme|eau)\b/gi,
+    /\b(?:парфюмерная вода|парфюмированная вода|туалетная вода|духи|parfum|парфюмерия|perfume)\b/gi,
+    " "
+  );
+  m = m.replace(
+    /\b(?:eau de parfum|eau de toilette|eau de cologne|extrait|edt|edp|for women|for men|for her|for him|women|men|unisex|унисекс|для женщин|для мужчин|vapo(?:risateur)?|spray|parfum|toilette|femme|homme|eau)\b/gi,
     " "
   );
   m = m.replace(/\b\d+[\s.,]?\d*\s*(?:ml|мл|g|г|l|л)\b/gi, " ");
-  m = m.replace(/[,;:\-–—]+/g, " ");
+  m = m.replace(/[,;:\---]+/g, " ");
   m = m.replace(/\s+/g, " ").trim();
   return m.slice(0, 48).trim();
+}
+
+function dedupeTitleParts(type: string, brand: string, model: string, adj: string): string {
+  const typeWords = new Set(type.toLowerCase().split(/\s+/).filter(Boolean));
+  const brandWords = new Set(brand.toLowerCase().split(/\s+/).filter(Boolean));
+  const modelTokens = model
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w) => {
+      const low = w.toLowerCase();
+      if (typeWords.has(low)) return false;
+      if (brandWords.has(low)) return false;
+      return true;
+    });
+  let title = [type, brand, modelTokens.join(" "), adj].filter(Boolean).join(" ");
+  title = title.replace(/\b(\S+(?:\s+\S+){0,4})\s+\1\b/gi, "$1");
+  return title.replace(/\s+/g, " ").trim();
 }
 
 export function buildYandexTitleFromRow(input: {
@@ -155,7 +176,7 @@ export function finalizeYandexTitle(
 ): string {
   let title = padYandexTitle(raw);
   const okLen = title.length >= YANDEX_TITLE_MIN_LEN && title.length <= YANDEX_TITLE_MAX_LEN;
-  if (okLen && !yandexTitleLanguageNeedsFix(title) && !hasBannedTitleAdjectives(title)) {
+  if (okLen && !yandexTitleNeedsFix(title)) {
     return title;
   }
 

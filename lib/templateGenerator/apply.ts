@@ -43,7 +43,7 @@ export function applyFillResults(
         const existing = cellPlainValue(ws.getCell(res.row, col).value).trim();
         const badTitle =
           existing && isYandexTitleHeader(header) && yandexTitleNeedsFix(existing);
-        if (existing && !badTitle) continue;
+        if (existing && !isPlaceholderCellValue(existing) && !badTitle) continue;
       }
       ws.getCell(res.row, col).value = value;
       filled++;
