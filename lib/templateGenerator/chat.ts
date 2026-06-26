@@ -2,6 +2,7 @@ import type { CsvColumnMap, TemplateWorkMode } from "@/lib/templateGenerator/typ
 import type { CsvTable } from "@/lib/templateGenerator/csvIndex";
 import { parseVariationIdsFromList } from "@/lib/templateGenerator/parseVariationIds";
 import { YANDEX_PHOTO_MANAGER_APPEND } from "@/lib/templateGenerator/yandexRules";
+import { openaiChatCompletionsUrl, readOpenAiError } from "@/lib/openaiFetch";
 
 export type ChatRole = "user" | "assistant";
 
@@ -390,7 +391,7 @@ export async function runTemplateAssistantChat(
   context: TemplateChatContext,
   model?: string
 ): Promise<ChatAssistantResult> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -409,8 +410,7 @@ export async function runTemplateAssistantChat(
   });
 
   if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t.slice(0, 280) || `OpenAI HTTP ${res.status}`);
+    throw new Error(await readOpenAiError(res));
   }
 
   const data = (await res.json()) as {

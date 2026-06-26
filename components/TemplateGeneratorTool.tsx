@@ -278,6 +278,8 @@ export function TemplateGeneratorTool() {
     openai: boolean;
     metabase: boolean;
     storage: string | null;
+    openaiGeoBlockedRisk?: boolean;
+    openaiProxy?: boolean;
   } | null>(null);
   const [photoMin, setPhotoMin] = useState(7);
   const [photoTarget, setPhotoTarget] = useState(8);
@@ -324,13 +326,23 @@ export function TemplateGeneratorTool() {
   useEffect(() => {
     fetch("/api/template-generator/status")
       .then((r) => r.json())
-      .then((d: { openai?: boolean; metabase?: boolean; storage?: string | null }) => {
-        setServerStatus({
-          openai: Boolean(d.openai),
-          metabase: Boolean(d.metabase),
-          storage: d.storage ?? null
-        });
-      })
+      .then(
+        (d: {
+          openai?: boolean;
+          metabase?: boolean;
+          storage?: string | null;
+          openaiGeoBlockedRisk?: boolean;
+          openaiProxy?: boolean;
+        }) => {
+          setServerStatus({
+            openai: Boolean(d.openai),
+            metabase: Boolean(d.metabase),
+            storage: d.storage ?? null,
+            openaiGeoBlockedRisk: Boolean(d.openaiGeoBlockedRisk),
+            openaiProxy: Boolean(d.openaiProxy)
+          });
+        }
+      )
       .catch(() => setServerStatus(null));
   }, []);
 
@@ -1934,6 +1946,16 @@ export function TemplateGeneratorTool() {
         {stepBtn(2, "Столбцы и запуск", Boolean(hasWb && scan))}
         {stepBtn(3, "Результат", done)}
       </div>
+
+      {serverStatus?.openaiGeoBlockedRisk && !error ? (
+        <div
+          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          role="status"
+        >
+          OpenAI с российского сервера заблокирован. AI-заполнение не заработает, пока администратор не
+          добавит OPENAI_BASE_URL в настройки сервера (прокси к api.openai.com).
+        </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
