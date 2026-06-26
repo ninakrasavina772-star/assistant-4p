@@ -17,7 +17,8 @@ import {
   YANDEX_SYSTEM_APPEND,
   YANDEX_PHOTO_MANAGER_APPEND,
   yandexDescriptionTooShort,
-  yandexTitleNeedsFix
+  yandexTitleNeedsFix,
+  YANDEX_TITLE_BAD_EXAMPLES
 } from "@/lib/templateGenerator/yandexRules";
 import { finalizeYandexTitle, buildYandexTitleFromRow } from "@/lib/templateGenerator/yandexTitleBuilder";
 import { pickProductNameFromCells } from "@/lib/templateGenerator/presets";
@@ -623,7 +624,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           }) +
           "\n\nЭти поля остались пустыми — заполни их обязательно на основе названия, CSV и сайта бренда. Не оставляй пустыми." +
           (isYandex
-            ? "\nДля Яндекс Маркета: описание ≥600 символов. Название 60–80 символов СТРОГО на русском: тип товара на русском + бренд + модель + 1 объективное свойство (цветочный/восточный/свежий). Запрещены Eau de Parfum, for women/men, EDT и любой английский тип товара. Запрещены стойкий/уникальный/загадочный/солнечный. Примеры: «Парфюмерная вода Calvin Klein Eternity свежая», «Туалетная вода для женщин Lancôme La Vie Est Belle цветочная». Без объёма."
+            ? `\nДля Яндекс Маркета: описание ≥600 символов. Название 60–80 символов: тип на русском + бренд + модель + 1 объективное свойство (цветочная/восточная/свежая для парфюма; увлажняющая/питательная для косметики). ЗАПРЕЩЕНЫ маркетинговые прилагательные: стойкая, уникальная, загадочная, солнечная, фирменная, премиальная, культовая и т.п. Плохие примеры (так НЕЛЬЗЯ):\n${YANDEX_TITLE_BAD_EXAMPLES.map((x) => `• ${x}`).join("\n")}\nХорошо: «Парфюмерная вода Giorgio Armani Si Passione цветочная», «Туалетная вода Calvin Klein Eternity свежая». Без объёма и Eau de Parfum.`
             : "");
         const json2 = await callOpenAi(
           batch.openaiApiKey,

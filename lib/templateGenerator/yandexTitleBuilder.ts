@@ -1,7 +1,7 @@
 import {
   hasBannedTitleAdjectives,
   padYandexTitle,
-  stripGenericTitleAdjectives,
+  sanitizeYandexTitle,
   stripYandexTitleNoise,
   yandexTitleLanguageNeedsFix,
   YANDEX_TITLE_MAX_LEN,
@@ -29,7 +29,6 @@ const OBJECTIVE_PAD: { re: RegExp; adj: string }[] = [
   { re: /cream|creme|крем|moistur/i, adj: "увлажняющая" },
   { re: /serum|сыворот/i, adj: "активная" },
   { re: /hydra|hydrat|увлажн/i, adj: "увлажняющая" },
-  { re: /glow|сиян/i, adj: "сияющая" },
   { re: /night|ночн/i, adj: "ночная" },
   { re: /day|дневн|tages/i, adj: "дневная" }
 ];
@@ -85,14 +84,22 @@ function objectivePad(productName: string, title: string): string {
   return "";
 }
 
-function extendToMinLen(title: string, productName: string): string {
+function extendToMinLen(title: string, productName: string, family: string): string {
   let t = title.trim();
   if (t.length >= YANDEX_TITLE_MIN_LEN) return t;
-  const pad = objectivePad(productName, t);
-  if (pad && !t.toLowerCase().includes(pad.slice(0, 6))) {
-    t = `${t} ${pad}`.trim();
+  const familyAdj = familyToAdjective(family);
+  if (familyAdj && !t.toLowerCase().includes(familyAdj.slice(0, 6))) {
+    t = `${t} ${familyAdj}`.trim();
+    t = sanitizeYandexTitle(t);
   }
   if (t.length < YANDEX_TITLE_MIN_LEN) {
+    const pad = objectivePad(productName, t);
+    if (pad && !t.toLowerCase().includes(pad.slice(0, 6))) {
+      t = `${t} ${pad}`.trim();
+      t = sanitizeYandexTitle(t);
+    }
+  }
+  if (t.length < YANDEX_TITLE_MIN_LEN && /крем|эмульс|лосьон|сыворот|гель|маск|шампун/i.test(productName)) {
     t = `${t} для ухода за кожей`.trim();
   }
   if (t.length > YANDEX_TITLE_MAX_LEN) {
@@ -131,8 +138,8 @@ export function buildYandexTitleFromRow(input: {
   const model = extractModel(input.productName, brand) || extractModel(input.productName, "");
   const adj = familyToAdjective(input.family || "") || objectivePad(input.productName, type);
   let title = [type, brand, model, adj].filter(Boolean).join(" ");
-  title = stripGenericTitleAdjectives(stripYandexTitleNoise(title));
-  title = extendToMinLen(title, input.productName);
+  title = sanitizeYandexTitle(title);
+  title = extendToMinLen(title, input.productName, input.family || "");
   if (title.length > YANDEX_TITLE_MAX_LEN) {
     title = title.slice(0, YANDEX_TITLE_MAX_LEN);
     const sp = title.lastIndexOf(" ");

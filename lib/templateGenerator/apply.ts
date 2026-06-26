@@ -13,7 +13,7 @@ import {
   normHeader,
   pickProductNameFromCells
 } from "@/lib/templateGenerator/presets";
-import { isYandexTitleHeader, yandexTitleNeedsFix } from "@/lib/templateGenerator/yandexRules";
+import { isYandexTitleHeader, padYandexTitle, yandexTitleNeedsFix } from "@/lib/templateGenerator/yandexRules";
 import { buildYandexTitleFromRow } from "@/lib/templateGenerator/yandexTitleBuilder";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { parseImageUrls } from "@/lib/templateGenerator/photos";
@@ -80,7 +80,15 @@ export function applyYandexTitleFixes(
   let filled = 0;
   for (const ctx of contexts) {
     const existing = cellPlainValue(ws.getCell(ctx.row, titleCol).value).trim();
-    if (existing && !yandexTitleNeedsFix(existing)) continue;
+    if (existing) {
+      const cleaned = padYandexTitle(existing);
+      if (cleaned && cleaned !== existing && !yandexTitleNeedsFix(cleaned)) {
+        ws.getCell(ctx.row, titleCol).value = cleaned;
+        filled++;
+        continue;
+      }
+      if (!yandexTitleNeedsFix(existing)) continue;
+    }
 
     const productName = pickProductNameFromCells(ctx.cells);
     if (!productName.trim()) continue;
@@ -95,7 +103,7 @@ export function applyYandexTitleFixes(
     });
     if (!built.trim() || yandexTitleNeedsFix(built)) continue;
 
-    ws.getCell(ctx.row, titleCol).value = built;
+    ws.getCell(ctx.row, titleCol).value = padYandexTitle(built);
     filled++;
   }
   return filled;

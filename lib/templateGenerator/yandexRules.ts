@@ -6,7 +6,19 @@ const DESCRIPTION_MIN_LEN = 600;
 
 /** Субъективные / маркетинговые прилагательные — не свойства товара */
 const GENERIC_ADJ_RE =
-  /\b(?:премиальн\w*|популярн\w*|оригинальн\w*|элегантн\w*|стильн\w*|эксклюзивн\w*|уникальн\w*|качественн\w*|шикарн\w*|надёжн\w*|надежн\w*|лучш\w*|топов\w*|бестселлер\w*|новинк\w*|рекомендуем\w*|профессиональн\w*|стойк\w*|загадочн\w*|солнечн\w*|насыщенн\w*|таинственн\w*|чувственн\w*|соблазнительн\w*|роскошн\w*|изысканн\w*|волшебн\w*|идеальн\w*|совершенн\w*|невероятн\w*|потрясающ\w*|божественн\w*|восхитительн\w*|завораживающ\w*|чарующ\w*|утонченн\w*|нежн\w*|ярк\w*|замечательн\w*)\b/gi;
+  /\b(?:премиальн\w*|популярн\w*|оригинальн\w*|элегантн\w*|стильн\w*|эксклюзивн\w*|уникальн\w*|качественн\w*|шикарн\w*|надёжн\w*|надежн\w*|лучш\w*|топов\w*|бестселлер\w*|новинк\w*|рекомендуем\w*|профессиональн\w*|стойк\w*|загадочн\w*|солнечн\w*|насыщенн\w*|таинственн\w*|чувственн\w*|соблазнительн\w*|роскошн\w*|изысканн\w*|волшебн\w*|идеальн\w*|совершенн\w*|невероятн\w*|потрясающ\w*|божественн\w*|восхитительн\w*|завораживающ\w*|чарующ\w*|утонченн\w*|нежн\w*|ярк\w*|замечательн\w*|фирменн\w*|брендов\w*|культов\w*|легендарн\w*|знаменит\w*|именит\w*|бесподобн\w*|чудесн\w*|восхитительн\w*|безупречн\w*|непревзойд\w*|неповторим\w*|исключительн\w*|фантастическ\w*|гипнотизирующ\w*|магическ\w*|божественн\w*|безупречн\w*|вдохновляющ\w*|завораживающ\w*|обольстительн\w*|манящ\w*|пленительн\w*|волнующ\w*|страстн\w*|романтичн\w*|дерзк\w*|соблазнительн\w*|натуральн\w*|органическ\w*|аутентичн\w*|настоящ\w*|подлинн\w*)\b/gi;
+
+/** Допустимые объективные свойства в конце названия (семейство аромата, функция косметики) */
+const ALLOWED_TITLE_PROPERTY_RE =
+  /^(?:цветочн\w*|восточн\w*|древесн\w*|фруктов\w*|свеж\w*|морск\w*|прян\w*|амбров\w*|шипров\w*|цитрусов\w*|акватическ\w*|альдегидн\w*|кожаны\w*|гурманск\w*|фужер\w*|увлажняющ\w*|питательн\w*|матов\w*|активн\w*|ночн\w*|дневн\w*|антивозрастн\w*|тонизирующ\w*|очищающ\w*|успокаивающ\w*|лифтинг\w*|себорегулирующ\w*|укрепляющ\w*|восстанавливающ\w*|разглаживающ\w*|осветляющ\w*)$/i;
+
+/** Примеры плохих названий — для промпта AI */
+export const YANDEX_TITLE_BAD_EXAMPLES = [
+  "Парфюмерная вода Giorgio Armani Si Passione стойкая",
+  "Духи Escentric Molecules Molecule 04 уникальные",
+  "Парфюмерная вода LANCOME LA NUIT TRÉSOR загадочная",
+  "Парфюмированный спрей SOL DE JANEIRO Cheirosa 62 солнечный"
+] as const;
 
 /** Английские типы/формулировки вместо русского типа товара */
 const EN_PRODUCT_TYPE_RE =
@@ -68,15 +80,20 @@ export const YANDEX_SYSTEM_APPEND = `
 
 НАЗВАНИЕ ТОВАРА (если поле в списке):
 - Язык: название на РУССКОМ. Английские слова допустимы ТОЛЬКО в бренде и модели/линейке (Calvin Klein, Si Passione, La Vie Est Belle).
-- Структура (строго): ТИП товара на русском + бренд + модель/линейка + ровно 1 прилагательное об ОБЪЕКТИВНОМ свойстве.
+- Структура (строго): ТИП товара на русском + бренд + модель/линейка + ровно 1 прилагательное об ОБЪЕКТИВНОМ свойстве (или без прилагательного, если не знаешь семейство).
 - Тип товара — только по-русски: «Парфюмерная вода», «Туалетная вода», «Духи», «Парфюмированный спрей», «Крем для лица» и т.п.
 - ЗАПРЕЩЕНО в названии: Eau de Parfum, Eau de Toilette, EDT, EDP, for women, for men, Women, Men, Vapo, Spray как тип товара.
 - Длина: ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} символов. Не длиннее ${YANDEX_TITLE_MAX_LEN}!
-- Допустимое свойство — только факт о товаре, не реклама:
-  • Парфюм: семейство аромата (цветочный, восточный, древесный, фруктовый, свежий, морской, пряный, амбровый, шипровый, цитрусовый).
-  • Косметика: функция или текстура (увлажняющий, питательный, матовый).
-  • Если свойство неочевидно — не добавляй прилагательное, расширяй модель/линейкой.
-- ЗАПРЕЩЕНО (маркетинг): стойкий, уникальный, загадочный, солнечный, насыщенный, премиальный, популярный, оригинальный, элегантный, лучший, топовый, эксклюзивный.
+- Допустимое свойство в конце — ТОЛЬКО факт о товаре:
+  • Парфюм: семейство аромата из карточки/фида (цветочная, восточная, древесная, фруктовая, свежая, морская, пряная, амбровая, шипровая, цитрусовая).
+  • Косметика: функция/текстура (увлажняющая, питательная, матовая, очищающая, тонизирующая).
+  • НЕЛЬЗЯ: оценочные и рекламные слова — «стойкая», «уникальная», «загадочная», «солнечная», «фирменная», «премиальная», «лучшая», «культовая» и любые синонимы.
+  • Если семейство/свойство неизвестно — НЕ выдумывай прилагательное, расширяй модель/линейкой до 60 символов.
+- ЗАПРЕЩЕНО (маркетинг, примеры с ошибками):
+  • Парфюмерная вода Giorgio Armani Si Passione стойкая
+  • Духи Escentric Molecules Molecule 04 уникальные
+  • Парфюмерная вода LANCOME LA NUIT TRÉSOR загадочная
+  • Парфюмированный спрей SOL DE JANEIRO Cheirosa 62 солнечный
 - ЗАПРЕЩЕНО: объём, оттенок, SPF, артикул, EAN.
 - Примеры ПРАВИЛЬНО:
   • Парфюмерная вода Giorgio Armani Si Passione цветочная
@@ -95,7 +112,7 @@ export const YANDEX_SYSTEM_APPEND = `
 
 export function buildYandexFieldHint(header: string): string | null {
   if (isYandexTitleHeader(header)) {
-    return `Яндекс: тип на русском + бренд + модель + 1 свойство (цветочный/восточный…), ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} симв.; без Eau de Parfum/for women`;
+    return `Яндекс: тип + бренд + модель + 1 свойство (цветочная/восточная…); без стойкая/уникальная/загадочная/солнечная/фирменная; ${YANDEX_TITLE_MIN_LEN}–${YANDEX_TITLE_MAX_LEN} симв.`;
   }
   if (isYandexDescriptionHeader(header)) {
     return `Яндекс: продающее описание по блокам, минимум ${DESCRIPTION_MIN_LEN} символов, как у категорийного менеджера`;
@@ -117,9 +134,37 @@ export function stripGenericTitleAdjectives(title: string): string {
   return title.replace(GENERIC_ADJ_RE, " ").replace(/\s+/g, " ").trim();
 }
 
+function looksLikeRussianAdjective(word: string): boolean {
+  return /(?:ый|ая|ое|ие|ий|яя|ой|ую|ем|ам|ом|ые|их|ыми)$/i.test(word);
+}
+
+/** Убирает недопустимое прилагательное в конце (маркетинг вместо семейства/свойства) */
+export function stripDisallowedTrailingProperty(title: string): string {
+  const parts = title.trim().split(/\s+/).filter(Boolean);
+  while (parts.length >= 4) {
+    const last = parts[parts.length - 1]!.replace(/[.,;]+$/g, "");
+    if (!looksLikeRussianAdjective(last)) break;
+    if (ALLOWED_TITLE_PROPERTY_RE.test(last)) break;
+    parts.pop();
+  }
+  return parts.join(" ").trim();
+}
+
+/** Полная очистка названия от шума и маркетинговых прилагательных */
+export function sanitizeYandexTitle(title: string): string {
+  let t = stripYandexTitleNoise(title);
+  t = stripGenericTitleAdjectives(t);
+  t = stripDisallowedTrailingProperty(t);
+  return t.replace(/\s+/g, " ").trim();
+}
+
 export function hasBannedTitleAdjectives(title: string): boolean {
   GENERIC_ADJ_RE.lastIndex = 0;
-  return GENERIC_ADJ_RE.test(title);
+  if (GENERIC_ADJ_RE.test(title)) return true;
+  const parts = title.trim().split(/\s+/).filter(Boolean);
+  const last = parts[parts.length - 1]?.replace(/[.,;]+$/g, "") ?? "";
+  if (!last || !looksLikeRussianAdjective(last)) return false;
+  return !ALLOWED_TITLE_PROPERTY_RE.test(last);
 }
 
 export function titleHasEnglishProductType(title: string): boolean {
@@ -144,9 +189,9 @@ function truncateAtWord(title: string, maxLen: number): string {
   return cut.trim();
 }
 
-/** Нормализация названия без автоподстановки шаблонных прилагательных */
+/** Нормализация названия: убрать маркетинг, обрезать по длине */
 export function padYandexTitle(title: string): string {
-  let t = stripGenericTitleAdjectives(stripYandexTitleNoise(title));
+  let t = sanitizeYandexTitle(title);
   if (!t) return title.trim();
   if (t.length > YANDEX_TITLE_MAX_LEN) {
     t = truncateAtWord(t, YANDEX_TITLE_MAX_LEN);
@@ -158,7 +203,7 @@ export function yandexTitleNeedsFix(text: string): boolean {
   const raw = stripYandexTitleNoise(text);
   if (hasBannedTitleAdjectives(raw)) return true;
   if (yandexTitleLanguageNeedsFix(raw)) return true;
-  const t = stripGenericTitleAdjectives(raw);
+  const t = sanitizeYandexTitle(raw);
   return t.length < YANDEX_TITLE_MIN_LEN || t.length > YANDEX_TITLE_MAX_LEN;
 }
 
