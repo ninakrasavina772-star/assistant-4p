@@ -1,5 +1,6 @@
 import { normBrand } from "./pairScoring";
 import type {
+import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
   CompareProduct,
   CompareResult,
   IntraEanGroupRow,
@@ -848,7 +849,7 @@ export async function refineDupPairsOpenAiVisionBatch(
     }
   }
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await openaiFetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -893,7 +894,7 @@ export async function refineDupPairsOpenAiBatch(
     }))
   };
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await openaiFetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

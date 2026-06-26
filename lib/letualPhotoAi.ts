@@ -9,6 +9,7 @@ import {
 } from "@/lib/letualFotoQuality";
 import { mapPool } from "@/lib/letualAsyncPool";
 import {
+import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
   LETUAL_PICK_URL_MAX,
   LETUAL_VISION_BATCH,
   LETUAL_VISION_TOP
@@ -157,7 +158,7 @@ async function scoreOneFetched(
 ): Promise<LetualPhotoScore | null> {
   const dataUrl = await bufferToVisionDataUrl(fetched.buf, fetched.usedUrl);
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await openaiFetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${openaiApiKey}`,

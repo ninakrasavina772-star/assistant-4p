@@ -24,7 +24,7 @@ import { finalizeYandexTitle, buildYandexTitleFromRow } from "@/lib/templateGene
 import { pickProductNameFromCells } from "@/lib/templateGenerator/presets";
 import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
 import { resolveYandexRowPhotos } from "@/lib/templateGenerator/yandexPhotos";
-import { openaiChatCompletionsUrl, readOpenAiError } from "@/lib/openaiFetch";
+import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
 
 export type FillBatchIn = {
   openaiApiKey: string;
@@ -211,7 +211,7 @@ async function callOpenAi(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 75_000);
   try {
-    const res = await fetch(openaiChatCompletionsUrl(), {
+    const res = await openaiFetch(openaiChatCompletionsUrl(), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -712,7 +712,7 @@ export async function mapCsvColumnsWithAi(
     'JSON: {"skuColumn":"...","columns":{"Template header":"CSV header"}}'
   ].join("\n");
 
-  const res = await fetch(openaiChatCompletionsUrl(), {
+  const res = await openaiFetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

@@ -9,6 +9,7 @@ import {
   productTypesDiffer
 } from "@/lib/podruzhkaProductType";
 import type { PodruzhkaAiResult, PodruzhkaFeedRow, PodruzhkaNoteBlock } from "@/lib/podruzhkaTypes";
+import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
 
 export type NotesBatchIn = {
   openaiApiKey: string;
@@ -137,7 +138,7 @@ async function callOpenAi(
   row: PodruzhkaFeedRow,
   extraUser?: string
 ): Promise<AiJson> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await openaiFetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

@@ -1953,7 +1953,7 @@ export function TemplateGeneratorTool() {
           role="status"
         >
           OpenAI с российского сервера заблокирован. AI-заполнение не заработает, пока администратор не
-          добавит OPENAI_BASE_URL в настройки сервера (прокси к api.openai.com).
+          не настроен OPENAI_HTTP_PROXY или OPENAI_BASE_URL на сервере.
         </div>
       ) : null}
 

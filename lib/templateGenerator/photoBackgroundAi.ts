@@ -1,3 +1,4 @@
+import { openaiFetch, openaiImagesUrl, readOpenAiError } from "@/lib/openaiFetch";
 import sharp from "sharp";
 import { PRODUCT_CARD_H, PRODUCT_CARD_W } from "@/lib/templateGenerator/photoCompose";
 
@@ -7,7 +8,7 @@ export async function generateThemedBackground(
   prompt: string,
   model = "dall-e-3"
 ): Promise<Buffer> {
-  const res = await fetch("https://api.openai.com/v1/images/generations", {
+  const res = await openaiFetch(openaiImagesUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

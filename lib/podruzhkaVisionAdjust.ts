@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { PODRUZHKA_COMPOSITION_VISION_PROMPT } from "@/lib/podruzhkaCompositionPrompt";
+import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
 
 const REFERENCE_PATH = path.join(process.cwd(), "public", "podruzhka", "reference-target.png");
 
@@ -69,7 +70,7 @@ async function callGPT4VisionLayout(
     image_url: { url: `data:image/jpeg;base64,${renderedBuffer.toString("base64")}`, detail: "high" }
   });
 
-  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+  const resp = await openaiFetch(openaiChatCompletionsUrl(), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${openaiKey}`,

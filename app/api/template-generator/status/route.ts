@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { openaiIsConfigured } from "@/lib/openaiServerKey";
-import { openaiApiBase } from "@/lib/openaiFetch";
+import { openaiApiBase, openaiHttpProxy, openaiUsesProxy } from "@/lib/openaiFetch";
 import { metabaseProductIsConfigured } from "@/lib/templateGenerator/metabaseProduct";
 import { getOzonStorageBackend } from "@/lib/ozonImageStorage";
 
@@ -9,14 +9,15 @@ export async function GET() {
   const metabaseEnv = metabaseProductIsConfigured();
   const storage = getOzonStorageBackend();
   const openaiBase = openaiApiBase();
-  const openaiProxy = openaiBase !== "https://api.openai.com";
+  const httpProxy = openaiHttpProxy();
+  const openaiProxy = openaiUsesProxy();
 
   return NextResponse.json({
     openai: openaiEnv,
     openaiViaUi: !openaiEnv,
     openaiProxy,
-    openaiBase: openaiProxy ? openaiBase : undefined,
-    /** На Yandex VM без прокси OpenAI отвечает unsupported_country_region_territory */
+    openaiBase: openaiBase !== "https://api.openai.com" ? openaiBase : undefined,
+    openaiHttpProxy: httpProxy ? httpProxy.replace(/:[^:@/]+@/, ":***@") : undefined,
     openaiGeoBlockedRisk: openaiEnv && !openaiProxy,
     metabase: metabaseEnv,
     storage: storage ?? null
