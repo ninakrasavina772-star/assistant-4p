@@ -8,8 +8,8 @@ import {
   type PackshotSignals
 } from "@/lib/letualFotoQuality";
 import { mapPool } from "@/lib/letualAsyncPool";
-import {
 import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
+import {
   LETUAL_PICK_URL_MAX,
   LETUAL_VISION_BATCH,
   LETUAL_VISION_TOP

@@ -1,6 +1,6 @@
 import { normBrand } from "./pairScoring";
-import type {
 import { openaiChatCompletionsUrl, openaiFetch, readOpenAiError } from "@/lib/openaiFetch";
+import type {
   CompareProduct,
   CompareResult,
   IntraEanGroupRow,
