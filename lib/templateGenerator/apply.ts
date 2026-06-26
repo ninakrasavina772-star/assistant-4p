@@ -15,6 +15,7 @@ import {
 } from "@/lib/templateGenerator/presets";
 import { isYandexTitleHeader, padYandexTitle, yandexTitleNeedsFix } from "@/lib/templateGenerator/yandexRules";
 import { buildYandexTitleFromRow } from "@/lib/templateGenerator/yandexTitleBuilder";
+import { isPlaceholderCellValue } from "@/lib/templateGenerator/workMode";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { parseImageUrls } from "@/lib/templateGenerator/photos";
 
