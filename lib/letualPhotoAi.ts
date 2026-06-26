@@ -7,7 +7,9 @@ import {
   type LetualTechnicalScore,
   type PackshotSignals
 } from "@/lib/letualFotoQuality";
+import { mapPool } from "@/lib/letualAsyncPool";
 import {
+  LETUAL_PICK_URL_MAX,
   LETUAL_VISION_BATCH,
   LETUAL_VISION_TOP
 } from "@/lib/letualMainPhotoConstants";
@@ -408,6 +410,21 @@ function preferCdnUrl(urls: string[]): string {
   return cdn ?? urls.find((u) => /^https?:\/\//i.test(u)) ?? "";
 }
 
+/** CDN packshot первыми, не более LETUAL_PICK_URL_MAX URL на анализ. */
+export function prioritizeLetualPickUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const cdn: string[] = [];
+  const rest: string[] = [];
+  for (const raw of urls) {
+    const u = raw.trim();
+    if (!u.startsWith("http") || seen.has(u)) continue;
+    seen.add(u);
+    if (/cdnru\.4stand\.com\/huge\//i.test(u)) cdn.push(u);
+    else rest.push(u);
+  }
+  return [...cdn, ...rest].slice(0, LETUAL_PICK_URL_MAX);
+}
+
 function scoreFromUrlHeuristic(url: string, reason: string): LetualPhotoScore {
   const isCdnHuge = /cdnru\.4stand\.com\/huge\//i.test(url);
   const hasWhiteBg = isCdnHuge || /deloox/i.test(url);
@@ -438,19 +455,19 @@ export function pickLetualPhotoInstant(urls: string[]): {
   return { best, ranked: [best] };
 }
 
-/** Быстрый подбор: скачать все URL, выбрать флакон на белом фоне без коробки. */
+/** Быстрый подбор: скачать топ URL, выбрать флакон на белом фоне без коробки. */
 export async function pickLetualPhotoFast(
   urls: string[]
 ): Promise<{ best: LetualPhotoScore; ranked: LetualPhotoScore[] }> {
-  const { ranked: technicalRanked, fetched } = await rankLetualUrlsByTechnicalQuality(urls);
+  const sample = prioritizeLetualPickUrls(urls);
+  const { ranked: technicalRanked, fetched } = await rankLetualUrlsByTechnicalQuality(sample);
   const bufByOriginal = new Map(fetched.map((f) => [f.originalUrl, f.buf]));
 
-  const ranked: LetualPhotoScore[] = [];
-  for (const t of technicalRanked) {
+  const ranked = await mapPool(technicalRanked, 6, async (t) => {
     const buf = bufByOriginal.get(t.originalUrl);
     const signals = buf ? await measurePackshotSignals(buf) : null;
-    ranked.push(scoreFromPackshotAnalysis(t, signals));
-  }
+    return scoreFromPackshotAnalysis(t, signals);
+  });
   ranked.sort((a, b) => b.score - a.score);
 
   let best = pickBestFromRanked(ranked) ?? pickLooseFromRanked(ranked);

@@ -199,6 +199,91 @@ export async function fetchSiblingVariationPhotos(
   return out;
 }
 
+export type SiblingBySeed = {
+  seedVariationId: number;
+  variationId: number;
+  matchType: "same_ean" | "same_product";
+};
+
+/** Сiblings для нескольких variation_id одним запросом Metabase. */
+export async function fetchSiblingVariationPhotosBatch(
+  variationIds: number[],
+  metabaseApiKey?: string,
+  limitPerSeed = 12
+): Promise<Map<number, SiblingPhotoCandidate[]>> {
+  const creds = resolveMetabaseCredentials(metabaseApiKey);
+  const out = new Map<number, SiblingPhotoCandidate[]>();
+  const ids = [...new Set(variationIds.filter((id) => id > 0))];
+  if (!creds || !ids.length) return out;
+  for (const id of ids) out.set(id, []);
+
+  const inList = ids.join(",");
+  const lim = Math.min(Math.max(limitPerSeed, 1), 20);
+
+  const sql = `
+    WITH seeds AS (
+      SELECT pv.id, NULLIF(TRIM(pv.ean), '') AS ean, pv.product_id
+      FROM public.product_variation pv
+      WHERE pv.id IN (${inList})
+    ),
+    candidates AS (
+      SELECT s.id AS seed_id, pv2.id AS variation_id, 'same_ean' AS match_type, 1 AS priority
+      FROM seeds s
+      JOIN public.product_variation pv2
+        ON NULLIF(TRIM(pv2.ean), '') = s.ean AND pv2.id != s.id
+      WHERE s.ean IS NOT NULL
+      UNION ALL
+      SELECT s.id, pv2.id, 'same_product', 2
+      FROM seeds s
+      JOIN public.product_variation pv2
+        ON pv2.product_id = s.product_id AND pv2.id != s.id
+    ),
+    ranked AS (
+      SELECT c.*,
+        ROW_NUMBER() OVER (PARTITION BY c.seed_id ORDER BY c.priority, c.variation_id) AS rn
+      FROM candidates c
+    )
+    SELECT r.seed_id, r.variation_id, r.match_type, pvmi.image_load_hash
+    FROM ranked r
+    JOIN public.product_variation_main_image pvmi ON pvmi.product_variation_id = r.variation_id
+    WHERE r.rn <= ${lim}
+      AND NULLIF(TRIM(pvmi.image_load_hash), '') IS NOT NULL
+    ORDER BY r.seed_id, r.priority, r.variation_id
+  `;
+
+  const rows = await metabaseQuery<{
+    seed_id: number;
+    variation_id: number;
+    match_type: string;
+    image_load_hash: string;
+  }>(sql, creds);
+
+  const seenBySeed = new Map<number, Set<string>>();
+  for (const r of rows) {
+    const seedId = Number(r.seed_id);
+    const url = hashToMainImageUrl(r.image_load_hash);
+    if (!url) continue;
+    let seen = seenBySeed.get(seedId);
+    if (!seen) {
+      seen = new Set<string>();
+      seenBySeed.set(seedId, seen);
+    }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const matchType =
+      r.match_type === "same_ean" || r.match_type === "same_product"
+        ? r.match_type
+        : "same_product";
+    out.get(seedId)?.push({
+      variationId: Number(r.variation_id),
+      mainImageUrl: url,
+      matchType
+    });
+  }
+
+  return out;
+}
+
 export async function fetchLetualVariations(
   ids: number[],
   metabaseApiKey?: string

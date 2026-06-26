@@ -157,6 +157,9 @@ export function LetualMainPhotoTool() {
   const [searchLoading, setSearchLoading] = useState(false);
 
   const [manualUrl, setManualUrl] = useState<Record<number, string>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [regeneratingIds, setRegeneratingIds] = useState<Set<number>>(new Set());
+  const [galleryPreloading, setGalleryPreloading] = useState(false);
 
   useEffect(() => {
     if (typeof sessionStorage === "undefined") return;
@@ -246,19 +249,27 @@ export function LetualMainPhotoTool() {
         setRows([...all]);
       }
 
+      setBusy(false);
+      setProgress(null);
+
       if (preloadGalleries) {
+        setGalleryPreloading(true);
         const cache: Record<number, GalleryPhoto[]> = {};
-        for (let i = 0; i < ids.length; i += LETUAL_API_CHUNK) {
-          const chunk = ids.slice(i, i + LETUAL_API_CHUNK);
-          setProgress(`Галереи Metabase ${i + 1}–${i + chunk.length} из ${ids.length}…`);
-          const part = await galleriesChunk(chunk);
-          Object.assign(cache, part);
-          setGalleryCache({ ...cache });
+        try {
+          for (let i = 0; i < ids.length; i += LETUAL_API_CHUNK) {
+            const chunk = ids.slice(i, i + LETUAL_API_CHUNK);
+            setProgress(`Галереи Metabase ${i + 1}–${i + chunk.length} из ${ids.length}…`);
+            const part = await galleriesChunk(chunk);
+            Object.assign(cache, part);
+            setGalleryCache({ ...cache });
+          }
+        } finally {
+          setGalleryPreloading(false);
+          setProgress(null);
         }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка подбора");
-    } finally {
       setBusy(false);
       setProgress(null);
     }
@@ -275,7 +286,11 @@ export function LetualMainPhotoTool() {
                 previewUrl: url,
                 sourceLabel: label,
                 status: "manual" as const,
-                comment: "Выбрано вручную"
+                comment: "Выбрано вручную",
+                generated: false,
+                resultUrl: undefined,
+                resultPreviewUrl: undefined,
+                generateError: undefined
               }
             : r
         )
@@ -305,10 +320,8 @@ export function LetualMainPhotoTool() {
       setGalleryLoading(true);
       setGalleryPhotos([]);
       try {
-        const res = await fetch(`/api/letual/photos?variationId=${row.variationId}`);
-        const data = (await res.json()) as { photos?: GalleryPhoto[]; error?: string };
-        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-        const photos = data.photos ?? [];
+        const part = await galleriesChunk([row.variationId]);
+        const photos = part[row.variationId] ?? [];
         setGalleryPhotos(photos);
         setGalleryCache((prev) => ({ ...prev, [row.variationId]: photos }));
       } catch (e) {
@@ -413,6 +426,54 @@ export function LetualMainPhotoTool() {
     [rows]
   );
 
+  const regenerateRows = useCallback(
+    async (targets: UiRow[]) => {
+      const toGen = targets.filter((r) => r.sourceUrl?.startsWith("http"));
+      if (!toGen.length) {
+        setError("Нет фото для перегенерации");
+        return;
+      }
+      setError(null);
+      setRegeneratingIds(new Set(toGen.map((r) => r.variationId)));
+      const updated = new Map(rows.map((r) => [r.variationId, { ...r }]));
+      try {
+        for (let i = 0; i < toGen.length; i += LETUAL_API_CHUNK) {
+          const chunk = toGen.slice(i, i + LETUAL_API_CHUNK);
+          setProgress(`Перегенерация ${i + 1}–${i + chunk.length} из ${toGen.length}…`);
+          const results = await generateChunk(
+            chunk.map((r) => ({ variationId: r.variationId, sourceUrl: r.sourceUrl }))
+          );
+          for (const res of results) {
+            if (!res.variationId) continue;
+            const row = updated.get(res.variationId);
+            if (!row) continue;
+            row.resultUrl = res.ok ? res.resultUrl : undefined;
+            row.generated = res.ok;
+            row.generateError = res.ok ? undefined : (res.error ?? "ошибка генерации");
+            if (res.ok && res.resultUrl) row.resultPreviewUrl = res.resultUrl;
+            updated.set(res.variationId, row);
+          }
+          setRows([...updated.values()]);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Ошибка перегенерации");
+      } finally {
+        setRegeneratingIds(new Set());
+        setTimeout(() => setProgress(null), 2000);
+      }
+    },
+    [rows]
+  );
+
+  const toggleSelected = useCallback((variationId: number, on: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(variationId);
+      else next.delete(variationId);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     const withResults = rows.filter((r) => r.generated && r.resultUrl);
     if (!withResults.length) {
@@ -515,7 +576,7 @@ export function LetualMainPhotoTool() {
             <strong className={status.serpapi ? "text-emerald-700" : "text-slate-600"}>
               {status.serpapi
                 ? "SerpAPI OK"
-                : "не подключён (нужен SERPAPI_KEY на сервере)"}
+                : "не подключён — нужен SERPAPI_KEY на сервере (ключ на serpapi.com → deploy/.env.production)"}
             </strong>
           </p>
         </div>
@@ -632,6 +693,9 @@ export function LetualMainPhotoTool() {
           </div>
 
           {progress ? <p className="text-sm text-slate-600">{progress}</p> : null}
+          {galleryPreloading ? (
+            <p className="text-sm text-slate-500">Галереи Metabase подгружаются в фоне…</p>
+          ) : null}
           {error ? (
             <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
           ) : null}
@@ -661,6 +725,16 @@ export function LetualMainPhotoTool() {
               >
                 Сгенерировать кроме проблемных
               </button>
+              <button
+                type="button"
+                disabled={busy || selectedIds.size === 0}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                onClick={() =>
+                  void regenerateRows(rows.filter((r) => selectedIds.has(r.variationId)))
+                }
+              >
+                Перегенерировать выбранные ({selectedIds.size})
+              </button>
               {resultBlob ? (
                 <button
                   type="button"
@@ -676,6 +750,20 @@ export function LetualMainPhotoTool() {
             <table className="w-full min-w-[720px] text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                  <th className="pb-2 pr-2">
+                    <input
+                      type="checkbox"
+                      title="Выбрать все"
+                      checked={rows.length > 0 && selectedIds.size === rows.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(new Set(rows.map((r) => r.variationId)));
+                        } else {
+                          setSelectedIds(new Set());
+                        }
+                      }}
+                    />
+                  </th>
                   <th className="pb-2 pr-3">ID</th>
                   <th className="pb-2 pr-3">Источник</th>
                   <th className="pb-2 pr-3">Статус</th>
@@ -687,6 +775,13 @@ export function LetualMainPhotoTool() {
               <tbody className="divide-y divide-slate-100">
                 {rows.map((r) => (
                   <tr key={r.variationId}>
+                    <td className="py-3 pr-2 align-top">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(r.variationId)}
+                        onChange={(e) => toggleSelected(r.variationId, e.target.checked)}
+                      />
+                    </td>
                     <td className="py-3 pr-3 align-top font-mono">{r.variationId}</td>
                     <td className="py-3 pr-3 align-top">
                       {r.sourceUrl ? (
@@ -779,6 +874,18 @@ export function LetualMainPhotoTool() {
                             OK
                           </button>
                         </div>
+                        {r.sourceUrl ? (
+                          <button
+                            type="button"
+                            className="text-left text-xs text-violet-700 hover:underline disabled:opacity-50"
+                            disabled={busy || regeneratingIds.has(r.variationId)}
+                            onClick={() => void regenerateRows([r])}
+                          >
+                            {regeneratingIds.has(r.variationId)
+                              ? "Перегенерация…"
+                              : "Перегенерировать"}
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

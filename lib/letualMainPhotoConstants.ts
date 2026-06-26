@@ -21,16 +21,19 @@ export const LETUAL_BATCH_MAX = 50;
 export const LETUAL_API_CHUNK = 10;
 
 /** Параллельный подбор фото (вариаций) на сервере. */
-export const LETUAL_PICK_CONCURRENCY = 5;
+export const LETUAL_PICK_CONCURRENCY = 8;
 
 /** Параллельная подгрузка галерей Metabase (только SQL, без AI). */
-export const LETUAL_GALLERY_CONCURRENCY = 8;
+export const LETUAL_GALLERY_CONCURRENCY = 10;
 
 /** Параллельная генерация JPG на сервере. */
-export const LETUAL_GENERATE_CONCURRENCY = 3;
+export const LETUAL_GENERATE_CONCURRENCY = 5;
 
 /** Параллельное скачивание URL. */
-export const LETUAL_DOWNLOAD_CONCURRENCY = 8;
+export const LETUAL_DOWNLOAD_CONCURRENCY = 12;
+
+/** Сколько URL скачивать и анализировать при быстром подборе (CDN первыми). */
+export const LETUAL_PICK_URL_MAX = 8;
 
 /** Сколько лучших URL отправлять в OpenAI Vision (после техоценки). */
 export const LETUAL_VISION_TOP = 6;

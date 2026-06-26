@@ -1,7 +1,6 @@
 import { mapPool } from "@/lib/letualAsyncPool";
 import {
   LETUAL_GENERATE_CONCURRENCY,
-  LETUAL_GALLERY_CONCURRENCY,
   LETUAL_PICK_CONCURRENCY,
   LETUAL_VISION_TOP
 } from "@/lib/letualMainPhotoConstants";
@@ -9,8 +8,10 @@ import { processLetualMainPhotoFromUrl } from "@/lib/letualMainPhotoProcess";
 import {
   fetchLetualVariations,
   fetchSiblingVariationPhotos,
+  fetchSiblingVariationPhotosBatch,
   type LetualVariationRow
 } from "@/lib/letualMetabase";
+import { prioritizeLetualPickUrls } from "@/lib/letualPhotoAi";
 import { uploadLetualMainPhoto } from "@/lib/ozonImageStorage";
 import type { LetualResultRow } from "@/lib/letualMainPhotoExcel";
 import type {
@@ -93,10 +94,12 @@ async function pickFromSiblingUrls(
     .map((p) => p.url);
   if (!siblingUrls.length) return null;
 
+  const sample = prioritizeLetualPickUrls(siblingUrls);
+
   try {
     const { best, ranked } = quickPick
-      ? await pickLetualPhotoFast(siblingUrls)
-      : await pickLetualPhotoWithFallback(siblingUrls, resolveOpenAiKey(openaiApiKey));
+      ? await pickLetualPhotoFast(sample)
+      : await pickLetualPhotoWithFallback(sample, resolveOpenAiKey(openaiApiKey));
     const match = gallery.photos.find((p) => p.url === best.url);
     return {
       variationId: row.variationId,
@@ -383,21 +386,22 @@ export async function getLetualGalleriesBatch(
   const seedRows = await fetchLetualVariations(uniqueIds, metabaseApiKey);
   const rowById = new Map(seedRows.map((r) => [r.variationId, r]));
 
-  const siblingLists = await mapPool(seedRows, LETUAL_GALLERY_CONCURRENCY, async (row) => ({
-    variationId: row.variationId,
-    siblings: await fetchSiblingVariationPhotos(row.variationId, metabaseApiKey, undefined, 30)
-  }));
+  const siblingsBySeed = await fetchSiblingVariationPhotosBatch(
+    uniqueIds,
+    metabaseApiKey,
+    12
+  );
 
   const allSiblingIds = new Set<number>();
-  for (const item of siblingLists) {
-    for (const s of item.siblings) allSiblingIds.add(s.variationId);
+  for (const list of siblingsBySeed.values()) {
+    for (const s of list) allSiblingIds.add(s.variationId);
   }
 
   const siblingRows = allSiblingIds.size
     ? await fetchLetualVariations([...allSiblingIds], metabaseApiKey)
     : [];
 
-  const siblingBySeed = new Map(siblingLists.map((x) => [x.variationId, x.siblings]));
+  const siblingRowById = new Map(siblingRows.map((r) => [r.variationId, r]));
   const out: Record<number, LetualGalleryPhoto[]> = {};
 
   for (const vid of uniqueIds) {
@@ -406,7 +410,17 @@ export async function getLetualGalleriesBatch(
       out[vid] = [];
       continue;
     }
-    out[vid] = assembleGalleryPhotos(seed, siblingBySeed.get(vid) ?? [], siblingRows);
+
+    const siblings = (siblingsBySeed.get(vid) ?? []).map((s) => ({
+      variationId: s.variationId,
+      matchType: s.matchType
+    }));
+
+    out[vid] = assembleGalleryPhotos(
+      seed,
+      siblings as Awaited<ReturnType<typeof fetchSiblingVariationPhotos>>,
+      siblingRows
+    );
   }
 
   return out;
