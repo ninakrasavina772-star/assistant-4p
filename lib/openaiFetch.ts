@@ -1,8 +1,4 @@
-/** OpenAI HTTP: reverse base URL and/or forward HTTP proxy (Squid etc.). */
-import { ProxyAgent, fetch as undiciFetch } from "undici";
-
-let proxyAgent: ProxyAgent | undefined;
-
+/** OpenAI HTTP helpers + proxy env detection (proxy applied in instrumentation.ts). */
 export function openaiApiBase(): string {
   const raw = (process.env.OPENAI_BASE_URL ?? process.env.OPENAI_API_BASE ?? "https://api.openai.com").trim();
   return raw.replace(/\/+$/, "");
@@ -30,19 +26,9 @@ export function openaiImagesUrl(): string {
   return `${openaiApiBase()}/v1/images/generations`;
 }
 
-/** fetch() to OpenAI — via OPENAI_HTTP_PROXY when set. */
+/** Server fetch to OpenAI (global HTTP proxy when OPENAI_HTTP_PROXY is set). */
 export function openaiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const proxy = openaiHttpProxy();
-  if (!proxy) {
-    return fetch(url, init);
-  }
-  if (!proxyAgent) {
-    proxyAgent = new ProxyAgent(proxy);
-  }
-  return undiciFetch(url, {
-    ...init,
-    dispatcher: proxyAgent
-  } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
+  return fetch(url, init);
 }
 
 export function formatOpenAiError(raw: string, status?: number): string {
