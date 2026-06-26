@@ -536,7 +536,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
         if (
           titleField &&
           aiHeaders.includes(titleField.header) &&
-          fieldValueNeedsFix(titleField.header, values[titleField.header], true)
+          fieldValueNeedsFill(titleField.header, values[titleField.header], true)
         ) {
           missing = [titleField.header];
         }
