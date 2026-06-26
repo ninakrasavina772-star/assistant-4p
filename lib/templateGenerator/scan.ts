@@ -28,14 +28,58 @@ function isHeaderMarker(v: string): boolean {
   );
 }
 
-function findHeaderRow(ws: ExcelJS.Worksheet): { headerRow: number; hintRow: number } {
-  const candidates = findCandidateHeaderRows(ws);
-  if (candidates.length > 0) {
-    const row = candidates[0]!.row;
-    const maxCol = Math.min(ws.columnCount || 80, 80);
-    return { headerRow: row, hintRow: resolveHintRow(ws, row, maxCol) };
+function looksLikeCategoryText(v: string): boolean {
+  return /входит в категорию|не входят в эту категорию|^категория:|основные параметры|рекомендации по заполнению/i.test(
+    v
+  );
+}
+
+function countShortHeaders(headers: Map<number, string>, maxLen = 80): number {
+  let n = 0;
+  for (const h of headers.values()) {
+    if (h.length >= 2 && h.length <= maxLen && !looksLikeCategoryText(h)) n++;
   }
-  return { headerRow: 1, hintRow: 2 };
+  return n;
+}
+
+function looksLikeCategoryDescriptionRow(headers: Map<number, string>): boolean {
+  const vals = [...headers.values()];
+  if (!vals.length) return true;
+  if (vals.some(looksLikeCategoryText)) return true;
+  const long = vals.filter((h) => h.length > 90).length;
+  if (long >= 1 && vals.length <= 5) return true;
+  return countShortHeaders(headers) < 3;
+}
+
+function findYandexMarketHeaderRow(ws: ExcelJS.Worksheet, maxCol: number): number | null {
+  const maxRow = Math.min(ws.rowCount || 20, 20);
+  for (let r = 1; r <= maxRow; r++) {
+    for (let c = 1; c <= Math.min(maxCol, 10); c++) {
+      const v = normHeader(cellPlainValue(ws.getCell(r, c).value));
+      if (/ваш\s*sku|^sku\s*\*?$/.test(v)) return r;
+    }
+  }
+  return null;
+}
+
+function resolveHeaderRow(ws: ExcelJS.Worksheet, override?: number | null): number {
+  const maxCol = Math.min(ws.columnCount || 80, 80);
+  if (override != null && override >= 1) {
+    const headers = readRowHeaders(ws, override, maxCol);
+    if (!looksLikeCategoryDescriptionRow(headers) && countShortHeaders(headers) >= 3) {
+      return override;
+    }
+  }
+  const ym = findYandexMarketHeaderRow(ws, maxCol);
+  if (ym != null) return ym;
+  const cands = findCandidateHeaderRows(ws);
+  return cands[0]?.row ?? 1;
+}
+
+function findHeaderRow(ws: ExcelJS.Worksheet): { headerRow: number; hintRow: number } {
+  const maxCol = Math.min(ws.columnCount || 80, 80);
+  const row = resolveHeaderRow(ws);
+  return { headerRow: row, hintRow: resolveHintRow(ws, row, maxCol) };
 }
 
 /** Строки-кандидаты на заголовок столбцов (для выбора в UI) */
@@ -46,25 +90,40 @@ export function findCandidateHeaderRows(
   const maxCol = Math.min(ws.columnCount || 80, 80);
   const out: { row: number; label: string; score: number }[] = [];
 
+  const ymRow = findYandexMarketHeaderRow(ws, maxCol);
+
   for (let r = 1; r <= maxRow; r++) {
     if (looksLikeHintRow(ws, r, maxCol)) continue;
     const headers = readRowHeaders(ws, r, maxCol);
     if (headers.size < 3) continue;
+    if (looksLikeCategoryDescriptionRow(headers)) continue;
+    if (countShortHeaders(headers) < 3) continue;
 
     let score = 0;
     const preview: string[] = [];
     for (const h of headers.values()) {
       const n = normHeader(h);
-      preview.push(h.length > 36 ? `${h.slice(0, 33)}…` : h);
-      if (isHeaderMarker(n)) score += 3;
-      else if (/бренд|описание|тип|пол|ean|штрих|изображен/i.test(n)) score += 2;
-      else score += 1;
+      if (h.length > 90) score -= 8;
+      if (looksLikeCategoryText(h)) {
+        score -= 10;
+        continue;
+      }
+      if (h.length <= 50) preview.push(h.length > 36 ? `${h.slice(0, 33)}…` : h);
+      if (isHeaderMarker(n)) score += 5;
+      else if (/критичн|некритичн|качество карточки|название группы|бренд|описание|тип|пол|ean|цена|изображен/i.test(n))
+        score += 3;
+      else if (h.length <= 60) score += 1;
     }
     if (score < 5) continue;
+    if (r === ymRow) score += 20;
+
 
     out.push({
       row: r,
-      label: `Строка ${r}: ${preview.slice(0, 4).join(" · ")}`,
+      label:
+        preview.length > 0
+          ? `Строка ${r}${r === ymRow ? " (рекомендуется)" : ""}: ${preview.slice(0, 4).join(" · ")}`
+          : `Строка ${r}${r === ymRow ? " (рекомендуется)" : ""}`,
       score
     });
   }
@@ -223,10 +282,8 @@ export function scanTemplateSheet(
   if (!ws) return null;
 
   const maxCol = Math.min(ws.columnCount || 80, 80);
-  const { headerRow, hintRow } =
-    headerRowOverride != null && headerRowOverride >= 1
-      ? { headerRow: headerRowOverride, hintRow: resolveHintRow(ws, headerRowOverride, maxCol) }
-      : findHeaderRow(ws);
+  const headerRow = resolveHeaderRow(ws, headerRowOverride);
+  const hintRow = resolveHintRow(ws, headerRow, maxCol);
   const headers = readRowHeaders(ws, headerRow, maxCol);
 
   let skuCol: number | null = null;
