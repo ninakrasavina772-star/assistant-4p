@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AssistantBrand } from "@/components/AssistantBrand";
 import { AssistantRecentUpdates } from "@/components/AssistantRecentUpdates";
 import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
+import { AssistantVersionControls } from "@/components/AssistantVersionControls";
 import { HomeUserProjects } from "@/components/HomeUserProjects";
 import {
   homeCard,
@@ -85,6 +86,8 @@ export default function AssistantHome() {
         </p>
 
         <AssistantRecentUpdates />
+
+        <AssistantVersionControls variant="panel" className="mb-6 sm:mb-8" />
 
         <section className={homeCard} aria-label="Инструменты">
           <div className={homeCardHeader}>

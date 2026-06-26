@@ -4,15 +4,31 @@ import {
   ASSISTANT_TOOL_UPDATES,
   formatAssistantUpdatedAt
 } from "@/lib/assistantToolUpdates";
+import { fetchAssistantVersion } from "@/lib/assistantVersion";
+import { useEffect, useState } from "react";
 
 type Props = {
   href: string;
   className?: string;
 };
 
-/** Подпись «Обновлено …» для сценариев с недавними изменениями */
+/** Подпись «Обновлено …» — дата с сервера (/api/version), не из кэша бандла. */
 export function AssistantToolUpdatedBadge({ href, className = "" }: Props) {
-  const meta = ASSISTANT_TOOL_UPDATES[href];
+  const staticMeta = ASSISTANT_TOOL_UPDATES[href];
+  const [meta, setMeta] = useState(staticMeta);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const data = await fetchAssistantVersion();
+      const live = data?.toolUpdates?.[href];
+      if (!cancelled && live) setMeta(live);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [href]);
+
   if (!meta) return null;
 
   return (
