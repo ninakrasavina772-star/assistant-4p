@@ -19,7 +19,8 @@ import {
   yandexDescriptionTooShort,
   yandexTitleNeedsFix
 } from "@/lib/templateGenerator/yandexRules";
-import { finalizeYandexTitle } from "@/lib/templateGenerator/yandexTitleBuilder";
+import { finalizeYandexTitle, buildYandexTitleFromRow } from "@/lib/templateGenerator/yandexTitleBuilder";
+import { pickProductNameFromCells } from "@/lib/templateGenerator/presets";
 import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
 import { resolveYandexRowPhotos } from "@/lib/templateGenerator/yandexPhotos";
 
@@ -247,13 +248,8 @@ async function callOpenAi(
 }
 
 function pickProductName(row: FillRowInput): string {
-  return (
-    row.cells["Название товара *"] ??
-    row.cells["Название товара"] ??
-    row.productName ??
-    row.cells["name"] ??
-    ""
-  );
+  const fromCells = pickProductNameFromCells(row.cells);
+  return fromCells || row.productName || "";
 }
 
 function pickBrand(row: FillRowInput): string {
@@ -409,10 +405,69 @@ function applyYandexPostProcess(
     if (!raw?.trim()) continue;
     if (isYandexTitleHeader(header)) {
       values[header] = row
-        ? finalizeYandexTitle(raw, row)
+        ? finalizeYandexTitle(raw, {
+            productName: pickProductName(row),
+            brand: pickBrand(row),
+            cells: row.cells
+          })
         : padYandexTitle(raw);
     }
   }
+}
+
+function ensureYandexTitleInValues(
+  values: Record<string, string>,
+  fields: AiFieldSpec[],
+  row: FillRowInput,
+  aiHeaders: string[]
+): void {
+  const titleField = fields.find((f) => isYandexTitleHeader(f.header));
+  if (!titleField || !aiHeaders.includes(titleField.header)) return;
+
+  const current = values[titleField.header]?.trim() ?? "";
+  if (current && !yandexTitleNeedsFix(current)) return;
+
+  const productName = pickProductName(row);
+  if (!productName.trim()) return;
+
+  const enrichedRow: FillRowInput = { ...row, productName };
+  const built = buildYandexTitleFromRow({
+    productName,
+    brand: pickBrand(enrichedRow),
+    typeRu: values["Тип"] ?? values["тип"] ?? row.cells["Тип"] ?? row.cells["тип"],
+    family: values["Семейство"] ?? values["семейство"] ?? row.cells["Семейство"] ?? row.cells["семейство"],
+    pol: values["Пол"] ?? values["пол"] ?? row.cells["Пол"] ?? row.cells["пол"]
+  });
+  if (!built) return;
+
+  const finalized = finalizeYandexTitle(built, {
+    productName,
+    brand: pickBrand(enrichedRow),
+    cells: row.cells
+  });
+  if (finalized && !yandexTitleNeedsFix(finalized)) {
+    values[titleField.header] = finalized;
+  }
+}
+
+function yandexHeadersNeedingAi(
+  fields: AiFieldSpec[],
+  row: FillRowInput,
+  values: Record<string, string>,
+  aiHeaders: string[]
+): string[] {
+  const out = [...aiHeaders];
+  for (const field of fields) {
+    if (!isYandexTitleHeader(field.header)) continue;
+    const v =
+      values[field.header]?.trim() ||
+      row.cells[field.header]?.trim() ||
+      "";
+    if (!v || yandexTitleNeedsFix(v)) {
+      if (!out.includes(field.header)) out.push(field.header);
+    }
+  }
+  return out;
 }
 
 export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResult[]> {
@@ -465,17 +520,35 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       const values: Record<string, string> = { ...csvPrefill.values };
       const sources = [...csvPrefill.sources, ...photoSources];
 
-      const aiHeaders = rowNeedsAiForHeaders(
-        row.cells,
-        fields.map((f) => f.header),
-        workMode === "from_scratch" || batch.overwriteFilled === true
+      const aiHeaders = yandexHeadersNeedingAi(
+        fields,
+        row,
+        values,
+        rowNeedsAiForHeaders(
+          row.cells,
+          fields.map((f) => f.header),
+          workMode === "from_scratch" || batch.overwriteFilled === true
+        )
       );
+      if (isYandex) ensureYandexTitleInValues(values, fields, row, aiHeaders);
       let missing = fields
         .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header)
         .slice(0, 14);
 
+      if (missing.length === 0 && isYandex) {
+        const titleField = fields.find((f) => isYandexTitleHeader(f.header));
+        if (
+          titleField &&
+          aiHeaders.includes(titleField.header) &&
+          (!values[titleField.header]?.trim() || yandexTitleNeedsFix(values[titleField.header]!))
+        ) {
+          missing = [titleField.header];
+        }
+      }
+
       if (missing.length === 0) {
+        if (isYandex) applyYandexPostProcess(values, row);
         out.push({
           row: row.row,
           ok: true,

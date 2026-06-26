@@ -52,7 +52,7 @@ import { injectVariationProducts, prefillYandexImageCells } from "@/lib/template
 import { normVariationSku, parseVariationIdsFromText } from "@/lib/templateGenerator/parseVariationIds";
 import { LETUAL_API_CHUNK } from "@/lib/letualMainPhotoConstants";
 import type { LetualGalleryPhoto } from "@/lib/letualPickTypes";
-import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
+import { isContentDefaultColumn, pickProductNameFromCells } from "@/lib/templateGenerator/presets";
 import {
   deleteWorksheetRows,
   findEanHeader,
@@ -116,6 +116,19 @@ function buildDefaultSelection(scan: TemplateSheetScan): ColumnSelection[] {
       mode: "ai" as const,
       dropdownSource: defaultDropdownSource(c)
     }));
+}
+
+function mergeContentSelection(
+  scan: TemplateSheetScan,
+  userSelection: ColumnSelection[],
+  fillStage?: RunFillOptions["fillStage"]
+): ColumnSelection[] {
+  if (fillStage !== "content_only") return userSelection;
+  const byHeader = new Map(userSelection.map((s) => [s.header, s]));
+  for (const s of buildDefaultSelection(scan)) {
+    if (!byHeader.has(s.header)) byHeader.set(s.header, s);
+  }
+  return [...byHeader.values()];
 }
 
 function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
@@ -464,7 +477,7 @@ export function TemplateGeneratorTool() {
           ? `Этап 1: ${groupCount} групп дублей просмотрены — дубли оставлены в шаблоне.`
           : "Этап 1: дублей не найдено (по EAN и артикулу)."
     );
-    setProgress("Этап 2: отметьте столбцы и нажмите «Заполнить контент».");
+    setProgress("Этап 2: нажмите «Заполнить контент» — название, описание и ноты.");
     setError("");
   }, [scan, rowsMarkedForRemoval, refreshDupGroups, bumpSheetScan]);
 
@@ -620,6 +633,7 @@ export function TemplateGeneratorTool() {
       dropdownSource: {} as Record<string, DropdownSource>
     };
     for (const c of editable) {
+      defaults.enabled[c.header] = Boolean(c.contentDefault || isContentDefaultColumn(c.header));
       const listVals = resolveDropdownValues(c, "list_sheet");
       const tplVals = resolveDropdownValues(c, "template_validation");
       defaults.strict[c.header] = listVals.length > 0 || tplVals.length > 0;
@@ -1093,8 +1107,11 @@ export function TemplateGeneratorTool() {
       setError("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
       return;
     }
-    const activeSelection =
-      opts?.selectionOverride?.length ? opts.selectionOverride : selectionList;
+    const activeSelection = mergeContentSelection(
+      scan,
+      opts?.selectionOverride?.length ? opts.selectionOverride : selectionList,
+      fillStage
+    );
     if (activeSelection.length === 0) {
       setError("Выберите хотя бы один столбец (или загрузите шаблон с контентными полями)");
       return;
@@ -1295,7 +1312,7 @@ export function TemplateGeneratorTool() {
           return {
             row: ctx.row,
             sku: ctx.sku,
-            productName: ctx.cells["Название товара *"] ?? ctx.cells["Название товара"] ?? "",
+            productName: pickProductNameFromCells(ctx.cells),
             brand: ctx.cells["Бренд *"] ?? ctx.cells["Бренд"] ?? "",
             cells,
             csvData:

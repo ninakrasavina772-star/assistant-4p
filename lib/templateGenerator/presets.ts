@@ -82,6 +82,21 @@ export function isContentDefaultColumn(header: string): boolean {
   return CONTENT_DEFAULT_HEADERS.has(normHeader(header));
 }
 
+/** Имя товара для AI: сначала «Название товара», иначе «Название модели» из шаблона ЯМ */
+export function pickProductNameFromCells(cells: Record<string, string>): string {
+  for (const key of [
+    "Название товара *",
+    "Название товара",
+    "Название модели *",
+    "Название модели",
+    "name"
+  ]) {
+    const v = String(cells[key] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
 /** Ключевые контентные поля карточки (описание, ноты, тип…) — приоритет при генерации */
 const CORE_CONTENT_PATTERNS: RegExp[] = [
   /^название товара/,

@@ -76,6 +76,10 @@ function normTemplateKey(header: string): string {
   return normHeader(header);
 }
 
+function isModelNameTemplate(header: string): boolean {
+  return /^название модели/.test(normTemplateKey(header));
+}
+
 function pickCsvValue(csvData: Record<string, string>, csvHeader: string): string {
   const direct = csvData[csvHeader]?.trim();
   if (direct) return direct;
@@ -95,7 +99,15 @@ function findCsvKeyForTemplate(
     if (!v.trim()) continue;
     const rawKey = k.startsWith("csv:") ? k.slice(4) : k;
     const cn = normHeader(rawKey);
-    if (cn === tn || cn.includes(tn) || tn.includes(cn)) return rawKey;
+    if (cn === tn) return rawKey;
+    if (isModelNameTemplate(templateHeader)) {
+      if (/^модель/.test(cn) || cn === "model" || cn === "model name") return rawKey;
+      continue;
+    }
+    if (tn.includes("товара") && (cn === "название" || cn === "name" || cn === "product name")) {
+      return rawKey;
+    }
+    if (cn.includes(tn) || (tn.includes(cn) && cn.length >= 8)) return rawKey;
   }
 
   const syn = CSV_SYNONYM_PATTERNS.find((s) => s.template === tn || tn.startsWith(s.template));
@@ -158,6 +170,8 @@ export function prefillFromCsvData(
   const csvHeaders: string[] = [];
 
   for (const field of fields) {
+    if (isModelNameTemplate(field.header)) continue;
+
     const existing = templateCells[field.header]?.trim();
     if (existing && keepTemplate) {
       values[field.header] = existing;
