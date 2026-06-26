@@ -12,6 +12,11 @@ export type FillScopeOptions = {
   yandex?: boolean;
 };
 
+export function isPlaceholderCellValue(v: string): boolean {
+  const t = v.trim().toLowerCase();
+  return !t || t === "-" || t === "—" || t === "–" || t === "n/a" || t === "нет";
+}
+
 function cellNeedsFill(
   cells: Record<string, string>,
   header: string,

@@ -4,6 +4,7 @@ import {
   sanitizeYandexTitle,
   stripYandexTitleNoise,
   yandexTitleLanguageNeedsFix,
+  yandexTitleNeedsFix,
   YANDEX_TITLE_MAX_LEN,
   YANDEX_TITLE_MIN_LEN
 } from "@/lib/templateGenerator/yandexRules";
@@ -137,7 +138,7 @@ export function buildYandexTitleFromRow(input: {
   const type = (input.typeRu || "").trim() || inferTypeFromName(input.productName, input.pol || "");
   const model = extractModel(input.productName, brand) || extractModel(input.productName, "");
   const adj = familyToAdjective(input.family || "") || objectivePad(input.productName, type);
-  let title = [type, brand, model, adj].filter(Boolean).join(" ");
+  let title = dedupeTitleParts(type, brand, model, adj);
   title = sanitizeYandexTitle(title);
   title = extendToMinLen(title, input.productName, input.family || "");
   if (title.length > YANDEX_TITLE_MAX_LEN) {

@@ -200,11 +200,12 @@ export function padYandexTitle(title: string): string {
 }
 
 export function yandexTitleNeedsFix(text: string): boolean {
-  const raw = stripYandexTitleNoise(text);
-  if (hasBannedTitleAdjectives(raw)) return true;
-  if (yandexTitleLanguageNeedsFix(raw)) return true;
-  const t = sanitizeYandexTitle(raw);
-  return t.length < YANDEX_TITLE_MIN_LEN || t.length > YANDEX_TITLE_MAX_LEN;
+  const t = sanitizeYandexTitle(text).trim();
+  if (!t) return true;
+  if (t.length < YANDEX_TITLE_MIN_LEN || t.length > YANDEX_TITLE_MAX_LEN) return true;
+  if (yandexTitleLanguageNeedsFix(t)) return true;
+  if (hasBannedTitleAdjectives(t)) return true;
+  return false;
 }
 
 export function yandexDescriptionTooShort(text: string): boolean {
