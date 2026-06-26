@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type ExcelJS from "exceljs";
 import { readWorkbookFromBuffer, writeWorkbookToBlob } from "@/lib/ozonImageExcel";
-import { applyFillResults, prefillPhotoReviewColumn } from "@/lib/templateGenerator/apply";
+import { applyFillResults, applyYandexTitleFixes, prefillPhotoReviewColumn } from "@/lib/templateGenerator/apply";
 import type { FillRowInput, FillRowResult, TemplateRowContext } from "@/lib/templateGenerator/types";
 import type { MetabaseProductRow } from "@/lib/templateGenerator/metabaseProduct";
 import {
@@ -1453,6 +1453,9 @@ export function TemplateGeneratorTool() {
           applyOverwrite,
           scan.imageCol
         );
+        if (marketplace === "yandex" && !isPhotosStage) {
+          applyYandexTitleFixes(ws, scan, contexts.slice(0, doneRows));
+        }
         if (imageHeader && (isPhotosStage || marketplace !== "yandex")) {
           await prefillPhotoReviewColumn(
             ws,

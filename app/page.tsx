@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { AssistantBrand } from "@/components/AssistantBrand";
+import { AssistantRecentUpdates } from "@/components/AssistantRecentUpdates";
 import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
 import { HomeUserProjects } from "@/components/HomeUserProjects";
 import {
@@ -82,6 +83,8 @@ export default function AssistantHome() {
         <p className="mb-6 text-center text-sm text-slate-500 sm:mb-8">
           Инструменты 4Partners в одном месте
         </p>
+
+        <AssistantRecentUpdates />
 
         <section className={homeCard} aria-label="Инструменты">
           <div className={homeCardHeader}>

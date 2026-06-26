@@ -4,22 +4,49 @@ export const ASSISTANT_TOOL_UPDATES: Record<
   { updatedAt: string; note?: string }
 > = {
   "/template-generator": {
-    updatedAt: "2025-06-25T20:30:00+03:00",
+    updatedAt: "2026-06-25T21:15:00+03:00",
     note: "ЯМ: русские названия, автозаполнение контента"
   },
   "/letual-main-photo": {
-    updatedAt: "2025-06-25T12:00:00+03:00",
+    updatedAt: "2026-06-25T12:00:00+03:00",
     note: "Галереи и выбор главного фото"
   },
   "/ozon-images": {
-    updatedAt: "2025-06-25T10:00:00+03:00",
+    updatedAt: "2026-06-25T10:00:00+03:00",
     note: "Инфографика парфюм"
   },
   "/ozon-cosmetics": {
-    updatedAt: "2025-06-25T10:00:00+03:00",
+    updatedAt: "2026-06-25T10:00:00+03:00",
     note: "Инфографика косметика"
   }
 };
+
+/** Подписи сценариев для блока «Недавние обновления» на главной */
+export const ASSISTANT_TOOL_TITLES: Record<string, string> = {
+  "/template-generator": "Генератор шаблонов",
+  "/letual-main-photo": "Главное фото · Летуаль",
+  "/ozon-images": "Инфографика · Ozon парфюм",
+  "/ozon-cosmetics": "Инфографика · Ozon косметика"
+};
+
+export type AssistantToolUpdateEntry = {
+  href: string;
+  title: string;
+  updatedAt: string;
+  note?: string;
+};
+
+export function listAssistantToolUpdates(): AssistantToolUpdateEntry[] {
+  return Object.entries(ASSISTANT_TOOL_UPDATES)
+    .map(([href, meta]) => ({
+      href,
+      title: ASSISTANT_TOOL_TITLES[href] ?? href,
+      ...meta
+    }))
+    .sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+}
 
 export function formatAssistantUpdatedAt(iso: string): string {
   try {

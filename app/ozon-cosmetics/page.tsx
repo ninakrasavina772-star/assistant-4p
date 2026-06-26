@@ -1,4 +1,6 @@
 import { AssistantSubpageShell } from "@/components/AssistantSubpageShell";
+import { AssistantBuildStamp } from "@/components/AssistantBuildStamp";
+import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
 import { PodruzhkaCosmeticsOzonTool } from "@/components/PodruzhkaCosmeticsOzonTool";
 
 export const metadata = {
@@ -16,6 +18,8 @@ export default function OzonCosmeticsPage() {
           Три шага: AI-категорийный менеджер заполняет <strong>model</strong> и{" "}
           <strong>benefit 1–3</strong> → шаблон <strong>foto 2</strong> → <strong>Foto 3</strong> для
           Ozon. Макет как у ароматов, без объёма на карточке.
+          <AssistantToolUpdatedBadge href="/ozon-cosmetics" className="mt-2" />
+          <AssistantBuildStamp className="mt-1" />
         </>
       }
     >

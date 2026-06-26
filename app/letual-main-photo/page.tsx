@@ -1,4 +1,6 @@
 import { AssistantSubpageShell } from "@/components/AssistantSubpageShell";
+import { AssistantBuildStamp } from "@/components/AssistantBuildStamp";
+import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
 import { LetualMainPhotoTool } from "@/components/LetualMainPhotoTool";
 
 export const metadata = {
@@ -16,6 +18,8 @@ export default function LetualMainPhotoPage() {
           Квадрат <strong>1000×1000</strong>, белый фон, без инфографики. Пакет до{" "}
           <strong>50 variation_id</strong>: сначала подбор фото, затем генерация. Или подгонка по своим{" "}
           <strong>URL</strong>.
+          <AssistantToolUpdatedBadge href="/letual-main-photo" className="mt-2" />
+          <AssistantBuildStamp className="mt-1" />
         </>
       }
     >

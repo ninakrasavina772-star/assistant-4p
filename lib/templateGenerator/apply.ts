@@ -8,8 +8,13 @@ import {
   formatPhotoReviewValue
 } from "@/lib/templateGenerator/photos";
 import { uniqueUrlsForImageCell } from "@/lib/templateGenerator/imageUrlDedupe";
-import { DEFAULT_PHOTO_REVIEW_COLUMN, normHeader } from "@/lib/templateGenerator/presets";
+import {
+  DEFAULT_PHOTO_REVIEW_COLUMN,
+  normHeader,
+  pickProductNameFromCells
+} from "@/lib/templateGenerator/presets";
 import { isYandexTitleHeader, yandexTitleNeedsFix } from "@/lib/templateGenerator/yandexRules";
+import { buildYandexTitleFromRow } from "@/lib/templateGenerator/yandexTitleBuilder";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { parseImageUrls } from "@/lib/templateGenerator/photos";
 
@@ -59,6 +64,39 @@ export function applyFillResults(
     if (res.imageUrls?.length && imageCol) {
       ws.getCell(res.row, imageCol).value = formatImageCellValue(res.imageUrls);
     }
+  }
+  return filled;
+}
+
+/** Локально: русские названия ЯМ без ожидания AI (английский тип в колонке «Название товара») */
+export function applyYandexTitleFixes(
+  ws: ExcelJS.Worksheet,
+  scan: TemplateSheetScan,
+  contexts: TemplateRowContext[]
+): number {
+  const titleCol = scan.columns.find((c) => isYandexTitleHeader(c.header))?.col;
+  if (!titleCol) return 0;
+
+  let filled = 0;
+  for (const ctx of contexts) {
+    const existing = cellPlainValue(ws.getCell(ctx.row, titleCol).value).trim();
+    if (existing && !yandexTitleNeedsFix(existing)) continue;
+
+    const productName = pickProductNameFromCells(ctx.cells);
+    if (!productName.trim()) continue;
+
+    const brand = ctx.cells["Бренд *"] ?? ctx.cells["Бренд"] ?? "";
+    const built = buildYandexTitleFromRow({
+      productName,
+      brand,
+      typeRu: ctx.cells["Тип"] ?? ctx.cells["тип"],
+      family: ctx.cells["Семейство"] ?? ctx.cells["семейство"],
+      pol: ctx.cells["Пол"] ?? ctx.cells["пол"]
+    });
+    if (!built.trim() || yandexTitleNeedsFix(built)) continue;
+
+    ws.getCell(ctx.row, titleCol).value = built;
+    filled++;
   }
   return filled;
 }

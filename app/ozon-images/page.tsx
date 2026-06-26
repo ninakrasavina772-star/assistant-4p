@@ -1,4 +1,6 @@
 import { AssistantSubpageShell } from "@/components/AssistantSubpageShell";
+import { AssistantBuildStamp } from "@/components/AssistantBuildStamp";
+import { AssistantToolUpdatedBadge } from "@/components/AssistantToolUpdatedBadge";
 import { PodruzhkaOzonTool } from "@/components/PodruzhkaOzonTool";
 
 export const metadata = {
@@ -15,6 +17,8 @@ export default function OzonImagesPage() {
         <>
           Три шага: AI прописывает <strong>model</strong> и ноты → подстановка в шаблон{" "}
           <strong>foto 2</strong> → <strong>Foto 3</strong> с https для загрузки в Ozon.
+          <AssistantToolUpdatedBadge href="/ozon-images" className="mt-2" />
+          <AssistantBuildStamp className="mt-1" />
         </>
       }
     >
