@@ -1773,7 +1773,7 @@ export function TemplateGeneratorTool() {
       const n = applyPhotoReviewToWorkbook(ws, s, updated, { imageHeader: imageHeaderName });
       setPhotoReviewItems(updated);
       bumpSheetScan();
-      setBatchNotice(`Доп. фото обработаны и записаны для ${n} строк`);
+      setBatchNotice(`Фото обработаны для ${n} строк — нажмите «Выгрузить в Excel»`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка обработки фото");
     } finally {
@@ -2749,7 +2749,8 @@ export function TemplateGeneratorTool() {
           progress={photoReviewProgress}
           onChange={setPhotoReviewItems}
           onRefresh={() => void refreshPhotoReview()}
-          onApply={() => void applyPhotoReview()}
+          onProcess={() => void applyPhotoReview()}
+          onDownload={() => void download()}
         />
       ) : null}
 

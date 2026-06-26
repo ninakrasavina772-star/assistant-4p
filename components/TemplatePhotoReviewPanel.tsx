@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { homeBtnPrimary, homeCard, homeCardBody, homeCardHeader, homeCardTitle } from "@/components/homeTheme";
 import {
   photoMatchLabel,
+  photoReviewMainCandidate,
   photoReviewMainUrl,
   type PhotoReviewItem
 } from "@/lib/templateGenerator/photoReview";
@@ -14,8 +15,13 @@ type Props = {
   progress?: string | null;
   onChange: (items: PhotoReviewItem[]) => void;
   onRefresh: () => void;
-  onApply: () => void;
+  /** Обработка Летуаль + запись в книгу */
+  onProcess: () => void;
+  /** Скачать Excel после отбора */
+  onDownload: () => void;
 };
+
+type Lightbox = { url: string; title?: string };
 
 function setMainCandidate(
   items: PhotoReviewItem[],
@@ -56,27 +62,56 @@ function toggleCandidate(
   );
 }
 
+function PhotoThumb({
+  url,
+  alt,
+  className,
+  onOpen
+}: {
+  url: string;
+  alt?: string;
+  className?: string;
+  onOpen: (url: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`group block overflow-hidden rounded border border-slate-200 bg-white ${className ?? ""}`}
+      onClick={() => onOpen(url)}
+      title="Открыть крупно"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt={alt ?? ""} className="h-full w-full object-contain" />
+      <span className="mt-0.5 block text-center text-[10px] text-sky-700 group-hover:underline">
+        открыть
+      </span>
+    </button>
+  );
+}
+
 export function TemplatePhotoReviewPanel({
   items,
   busy,
   progress,
   onChange,
   onRefresh,
-  onApply
+  onProcess,
+  onDownload
 }: Props) {
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [hideProcessed, setHideProcessed] = useState(false);
+  const [lightbox, setLightbox] = useState<Lightbox | null>(null);
+  const [pickerRow, setPickerRow] = useState<number | null>(null);
 
   const stats = useMemo(() => {
-    let photos = 0;
     let selected = 0;
     let processed = 0;
+    let ready = 0;
     for (const it of items) {
-      photos += it.candidates.length;
       selected += it.candidates.filter((c) => c.selected).length;
       if (it.processed) processed += 1;
+      if (it.candidates.some((c) => c.isMain)) ready += 1;
     }
-    return { rows: items.length, photos, selected, processed };
+    return { rows: items.length, selected, processed, ready };
   }, [items]);
 
   const visibleItems = useMemo(
@@ -84,12 +119,18 @@ export function TemplatePhotoReviewPanel({
     [items, hideProcessed]
   );
 
+  const pickerItem = pickerRow != null ? items.find((it) => it.row === pickerRow) : null;
+
+  const openLightbox = (url: string, title?: string) => setLightbox({ url, title });
+
+  const canDownload = stats.processed > 0 || stats.ready > 0;
+
   return (
     <section className={homeCard}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
         <h2 className={homeCardTitle}>
           {items.length
-            ? `Выбор фото (${stats.rows} SKU · ${stats.selected} доп. · ${stats.processed} обработано)`
+            ? `Выбор фото (${stats.rows} SKU · ${stats.processed} обработано)`
             : "Выбор фото"}
         </h2>
         <div className="flex flex-wrap gap-2">
@@ -115,8 +156,21 @@ export function TemplatePhotoReviewPanel({
               >
                 {hideProcessed ? "Показать обработанные" : "Скрыть обработанные"}
               </button>
-              <button type="button" className={homeBtnPrimary} disabled={busy} onClick={onApply}>
-                {busy ? "Обработка…" : "Применить в Excel"}
+              <button
+                type="button"
+                className="rounded-lg bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                disabled={busy || !stats.ready}
+                onClick={onProcess}
+              >
+                {busy ? "Обработка…" : "Обработать фото"}
+              </button>
+              <button
+                type="button"
+                className={homeBtnPrimary}
+                disabled={busy || !canDownload}
+                onClick={onDownload}
+              >
+                Выгрузить в Excel
               </button>
             </>
           ) : null}
@@ -125,133 +179,217 @@ export function TemplatePhotoReviewPanel({
       <div className={`${homeCardBody} space-y-3`}>
         {!items.length ? (
           <p className="text-sm text-slate-600">
-            Загрузите фото из Metabase. AI отметит главное и доп. фото без дублей — вы можете
-            скорректировать. «Главное» — первое фото в Excel, галочки — дополнительные.
+            Загрузите фото из Metabase. AI отметит главное и доп. без дублей — проверьте выбор,
+            нажмите «Обработать фото», затем «Выгрузить в Excel».
           </p>
         ) : (
-          <div className="max-h-[70vh] space-y-3 overflow-y-auto">
+          <div className="overflow-x-auto">
             {visibleItems.length === 0 ? (
               <p className="text-sm text-slate-600">
-                Все позиции обработаны. Нажмите «Показать обработанные», чтобы увидеть их снова.
+                Все позиции обработаны. Нажмите «Показать обработанные».
               </p>
-            ) : null}
-            {visibleItems.map((it) => {
-              const open = expanded[it.row] !== false;
-              const name = it.productName || it.brandName || it.sku;
-              const preview = photoReviewMainUrl(it);
-              const extraCount = it.candidates.filter((c) => c.selected).length;
-              return (
-                <div
-                  key={it.row}
-                  className={`rounded-lg border p-3 ${
-                    it.processed
-                      ? "border-emerald-200 bg-emerald-50/30"
-                      : "border-slate-200 bg-white"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    className="flex w-full items-start gap-3 text-left"
-                    onClick={() => setExpanded((m) => ({ ...m, [it.row]: !open }))}
-                  >
-                    {preview ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={preview}
-                        alt=""
-                        className="h-16 w-16 shrink-0 rounded border border-slate-200 bg-white object-contain"
-                      />
-                    ) : (
-                      <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded border border-dashed border-slate-200 text-xs text-slate-400">
-                        нет
-                      </span>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-medium text-slate-900">{name}</p>
-                        {it.processed ? (
-                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
-                            обработано
-                          </span>
-                        ) : null}
-                        {it.aiPicked && !it.processed ? (
-                          <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">
-                            AI
-                          </span>
-                        ) : null}
-                      </div>
-                      <p className="font-mono text-xs text-slate-500">
-                        артикул {it.sku} · строка {it.row}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-600">
-                        {it.candidates.length} фото · главное выбрано · доп. {extraCount}
-                      </p>
-                    </div>
-                    <span className="text-xs text-slate-400">{open ? "▲" : "▼"}</span>
-                  </button>
-                  {open ? (
-                    <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                      {it.candidates.length ? (
-                        it.candidates.map((c) => (
-                          <div
-                            key={`${c.variationId}-${c.url}`}
-                            className={`flex w-[7.5rem] flex-col items-stretch gap-1 rounded-lg border p-1 ${
-                              c.isMain
-                                ? "border-amber-400 bg-amber-50/60 ring-1 ring-amber-200"
-                                : c.selected
-                                  ? "border-emerald-400 bg-emerald-50/50"
-                                  : "border-slate-200 opacity-80"
-                            }`}
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={c.processedUrl || c.url}
-                              alt=""
-                              className="h-24 w-full rounded object-contain bg-white"
+            ) : (
+              <table className="w-full min-w-[880px] text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                    <th className="pb-2 pr-3">Товар</th>
+                    <th className="pb-2 pr-3">Главное</th>
+                    <th className="pb-2 pr-3">Доп. фото</th>
+                    <th className="pb-2 pr-3">Статус</th>
+                    <th className="pb-2">Выбор</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {visibleItems.map((it) => {
+                    const name = it.productName || it.brandName || it.sku;
+                    const main = photoReviewMainCandidate(it);
+                    const mainSrc = main ? main.processedUrl || main.url : null;
+                    const extras = it.candidates.filter((c) => c.selected && !c.isMain);
+                    return (
+                      <tr key={it.row} className={it.processed ? "bg-emerald-50/40" : undefined}>
+                        <td className="py-3 pr-3 align-top">
+                          <p className="font-medium text-slate-900">{name}</p>
+                          <p className="font-mono text-xs text-slate-500">
+                            {it.sku} · стр. {it.row}
+                          </p>
+                        </td>
+                        <td className="py-3 pr-3 align-top">
+                          {mainSrc ? (
+                            <PhotoThumb
+                              url={mainSrc}
+                              className="h-28 w-28"
+                              onOpen={(u) => openLightbox(u, `${name} — главное`)}
                             />
-                            <span className="truncate px-0.5 font-mono text-[10px] text-slate-600">
-                              V{c.variationId}
-                            </span>
-                            <span className="px-0.5 text-[10px] leading-tight text-slate-500">
-                              {photoMatchLabel(c.matchType)}
-                            </span>
-                            <label className="flex items-center gap-1 px-0.5 text-[10px] text-amber-900">
-                              <input
-                                type="radio"
-                                name={`main-${it.row}`}
-                                checked={c.isMain}
-                                onChange={() => onChange(setMainCandidate(items, it.row, c.url))}
-                              />
-                              главное
-                            </label>
-                            {!c.isMain ? (
-                              <label className="flex items-center gap-1 px-0.5 text-xs text-slate-700">
-                                <input
-                                  type="checkbox"
-                                  checked={c.selected}
-                                  onChange={(e) =>
-                                    onChange(
-                                      toggleCandidate(items, it.row, c.url, e.target.checked)
-                                    )
-                                  }
+                          ) : (
+                            <span className="text-xs text-slate-400">не выбрано</span>
+                          )}
+                        </td>
+                        <td className="py-3 pr-3 align-top">
+                          {extras.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {extras.map((c) => (
+                                <PhotoThumb
+                                  key={c.url}
+                                  url={c.processedUrl || c.url}
+                                  className="h-16 w-16"
+                                  onOpen={(u) => openLightbox(u, `${name} — доп.`)}
                                 />
-                                доп.
-                              </label>
-                            ) : null}
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-3 pr-3 align-top">
+                          <div className="flex flex-col gap-1">
+                            {it.processed ? (
+                              <span className="inline-block w-fit rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
+                                обработано
+                              </span>
+                            ) : it.aiPicked ? (
+                              <span className="inline-block w-fit rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800">
+                                AI
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-400">ожидает</span>
+                            )}
+                            <span className="text-xs text-slate-600">
+                              доп.: {extras.length} / {it.candidates.length - 1}
+                            </span>
                           </div>
-                        ))
-                      ) : (
-                        <p className="text-xs text-slate-500">Нет фото для этой вариации.</p>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+                        </td>
+                        <td className="py-3 align-top">
+                          <button
+                            type="button"
+                            className="text-left text-xs text-sky-700 hover:underline"
+                            onClick={() => setPickerRow(it.row)}
+                          >
+                            Все фото ({it.candidates.length})
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
         {progress ? <p className="text-xs text-slate-600">{progress}</p> : null}
       </div>
+
+      {pickerItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-slate-900">
+                  {pickerItem.productName || pickerItem.brandName || pickerItem.sku}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  артикул {pickerItem.sku} · главное (радио) + доп. (галочки)
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded px-2 text-slate-500 hover:bg-slate-100"
+                onClick={() => setPickerRow(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+              {pickerItem.candidates.map((c) => (
+                <div
+                  key={`${c.variationId}-${c.url}`}
+                  className={`rounded-lg border p-2 ${
+                    c.isMain
+                      ? "border-amber-400 bg-amber-50/60"
+                      : c.selected
+                        ? "border-emerald-400 bg-emerald-50/50"
+                        : "border-slate-200"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="w-full"
+                    onClick={() =>
+                      openLightbox(
+                        c.processedUrl || c.url,
+                        `V${c.variationId} · ${photoMatchLabel(c.matchType)}`
+                      )
+                    }
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={c.processedUrl || c.url}
+                      alt=""
+                      className="mx-auto h-36 w-full object-contain bg-white"
+                    />
+                    <span className="mt-1 block text-[10px] text-sky-700 hover:underline">
+                      открыть крупно
+                    </span>
+                  </button>
+                  <p className="mt-1 font-mono text-[10px] text-slate-600">V{c.variationId}</p>
+                  <p className="text-[10px] text-slate-500">{photoMatchLabel(c.matchType)}</p>
+                  <label className="mt-1 flex items-center gap-1 text-[10px] text-amber-900">
+                    <input
+                      type="radio"
+                      name={`main-picker-${pickerItem.row}`}
+                      checked={c.isMain}
+                      onChange={() => onChange(setMainCandidate(items, pickerItem.row, c.url))}
+                    />
+                    главное
+                  </label>
+                  {!c.isMain ? (
+                    <label className="flex items-center gap-1 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={c.selected}
+                        onChange={(e) =>
+                          onChange(
+                            toggleCandidate(items, pickerItem.row, c.url, e.target.checked)
+                          )
+                        }
+                      />
+                      доп.
+                    </label>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {lightbox ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <div
+            className="relative max-h-[96vh] max-w-[96vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute -top-10 right-0 rounded bg-white/10 px-3 py-1 text-sm text-white hover:bg-white/20"
+              onClick={() => setLightbox(null)}
+            >
+              Закрыть
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightbox.url}
+              alt=""
+              className="max-h-[90vh] max-w-full rounded-lg bg-white object-contain shadow-2xl"
+            />
+            {lightbox.title ? (
+              <p className="mt-2 text-center text-sm text-white/90">{lightbox.title}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
