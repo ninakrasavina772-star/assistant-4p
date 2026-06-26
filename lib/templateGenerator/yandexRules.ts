@@ -10,7 +10,7 @@ const GENERIC_ADJ_RE =
 
 /** Английские типы/формулировки вместо русского типа товара */
 const EN_PRODUCT_TYPE_RE =
-  /\b(?:eau de parfum|eau de toilette|eau de cologne|edt|edp|extrait de parfum|parfum spray|parfum\b|toilette\b|for women|for men|for her|for him|women eau|men eau|unisex eau|vapo(?:risateur)?|vaporisateur|deodorant spray|body spray|eau fra[iî]che)\b/i;
+  /\b(?:eau de parfum|eau de toilette|eau de cologne|edt|edp|extrait de parfum|parfum spray|parfum\b|toilette\b|for women|for men|for her|for him|\bwomen\b|\bmen\b|\bfemme\b|\bhomme\b|women eau|men eau|unisex eau|vapo(?:risateur)?|vaporisateur|deodorant spray|body spray|eau fra[iî]che|\bspray\b)\b/i;
 
 const RU_PRODUCT_TYPE_START =
   /^(?:парфюмерная вода|туалетная вода|духи|одеколон|парфюмированный спрей|парфюмерия|женская парфюмерия|мужская парфюмерия|парфюмерия унисекс|крем|гель|лосьон|шампунь|маска|сыворотка|тональный крем|помада|тушь|пудра|консилер|бальзам|масло|скраб|пенка|спрей|дезодорант)/i;

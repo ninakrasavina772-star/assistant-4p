@@ -19,6 +19,7 @@ import {
   yandexDescriptionTooShort,
   yandexTitleNeedsFix
 } from "@/lib/templateGenerator/yandexRules";
+import { finalizeYandexTitle } from "@/lib/templateGenerator/yandexTitleBuilder";
 import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
 import { resolveYandexRowPhotos } from "@/lib/templateGenerator/yandexPhotos";
 
@@ -400,11 +401,16 @@ async function getBrandSnippet(
   return snippet;
 }
 
-function applyYandexPostProcess(values: Record<string, string>): void {
+function applyYandexPostProcess(
+  values: Record<string, string>,
+  row?: FillRowInput
+): void {
   for (const [header, raw] of Object.entries(values)) {
     if (!raw?.trim()) continue;
     if (isYandexTitleHeader(header)) {
-      values[header] = padYandexTitle(raw);
+      values[header] = row
+        ? finalizeYandexTitle(raw, row)
+        : padYandexTitle(raw);
     }
   }
 }
@@ -496,7 +502,7 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
       });
       const json = await callOpenAi(batch.openaiApiKey, user, batch.model, batch.marketplace);
       Object.assign(values, parseAiFields(json, fields, row.sku));
-      applyYandexPostProcess(values);
+      applyYandexPostProcess(values, row);
       sources.push(...(json.sources ?? []).map((s) => `AI: ${s}`));
 
       missing = fields
@@ -547,13 +553,32 @@ export async function fillTemplateRows(batch: FillBatchIn): Promise<FillRowResul
           batch.marketplace
         );
         Object.assign(values, parseAiFields(json2, fields, row.sku));
-        applyYandexPostProcess(values);
+        applyYandexPostProcess(values, row);
         sources.push(...(json2.sources ?? []).map((s) => `AI retry: ${s}`));
       }
 
       const stillMissing = fields
         .filter((f) => aiHeaders.includes(f.header) && !values[f.header]?.trim())
         .map((f) => f.header);
+      if (isYandex) {
+        const titleHeader = fields.find((f) => isYandexTitleHeader(f.header))?.header;
+        if (titleHeader && values[titleHeader]?.trim()) {
+          values[titleHeader] = finalizeYandexTitle(values[titleHeader]!, row);
+          if (yandexTitleNeedsFix(values[titleHeader]!)) {
+            out.push({
+              row: row.row,
+              ok: false,
+              values,
+              extraPhotos,
+              imageUrls,
+              sources,
+              error: "Название не прошло проверку: нужен тип на русском + бренд + модель"
+            });
+            continue;
+          }
+        }
+      }
+
       if (stillMissing.length > 0) {
         out.push({
           row: row.row,

@@ -1,4 +1,5 @@
 import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
+import { yandexTitleLanguageNeedsFix } from "@/lib/templateGenerator/yandexRules";
 import { normHeader } from "@/lib/templateGenerator/presets";
 import type { CsvColumnMap, FillRowResult } from "@/lib/templateGenerator/types";
 import {
@@ -173,6 +174,12 @@ export function prefillFromCsvData(
             ? applyDropdownValue(raw, field.allowed, field.header) ?? ""
             : raw;
         if (v) {
+          if (
+            normTemplateKey(field.header) === "название товара" &&
+            yandexTitleLanguageNeedsFix(v)
+          ) {
+            continue;
+          }
           values[field.header] = v;
           csvHeaders.push(field.header);
           sources.push(`${field.header}: CSV «${csvKey}»`);

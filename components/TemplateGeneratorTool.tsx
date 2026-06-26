@@ -50,6 +50,8 @@ import { applyYandexPricesToWorksheet } from "@/lib/templateGenerator/applyYande
 import { filterHumanDropdownValues } from "@/lib/templateGenerator/fieldValues";
 import { injectVariationProducts, prefillYandexImageCells } from "@/lib/templateGenerator/injectVariationRows";
 import { normVariationSku, parseVariationIdsFromText } from "@/lib/templateGenerator/parseVariationIds";
+import { LETUAL_API_CHUNK } from "@/lib/letualMainPhotoConstants";
+import type { LetualGalleryPhoto } from "@/lib/letualPickTypes";
 import { isContentDefaultColumn } from "@/lib/templateGenerator/presets";
 import {
   deleteWorksheetRows,
@@ -63,6 +65,7 @@ import { YANDEX_PHOTO_MANAGER_APPEND } from "@/lib/templateGenerator/yandexRules
 import { TemplatePhotoReviewPanel } from "@/components/TemplatePhotoReviewPanel";
 import {
   applyPhotoReviewToWorkbook,
+  buildPhotoReviewItems,
   loadPhotoReviewFromWorkbook,
   type PhotoReviewItem
 } from "@/lib/templateGenerator/photoReview";
@@ -259,6 +262,7 @@ export function TemplateGeneratorTool() {
   const [contentPhaseDone, setContentPhaseDone] = useState(false);
   const [photosFillOffset, setPhotosFillOffset] = useState(0);
   const [photoReviewItems, setPhotoReviewItems] = useState<PhotoReviewItem[]>([]);
+  const [photoReviewProgress, setPhotoReviewProgress] = useState<string | null>(null);
 
   const step2Ref = useRef<HTMLElement>(null);
   const scanRef = useRef<TemplateSheetScan | null>(null);
@@ -1342,7 +1346,8 @@ export function TemplateGeneratorTool() {
                     targetCount: photoTarget,
                     imageHeader
                   },
-                  marketplace
+                  marketplace,
+                  activityTool: "template-generator"
                 })
               });
               if (!res.ok) {
@@ -1597,33 +1602,140 @@ export function TemplateGeneratorTool() {
     [scan]
   );
 
-  const refreshPhotoReview = useCallback(() => {
+  const refreshPhotoReview = useCallback(async () => {
     const wb = wbRef.current;
     const s = scanRef.current ?? scan;
     if (!wb || !s || !imageHeaderName) {
       setError("Нет шаблона или колонки «Ссылка на изображение»");
       return;
     }
-    const ws = wb.getWorksheet(s.sheetName)!;
-    const items = loadPhotoReviewFromWorkbook(ws, s, { imageHeader: imageHeaderName });
-    setPhotoReviewItems(items);
-    if (!items.length) {
-      setBatchNotice("В шаблоне пока нет доп. фото для проверки — сначала этап 3.");
+    if (!serverStatus?.metabase) {
+      setError("Metabase не настроен на сервере — фото из каталога недоступны");
+      return;
     }
-  }, [scan, imageHeaderName]);
+
+    const ws = wb.getWorksheet(s.sheetName)!;
+    const contexts = collectRowContexts(ws, s);
+    const variationIds = [
+      ...new Set(
+        contexts
+          .map((c) => normVariationSku(c.sku))
+          .filter((id): id is number => id != null && id > 0)
+      )
+    ];
+
+    if (!variationIds.length) {
+      setPhotoReviewItems(loadPhotoReviewFromWorkbook(ws, s, { imageHeader: imageHeaderName }));
+      setBatchNotice("Не найдены артикулы variation_id в шаблоне");
+      return;
+    }
+
+    setPhotoReviewProgress(`Metabase: загрузка фото для ${variationIds.length} SKU…`);
+    try {
+      const galleries: Record<number, LetualGalleryPhoto[]> = {};
+      for (let i = 0; i < variationIds.length; i += LETUAL_API_CHUNK) {
+        const chunk = variationIds.slice(i, i + LETUAL_API_CHUNK);
+        setPhotoReviewProgress(
+          `Metabase: ${Math.min(i + chunk.length, variationIds.length)} / ${variationIds.length} SKU…`
+        );
+        const res = await fetch("/api/letual/galleries", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ variationIds: chunk })
+        });
+        const data = (await res.json()) as {
+          galleries?: Record<number, LetualGalleryPhoto[]>;
+          error?: string;
+        };
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        Object.assign(galleries, data.galleries ?? {});
+      }
+
+      const items = buildPhotoReviewItems(contexts, galleries, ws, s, imageHeaderName);
+      if (!items.length) {
+        const fallback = loadPhotoReviewFromWorkbook(ws, s, { imageHeader: imageHeaderName });
+        setPhotoReviewItems(fallback);
+        setBatchNotice(
+          fallback.length
+            ? `Metabase пуст — показаны ${fallback.length} строк из Excel`
+            : "Фото не найдены ни в Metabase, ни в шаблоне"
+        );
+      } else {
+        setPhotoReviewItems(items);
+        setBatchNotice(`Загружено ${items.length} карточек с фото (своя + EAN)`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка загрузки фото");
+      setPhotoReviewItems(loadPhotoReviewFromWorkbook(ws, s, { imageHeader: imageHeaderName }));
+    } finally {
+      setPhotoReviewProgress(null);
+    }
+  }, [scan, imageHeaderName, serverStatus?.metabase]);
 
   const applyPhotoReview = useCallback(async () => {
     const wb = wbRef.current;
     const s = scanRef.current ?? scan;
     if (!wb || !s || !imageHeaderName || !photoReviewItems.length) return;
-    const ws = wb.getWorksheet(s.sheetName)!;
-    const n = applyPhotoReviewToWorkbook(ws, s, photoReviewItems, {
-      imageHeader: imageHeaderName
-    });
-    bumpSheetScan();
-    setBatchNotice(`Доп. фото обновлены для ${n} строк`);
-    refreshPhotoReview();
-  }, [photoReviewItems, scan, imageHeaderName, bumpSheetScan, refreshPhotoReview]);
+
+    setBusy(true);
+    setPhotoReviewProgress("Обработка фото под стандарт Летуаль…");
+    try {
+      const selectedUrls = [
+        ...new Set(
+          photoReviewItems.flatMap((it) =>
+            it.candidates.filter((c) => c.selected).map((c) => c.url)
+          )
+        )
+      ];
+      const processedBySource = new Map<string, string>();
+
+      for (let i = 0; i < selectedUrls.length; i += LETUAL_API_CHUNK) {
+        const chunk = selectedUrls.slice(i, i + 20);
+        setPhotoReviewProgress(
+          `Летуаль: обработка ${Math.min(i + chunk.length, selectedUrls.length)} / ${selectedUrls.length}…`
+        );
+        const res = await fetch("/api/letual/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "url", urls: chunk })
+        });
+        const data = (await res.json()) as {
+          results?: { sourceUrl: string; resultUrl: string; ok: boolean }[];
+          error?: string;
+        };
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        for (const r of data.results ?? []) {
+          if (r.ok && r.resultUrl) processedBySource.set(r.sourceUrl, r.resultUrl);
+        }
+      }
+
+      const updated = photoReviewItems.map((it) => ({
+        ...it,
+        candidates: it.candidates.map((c) => ({
+          ...c,
+          processedUrl: c.selected ? processedBySource.get(c.url) ?? c.processedUrl : c.processedUrl
+        }))
+      }));
+
+      const ws = wb.getWorksheet(s.sheetName)!;
+      const n = applyPhotoReviewToWorkbook(ws, s, updated, { imageHeader: imageHeaderName });
+      setPhotoReviewItems(updated);
+      bumpSheetScan();
+      setBatchNotice(`Доп. фото обработаны и записаны для ${n} строк`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка обработки фото");
+    } finally {
+      setPhotoReviewProgress(null);
+      setBusy(false);
+    }
+  }, [photoReviewItems, scan, imageHeaderName, bumpSheetScan]);
+
+  const photoReviewAutoLoaded = useRef(false);
+  useEffect(() => {
+    if (!scan || !photoEnabled || !serverStatus?.metabase || photoReviewAutoLoaded.current) return;
+    photoReviewAutoLoaded.current = true;
+    void refreshPhotoReview();
+  }, [scan, photoEnabled, serverStatus?.metabase, refreshPhotoReview]);
 
   const photosFillStats = useMemo(() => {
     const total = liveRowCount;
@@ -2578,12 +2690,13 @@ export function TemplateGeneratorTool() {
       ) : null}
 
 
-      {(contentPhaseDone || done) && photoEnabled ? (
+      {scan && photoEnabled ? (
         <TemplatePhotoReviewPanel
           items={photoReviewItems}
           busy={busy}
+          progress={photoReviewProgress}
           onChange={setPhotoReviewItems}
-          onRefresh={refreshPhotoReview}
+          onRefresh={() => void refreshPhotoReview()}
           onApply={() => void applyPhotoReview()}
         />
       ) : null}
