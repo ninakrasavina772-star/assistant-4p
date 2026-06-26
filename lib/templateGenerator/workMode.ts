@@ -1,5 +1,6 @@
 import { normSku } from "@/lib/templateGenerator/csvIndex";
 import type { TemplateRowContext, TemplateWorkMode } from "@/lib/templateGenerator/types";
+import { isYandexTitleHeader, yandexTitleNeedsFix } from "@/lib/templateGenerator/yandexRules";
 
 export type FillScopeOptions = {
   workMode: TemplateWorkMode;
@@ -7,7 +8,20 @@ export type FillScopeOptions = {
   feedSkuSet: Set<string> | null;
   /** В режиме «дополнить» — перезаписывать уже заполненные ячейки */
   overwriteFilled: boolean;
+  /** Яндекс Маркет: английское/короткое название считаем незаполненным */
+  yandex?: boolean;
 };
+
+function cellNeedsFill(
+  cells: Record<string, string>,
+  header: string,
+  yandex: boolean
+): boolean {
+  const v = String(cells[header] ?? "").trim();
+  if (!v) return true;
+  if (yandex && isYandexTitleHeader(header) && yandexTitleNeedsFix(v)) return true;
+  return false;
+}
 
 /** Какие строки шаблона обрабатывать в текущем режиме */
 export function filterRowsForFill(
@@ -22,8 +36,9 @@ export function filterRowsForFill(
   }
 
   if (!overwriteFilled && selectedHeaders.length) {
+    const yandex = opts.yandex === true;
     return contexts.filter((c) =>
-      selectedHeaders.some((h) => !String(c.cells[h] ?? "").trim())
+      selectedHeaders.some((h) => cellNeedsFill(c.cells, h, yandex))
     );
   }
 
@@ -33,7 +48,12 @@ export function filterRowsForFill(
 export function rowNeedsAiForHeaders(
   cells: Record<string, string>,
   headers: string[],
-  overwriteFilled: boolean
+  overwriteFilled: boolean,
+  opts?: { yandex?: boolean }
 ): string[] {
-  return headers.filter((h) => overwriteFilled || !String(cells[h] ?? "").trim());
+  const yandex = opts?.yandex === true;
+  return headers.filter((h) => {
+    if (overwriteFilled) return true;
+    return cellNeedsFill(cells, h, yandex);
+  });
 }

@@ -9,6 +9,7 @@ import {
 } from "@/lib/templateGenerator/photos";
 import { uniqueUrlsForImageCell } from "@/lib/templateGenerator/imageUrlDedupe";
 import { DEFAULT_PHOTO_REVIEW_COLUMN, normHeader } from "@/lib/templateGenerator/presets";
+import { isYandexTitleHeader, yandexTitleNeedsFix } from "@/lib/templateGenerator/yandexRules";
 import { rehostImageUrls, type RehostCache } from "@/lib/templateGenerator/rehostImageUrl";
 import { parseImageUrls } from "@/lib/templateGenerator/photos";
 
@@ -35,10 +36,15 @@ export function applyFillResults(
       if (!col || !value) continue;
       if (!overwriteFilled) {
         const existing = cellPlainValue(ws.getCell(res.row, col).value).trim();
-        if (existing) continue;
+        const badTitle =
+          existing && isYandexTitleHeader(header) && yandexTitleNeedsFix(existing);
+        if (existing && !badTitle) continue;
       }
       ws.getCell(res.row, col).value = value;
       filled++;
+    }
+    if (!photoCol) {
+      photoCol = findPhotoReviewCol(scan, photoReviewHeader);
     }
     if (res.extraPhotos.length) {
       if (!photoCol) {
@@ -47,6 +53,8 @@ export function applyFillResults(
       ws.getCell(res.row, photoCol).value = formatPhotoReviewValue(
         uniqueUrlsForImageCell(res.extraPhotos)
       );
+    } else if (overwriteFilled && photoCol && res.imageUrls?.length) {
+      ws.getCell(res.row, photoCol).value = "";
     }
     if (res.imageUrls?.length && imageCol) {
       ws.getCell(res.row, imageCol).value = formatImageCellValue(res.imageUrls);

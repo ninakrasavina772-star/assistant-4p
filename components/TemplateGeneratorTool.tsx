@@ -118,6 +118,19 @@ function buildDefaultSelection(scan: TemplateSheetScan): ColumnSelection[] {
     }));
 }
 
+function mergeContentSelection(
+  scan: TemplateSheetScan,
+  userSelection: ColumnSelection[],
+  fillStage?: RunFillOptions["fillStage"]
+): ColumnSelection[] {
+  if (fillStage !== "content_only") return userSelection;
+  const byHeader = new Map(userSelection.map((s) => [s.header, s]));
+  for (const s of buildDefaultSelection(scan)) {
+    if (!byHeader.has(s.header)) byHeader.set(s.header, s);
+  }
+  return [...byHeader.values()];
+}
+
 function capDropdownForApi(values: string[], brand: string, max = 400): string[] {
   if (values.length <= max) return values;
   if (brand.trim()) return dropdownSample(values, brand).slice(0, max);
@@ -620,6 +633,7 @@ export function TemplateGeneratorTool() {
       dropdownSource: {} as Record<string, DropdownSource>
     };
     for (const c of editable) {
+      defaults.enabled[c.header] = Boolean(c.contentDefault || isContentDefaultColumn(c.header));
       const listVals = resolveDropdownValues(c, "list_sheet");
       const tplVals = resolveDropdownValues(c, "template_validation");
       defaults.strict[c.header] = listVals.length > 0 || tplVals.length > 0;
@@ -1093,8 +1107,11 @@ export function TemplateGeneratorTool() {
       setError("Введите OpenAI API key или задайте OPENAI_API_KEY на сервере");
       return;
     }
-    const activeSelection =
-      opts?.selectionOverride?.length ? opts.selectionOverride : selectionList;
+    const activeSelection = mergeContentSelection(
+      scan,
+      opts?.selectionOverride?.length ? opts.selectionOverride : selectionList,
+      fillStage
+    );
     if (activeSelection.length === 0) {
       setError("Выберите хотя бы один столбец (или загрузите шаблон с контентными полями)");
       return;
@@ -1143,7 +1160,8 @@ export function TemplateGeneratorTool() {
       workMode,
       selectedHeaders,
       feedSkuSet,
-      overwriteFilled: byVariationIds ? true : overwriteFilled
+      overwriteFilled: byVariationIds ? true : overwriteFilled,
+      yandex: marketplace === "yandex"
     });
 
     if (rowsMarkedForRemoval.size > 0) {

@@ -1,5 +1,5 @@
 import { sanitizeTemplateFieldValue } from "@/lib/templateGenerator/fieldValues";
-import { yandexTitleLanguageNeedsFix } from "@/lib/templateGenerator/yandexRules";
+import { yandexTitleLanguageNeedsFix, yandexTitleNeedsFix, isYandexTitleHeader } from "@/lib/templateGenerator/yandexRules";
 import { normHeader } from "@/lib/templateGenerator/presets";
 import type { CsvColumnMap, FillRowResult } from "@/lib/templateGenerator/types";
 import {
@@ -160,9 +160,13 @@ export function prefillFromCsvData(
   for (const field of fields) {
     const existing = templateCells[field.header]?.trim();
     if (existing && keepTemplate) {
-      values[field.header] = existing;
-      sources.push(`${field.header}: шаблон`);
-      continue;
+      if (isYandexTitleHeader(field.header) && yandexTitleNeedsFix(existing)) {
+        /* английское/короткое название из шаблона — не считаем заполненным */
+      } else {
+        values[field.header] = existing;
+        sources.push(`${field.header}: шаблон`);
+        continue;
+      }
     }
 
     const csvKey = findCsvKeyForTemplate(field.header, csvData);
