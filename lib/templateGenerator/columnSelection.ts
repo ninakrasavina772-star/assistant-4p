@@ -44,6 +44,25 @@ export function clearColumnPrefs(key: string): void {
   sessionStorage.removeItem(key);
 }
 
+const HEADER_ROW_PREFIX = "fp_tpl_hdr_row_";
+
+export function loadHeaderRowPref(sheetName: string): number | null {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(`${HEADER_ROW_PREFIX}${sheetName}`);
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveHeaderRowPref(sheetName: string, row: number): void {
+  if (typeof sessionStorage === "undefined") return;
+  sessionStorage.setItem(`${HEADER_ROW_PREFIX}${sheetName}`, String(row));
+}
+
 /** Слияние сохранённого выбора с актуальными столбцами шаблона */
 export function mergePrefsWithColumns(
   headers: string[],

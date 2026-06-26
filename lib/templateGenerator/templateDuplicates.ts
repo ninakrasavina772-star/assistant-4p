@@ -90,7 +90,21 @@ function skuIndexKey(raw: string): string | null {
   return norm ? `s:${norm}` : null;
 }
 
-/** Группы строк шаблона с одинаковым EAN или SKU (как в «Сравнение витрин») */
+function normalizeProductName(name: string, brand: string): string {
+  return `${brand} ${name}`
+    .toLowerCase()
+    .replace(/\b\d+\s*(?:мл|ml|g|г)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function nameIndexKey(raw: string, brand: string): string | null {
+  const norm = normalizeProductName(raw, brand);
+  if (norm.length < 12) return null;
+  return `n:${norm}`;
+}
+
+/** Группы строк шаблона с одинаковым EAN, SKU или названием */
 export function findTemplateDuplicateGroups(
   contexts: TemplateRowContext[],
   eanHeader: string | null,
@@ -150,6 +164,20 @@ export function findTemplateDuplicateGroups(
         ? `Дубль: один variation_id (${label}) в нескольких строках`
         : `Дубль: один артикул (${label}) в нескольких строках`
     );
+  }
+
+  const nameToRefs = new Map<string, Ref[]>();
+  for (const ctx of contexts) {
+    const sku = ctx.sku.trim();
+    const brand = pickCell(ctx.cells, [/^бренд/i, /^brand$/i]);
+    const name = pickCell(ctx.cells, [/название товара/i, /^наименование/i, /^name$/i]);
+    const key = nameIndexKey(name, brand);
+    if (!key || !sku) continue;
+    if (!nameToRefs.has(key)) nameToRefs.set(key, []);
+    nameToRefs.get(key)!.push({ row: ctx.row, sku });
+  }
+  for (const [nameKey, refs] of nameToRefs) {
+    pushGroup(nameKey, refs, "Дубль: одинаковое название товара в нескольких строках");
   }
 
   return enrichTemplateDuplicateGroups(

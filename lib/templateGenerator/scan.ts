@@ -22,22 +22,54 @@ function resolveHintRow(ws: ExcelJS.Worksheet, headerRow: number, maxCol: number
   return headerRow + 1;
 }
 
+function isHeaderMarker(v: string): boolean {
+  return /ваш\s*sku|артикул\s*товара|^артикул$|^sku$|shop.?sku|название\s*товара|наименование/i.test(
+    v
+  );
+}
+
 function findHeaderRow(ws: ExcelJS.Worksheet): { headerRow: number; hintRow: number } {
-  const maxRow = Math.min(ws.rowCount || 20, 20);
-  const maxCol = Math.min(ws.columnCount || 80, 80);
-
-  const isHeaderMarker = (v: string): boolean =>
-    /ваш\s*sku|артикул\s*товара|^артикул$|^sku$|shop.?sku|название\s*товара|наименование/i.test(v);
-
-  for (let r = 1; r <= maxRow; r++) {
-    for (let c = 1; c <= maxCol; c++) {
-      const v = normHeader(cellPlainValue(ws.getCell(r, c).value));
-      if (isHeaderMarker(v)) {
-        return { headerRow: r, hintRow: resolveHintRow(ws, r, maxCol) };
-      }
-    }
+  const candidates = findCandidateHeaderRows(ws);
+  if (candidates.length > 0) {
+    const row = candidates[0]!.row;
+    const maxCol = Math.min(ws.columnCount || 80, 80);
+    return { headerRow: row, hintRow: resolveHintRow(ws, row, maxCol) };
   }
   return { headerRow: 1, hintRow: 2 };
+}
+
+/** Строки-кандидаты на заголовок столбцов (для выбора в UI) */
+export function findCandidateHeaderRows(
+  ws: ExcelJS.Worksheet
+): { row: number; label: string; score: number }[] {
+  const maxRow = Math.min(ws.rowCount || 25, 25);
+  const maxCol = Math.min(ws.columnCount || 80, 80);
+  const out: { row: number; label: string; score: number }[] = [];
+
+  for (let r = 1; r <= maxRow; r++) {
+    if (looksLikeHintRow(ws, r, maxCol)) continue;
+    const headers = readRowHeaders(ws, r, maxCol);
+    if (headers.size < 3) continue;
+
+    let score = 0;
+    const preview: string[] = [];
+    for (const h of headers.values()) {
+      const n = normHeader(h);
+      preview.push(h.length > 36 ? `${h.slice(0, 33)}…` : h);
+      if (isHeaderMarker(n)) score += 3;
+      else if (/бренд|описание|тип|пол|ean|штрих|изображен/i.test(n)) score += 2;
+      else score += 1;
+    }
+    if (score < 5) continue;
+
+    out.push({
+      row: r,
+      label: `Строка ${r}: ${preview.slice(0, 4).join(" · ")}`,
+      score
+    });
+  }
+
+  return out.sort((a, b) => b.score - a.score || a.row - b.row);
 }
 
 function looksLikeHintRow(ws: ExcelJS.Worksheet, row: number, maxCol: number): boolean {
@@ -184,13 +216,17 @@ export function scanTemplateSheet(
   wb: ExcelJS.Workbook,
   sheetName: string,
   listValues: Map<string, string[]>,
-  columnFormulae?: Map<number, string>
+  columnFormulae?: Map<number, string>,
+  headerRowOverride?: number
 ): TemplateSheetScan | null {
   const ws = wb.getWorksheet(sheetName);
   if (!ws) return null;
 
-  const { headerRow, hintRow } = findHeaderRow(ws);
   const maxCol = Math.min(ws.columnCount || 80, 80);
+  const { headerRow, hintRow } =
+    headerRowOverride != null && headerRowOverride >= 1
+      ? { headerRow: headerRowOverride, hintRow: resolveHintRow(ws, headerRowOverride, maxCol) }
+      : findHeaderRow(ws);
   const headers = readRowHeaders(ws, headerRow, maxCol);
 
   let skuCol: number | null = null;

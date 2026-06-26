@@ -21,13 +21,25 @@ import {
 } from "@/lib/templateGenerator/csvPrefill";
 import { DEFAULT_PRODUCT_DATA_SHEET, DEFAULT_PHOTO_REVIEW_COLUMN } from "@/lib/templateGenerator/presets";
 import {
+  applyContradictionNotes,
+  detectVolumeContradictions
+} from "@/lib/templateGenerator/cardContradictions";
+import {
   clearColumnPrefs,
   loadColumnPrefs,
+  loadHeaderRowPref,
   mergePrefsWithColumns,
   saveColumnPrefs,
+  saveHeaderRowPref,
   templateColumnKey
 } from "@/lib/templateGenerator/columnSelection";
-import { collectRowContexts, loadListSheetValues, scanTemplateSheet, scanTemplateWorkbook } from "@/lib/templateGenerator/scan";
+import {
+  collectRowContexts,
+  findCandidateHeaderRows,
+  loadListSheetValues,
+  scanTemplateSheet,
+  scanTemplateWorkbook
+} from "@/lib/templateGenerator/scan";
 import type { ColumnSelection, CsvColumnMap, DropdownSource, TemplateSheetScan, TemplateWorkMode } from "@/lib/templateGenerator/types";
 import { filterRowsForFill } from "@/lib/templateGenerator/workMode";
 import {
@@ -243,6 +255,11 @@ export function TemplateGeneratorTool() {
   const [tplLoading, setTplLoading] = useState(false);
 
   const listValuesRef = useRef<Map<string, string[]>>(new Map());
+  const listValidationsRef = useRef<Map<string, Map<number, string>> | undefined>(undefined);
+  const [headerRowCandidates, setHeaderRowCandidates] = useState<{ row: number; label: string }[]>(
+    []
+  );
+  const [headerRowOverride, setHeaderRowOverride] = useState<number | null>(null);
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(true);
@@ -357,17 +374,39 @@ export function TemplateGeneratorTool() {
     scanRef.current = scan;
   }, [scan]);
 
-  const bumpSheetScan = useCallback((): TemplateSheetScan | null => {
-    const wb = wbRef.current;
-    if (!wb || !scan) return null;
-    const newScan = scanTemplateSheet(wb, scan.sheetName, listValuesRef.current);
-    if (newScan) {
-      scanRef.current = newScan;
-      setScan(newScan);
+  const rescanActiveSheet = useCallback(
+    (name: string, headerRow?: number | null): TemplateSheetScan | null => {
+      const wb = wbRef.current;
+      if (!wb) return null;
+      const formulae = listValidationsRef.current?.get(name);
+      const savedRow = headerRow ?? loadHeaderRowPref(name);
+      const ws = wb.getWorksheet(name);
+      if (ws) {
+        setHeaderRowCandidates(
+          findCandidateHeaderRows(ws).map(({ row, label }) => ({ row, label }))
+        );
+      }
+      const newScan = scanTemplateSheet(
+        wb,
+        name,
+        listValuesRef.current,
+        formulae,
+        savedRow ?? undefined
+      );
+      if (newScan) {
+        setHeaderRowOverride(savedRow ?? newScan.headerRow);
+        scanRef.current = newScan;
+        setScan(newScan);
+      }
       return newScan;
-    }
-    return scanRef.current;
-  }, [scan]);
+    },
+    []
+  );
+
+  const bumpSheetScan = useCallback((): TemplateSheetScan | null => {
+    if (!scan?.sheetName) return scanRef.current;
+    return rescanActiveSheet(scan.sheetName, headerRowOverride);
+  }, [scan?.sheetName, headerRowOverride, rescanActiveSheet]);
 
   const refreshDupGroups = useCallback((activeScan?: TemplateSheetScan | null): number => {
     const wb = wbRef.current;
@@ -485,6 +524,8 @@ export function TemplateGeneratorTool() {
     return {
       templateFile: fileName || undefined,
       sheetName: sheetName || undefined,
+      headerRow: headerRowOverride ?? scan?.headerRow,
+      headerRowCandidates: headerRowCandidates.length ? headerRowCandidates : undefined,
       rowCount: scan?.dataRowCount,
       feedEnabled,
       workMode,
@@ -516,6 +557,8 @@ export function TemplateGeneratorTool() {
   }, [
     fileName,
     sheetName,
+    headerRowOverride,
+    headerRowCandidates,
     scan,
     hasWb,
     productSamples,
@@ -832,6 +875,7 @@ export function TemplateGeneratorTool() {
         await new Promise((r) => requestAnimationFrame(() => r(undefined)));
         const buf = await file.arrayBuffer();
         const listValidations = await extractWorkbookListValidations(buf);
+        listValidationsRef.current = listValidations;
         const safeBuf = await sanitizeOzonXlsxBuffer(buf);
         const workbook = await readWorkbookFromBuffer(safeBuf);
         const listValues = loadListSheetValues(workbook);
@@ -858,6 +902,14 @@ export function TemplateGeneratorTool() {
         setSheetNames(workbook.worksheets.map((w) => w.name));
         setFileName(file.name);
         setSheetName(preferred);
+        saveHeaderRowPref(preferred, sheetScan.headerRow);
+        const ws0 = workbook.getWorksheet(preferred);
+        if (ws0) {
+          setHeaderRowCandidates(
+            findCandidateHeaderRows(ws0).map(({ row, label }) => ({ row, label }))
+          );
+        }
+        setHeaderRowOverride(sheetScan.headerRow);
         setScan(sheetScan);
         scanRef.current = sheetScan;
         initColumns(sheetScan, preferred);
@@ -1040,20 +1092,35 @@ export function TemplateGeneratorTool() {
     );
   }, [eventReply, openaiKey, serverStatus]);
 
+  const onHeaderRowChange = useCallback(
+    (row: number) => {
+      if (!sheetName || !Number.isFinite(row) || row < 1) return;
+      saveHeaderRowPref(sheetName, row);
+      setHeaderRowOverride(row);
+      const s = rescanActiveSheet(sheetName, row);
+      if (!s) return;
+      initColumns(s, sheetName);
+      refreshDupGroups(s);
+      setRowsMarkedForRemoval(new Set());
+      setDupsPhaseDone(false);
+    },
+    [sheetName, rescanActiveSheet, initColumns, refreshDupGroups]
+  );
+
   const onSheetChange = useCallback(
     (name: string) => {
       const wb = wbRef.current;
       if (!wb) return;
-      const s = scanTemplateSheet(wb, name, listValuesRef.current);
+      const s = rescanActiveSheet(name, loadHeaderRowPref(name));
       if (!s) return;
       setSheetName(name);
-      setScan(s);
       initColumns(s, name);
       const { samples, brands } = buildProductSamples(wb, s);
       setProductSamples(samples);
       setUniqueBrands(brands);
+      refreshDupGroups(s);
     },
-    [initColumns]
+    [initColumns, rescanActiveSheet, refreshDupGroups]
   );
 
   const selectionList = useMemo((): ColumnSelection[] => {
@@ -1417,6 +1484,13 @@ export function TemplateGeneratorTool() {
         );
         if (marketplace === "yandex" && !isPhotosStage) {
           applyYandexTitleFixes(ws, scan, contexts.slice(0, doneRows));
+        }
+        if (!isPhotosStage) {
+          const volNotes = detectVolumeContradictions(
+            contexts.slice(0, doneRows),
+            scan.columns
+          );
+          if (volNotes.length) applyContradictionNotes(ws, scan, volNotes);
         }
         if (imageHeader && (isPhotosStage || marketplace !== "yandex")) {
           await prefillPhotoReviewColumn(
@@ -1976,6 +2050,27 @@ export function TemplateGeneratorTool() {
                     </option>
                   ))}
                 </select>
+              </label>
+            ) : null}
+
+            {scan && headerRowCandidates.length > 0 ? (
+              <label className="block text-sm">
+                Строка с названиями столбцов
+                <select
+                  className={`${homeInput} mt-1 w-full max-w-md`}
+                  value={headerRowOverride ?? scan.headerRow}
+                  onChange={(e) => onHeaderRowChange(parseInt(e.target.value, 10))}
+                >
+                  {headerRowCandidates.map((c) => (
+                    <option key={c.row} value={c.row}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-xs text-slate-500">
+                  В разных шаблонах заголовки на разных строках — выберите строку, затем отметьте
+                  галочками столбцы для заполнения ниже.
+                </span>
               </label>
             ) : null}
 
