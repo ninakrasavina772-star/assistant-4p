@@ -81,7 +81,7 @@ function PhotoThumb({
       title="Открыть крупно"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={url} alt={alt ?? ""} className="h-full w-full object-contain" />
+      <img loading="lazy" decoding="async" src={url} alt={alt ?? ""} className="h-full w-full object-contain" />
       <span className="mt-0.5 block text-center text-[10px] text-sky-700 group-hover:underline">
         открыть
       </span>

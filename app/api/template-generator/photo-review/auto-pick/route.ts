@@ -32,12 +32,14 @@ export async function POST(req: Request) {
   const picks: Record<number, { mainUrl: string; extraUrls: string[] }> = {};
 
   try {
-    for (const row of rows) {
-      const vid = Number(row.variationId);
-      if (!vid) continue;
-      const pick = await autoPickPhotoReviewUrls(row.urls ?? [], { openaiApiKey, useAi });
-      picks[vid] = { mainUrl: pick.mainUrl, extraUrls: pick.extraUrls };
-    }
+    await Promise.all(
+      rows.map(async (row) => {
+        const vid = Number(row.variationId);
+        if (!vid) return;
+        const pick = await autoPickPhotoReviewUrls(row.urls ?? [], { openaiApiKey, useAi });
+        picks[vid] = { mainUrl: pick.mainUrl, extraUrls: pick.extraUrls };
+      })
+    );
     return NextResponse.json({ picks, useAi });
   } catch (e) {
     return NextResponse.json(

@@ -202,7 +202,8 @@ function filledDownloadName(fileName: string, part?: number): string {
 
 async function autoPickPhotoReviewBatch(
   items: PhotoReviewItem[],
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string | null) => void,
+  opts?: { fastFirst?: boolean }
 ): Promise<PhotoReviewItem[]> {
   if (!items.length) return items;
   const picks: Record<number, { mainUrl: string; extraUrls: string[] }> = {};
@@ -211,23 +212,32 @@ async function autoPickPhotoReviewBatch(
     urls: it.candidates.map((c) => c.url)
   }));
 
+  const chunks: typeof rows[] = [];
   for (let i = 0; i < rows.length; i += LETUAL_API_CHUNK) {
-    const chunk = rows.slice(i, i + LETUAL_API_CHUNK);
-    onProgress?.(
-      `AI: подбор фото ${Math.min(i + chunk.length, rows.length)} / ${rows.length}…`
-    );
-    const res = await fetch("/api/template-generator/photo-review/auto-pick", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: chunk })
-    });
-    const data = (await res.json()) as {
-      picks?: Record<number, { mainUrl: string; extraUrls: string[] }>;
-      error?: string;
-    };
-    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-    Object.assign(picks, data.picks ?? {});
+    chunks.push(rows.slice(i, i + LETUAL_API_CHUNK));
   }
+
+  await Promise.all(
+    chunks.map(async (chunk, idx) => {
+      onProgress?.(
+        `AI: партия ${idx + 1} / ${chunks.length} (${chunk.length} SKU)…`
+      );
+      const res = await fetch("/api/template-generator/photo-review/auto-pick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rows: chunk,
+          useAi: opts?.fastFirst ? false : undefined
+        })
+      });
+      const data = (await res.json()) as {
+        picks?: Record<number, { mainUrl: string; extraUrls: string[] }>;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      Object.assign(picks, data.picks ?? {});
+    })
+  );
 
   return mergeAutoPickIntoItems(items, picks);
 }
@@ -318,6 +328,7 @@ export function TemplateGeneratorTool() {
   const [photoReviewProgress, setPhotoReviewProgress] = useState<string | null>(null);
 
   const step2Ref = useRef<HTMLElement>(null);
+  const photoReviewRef = useRef<HTMLElement>(null);
   const scanRef = useRef<TemplateSheetScan | null>(null);
   const chatContextRef = useRef<TemplateChatContext>({});
   const columnPrefsKeyRef = useRef("");
@@ -1518,13 +1529,6 @@ export function TemplateGeneratorTool() {
       }
 
       const batchNum = batchesCompleted + 1;
-      const blob = await writeWorkbookToBlob(wb);
-      const partSuffix = isPhotosStage ? `-photos-part` : `-filled-part`;
-      downloadBlob(
-        blob,
-        fileName.replace(/\.xlsx?$/i, "") + `${partSuffix}${String(batchNum).padStart(2, "0")}.xlsx`
-      );
-
       const modes = countFillModes(allResults);
       const modeLine =
         !isPhotosStage && feedEnabled && csvTable && allResults.length
@@ -1564,13 +1568,19 @@ export function TemplateGeneratorTool() {
           setContentPhaseDone(true);
           if (photoEnabled) {
             setPipelineStep(3);
+            setStep(2);
             setPhotosFillOffset(0);
             setBatchesCompleted(0);
             setBatchNotice(
-              `Контент заполнен (${totalRows} строк). Запустите этап 3 — обработка фото (по ${PHOTOS_BATCH_SIZE_DEFAULT} строк за раз).`
+              `Контент заполнен (${totalRows} строк). Выберите фото ниже, затем при необходимости запустите этап 3.`
             );
+            photoReviewAutoLoaded.current = false;
+            window.requestAnimationFrame(() => {
+              photoReviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
+            void refreshPhotoReview();
             void eventReply(
-              `Контент готов для ${totalRows} строк. Дальше — этап 3 (фото), без повторной генерации текста.`
+              `Контент готов для ${totalRows} строк. Ниже блок выбора фото — проверьте галереи перед этапом 3.`
             );
           } else {
             setDone(true);
@@ -1590,9 +1600,8 @@ export function TemplateGeneratorTool() {
       const msg = e instanceof Error ? e.message : "Ошибка заполнения";
       if (doneRows > 0) {
         const batchNum = batchesCompleted + 1;
-        const blob = await writeWorkbookToBlob(wb);
-        downloadBlob(blob, filledDownloadName(fileName, batchNum));
         setBatchesCompleted(batchNum);
+        setBatchNotice(`Частичный прогресс (${doneRows} строк). Нажмите «Скачать Excel», чтобы сохранить файл.`);
         if (isPhotosStage) setPhotosFillOffset(batchStart + doneRows);
         else setFillRowOffset(batchStart + doneRows);
         setBatchNotice(
@@ -1765,23 +1774,28 @@ export function TemplateGeneratorTool() {
     setPhotoReviewProgress(`Metabase: загрузка фото для ${variationIds.length} SKU…`);
     try {
       const galleries: Record<number, LetualGalleryPhoto[]> = {};
+      const chunks: number[][] = [];
       for (let i = 0; i < variationIds.length; i += LETUAL_API_CHUNK) {
-        const chunk = variationIds.slice(i, i + LETUAL_API_CHUNK);
-        setPhotoReviewProgress(
-          `Metabase: ${Math.min(i + chunk.length, variationIds.length)} / ${variationIds.length} SKU…`
-        );
-        const res = await fetch("/api/letual/galleries", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ variationIds: chunk })
-        });
-        const data = (await res.json()) as {
-          galleries?: Record<number, LetualGalleryPhoto[]>;
-          error?: string;
-        };
-        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-        Object.assign(galleries, data.galleries ?? {});
+        chunks.push(variationIds.slice(i, i + LETUAL_API_CHUNK));
       }
+      let loaded = 0;
+      await Promise.all(
+        chunks.map(async (chunk) => {
+          const res = await fetch("/api/letual/galleries", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ variationIds: chunk })
+          });
+          const data = (await res.json()) as {
+            galleries?: Record<number, LetualGalleryPhoto[]>;
+            error?: string;
+          };
+          if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+          Object.assign(galleries, data.galleries ?? {});
+          loaded += chunk.length;
+          setPhotoReviewProgress(`Metabase: ${Math.min(loaded, variationIds.length)} / ${variationIds.length} SKU…`);
+        })
+      );
 
       let items = buildPhotoReviewItems(contexts, galleries, ws, s, imageHeaderName);
       if (!items.length) {
@@ -1882,10 +1896,18 @@ export function TemplateGeneratorTool() {
 
   const photoReviewAutoLoaded = useRef(false);
   useEffect(() => {
-    if (!scan || !photoEnabled || !serverStatus?.metabase || photoReviewAutoLoaded.current) return;
+    if (
+      !scan ||
+      !photoEnabled ||
+      !serverStatus?.metabase ||
+      !contentPhaseDone ||
+      photoReviewAutoLoaded.current
+    ) {
+      return;
+    }
     photoReviewAutoLoaded.current = true;
     void refreshPhotoReview();
-  }, [scan, photoEnabled, serverStatus?.metabase, refreshPhotoReview]);
+  }, [scan, photoEnabled, serverStatus?.metabase, contentPhaseDone, refreshPhotoReview]);
 
   const photosFillStats = useMemo(() => {
     const total = liveRowCount;
@@ -2814,7 +2836,7 @@ export function TemplateGeneratorTool() {
             <fieldset className="rounded-lg border border-slate-200 p-3 text-sm">
               <legend className="px-1 font-semibold">Партиями (этап 2)</legend>
               <p className="text-xs text-slate-500">
-                Обрабатываем файл частями: после каждой партии Excel скачивается автоматически, затем
+                Обрабатываем файл частями: после заполнения нажмите «Скачать Excel», затем
                 нажмите кнопку для следующих строк.
                 {feedEnabled
                   ? " Сначала данные подставляются из CSV по артикулу вариации; AI заполняет только то, чего нет в фиде."
@@ -2856,7 +2878,7 @@ export function TemplateGeneratorTool() {
                 каждой строкой.
               </p>
             ) : null}
-            {fillRowOffset > 0 && !fillStats.allDone && !busy ? (
+            {(fillRowOffset > 0 || contentPhaseDone) && !busy ? (
               <button
                 type="button"
                 className="text-sm text-slate-600 underline"
@@ -2872,6 +2894,7 @@ export function TemplateGeneratorTool() {
 
 
       {scan && photoEnabled ? (
+        <section ref={photoReviewRef} className="scroll-mt-4">
         <TemplatePhotoReviewPanel
           items={photoReviewItems}
           busy={busy}
@@ -2881,6 +2904,7 @@ export function TemplateGeneratorTool() {
           onProcess={() => void applyPhotoReview()}
           onDownload={() => void download()}
         />
+      </section>
       ) : null}
 
       {done ? (
