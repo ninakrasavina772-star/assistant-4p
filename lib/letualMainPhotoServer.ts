@@ -12,6 +12,7 @@ import {
   type LetualVariationRow
 } from "@/lib/letualMetabase";
 import { prioritizeLetualPickUrls } from "@/lib/letualPhotoAi";
+import { preferAdminFotoUrls } from "@/lib/templateGenerator/yandexImageSources";
 import { uploadLetualMainPhoto } from "@/lib/ozonImageStorage";
 import type { LetualResultRow } from "@/lib/letualMainPhotoExcel";
 import type {
@@ -89,9 +90,9 @@ async function pickFromSiblingUrls(
   quickPick = true
 ): Promise<LetualPickRow | null> {
   const gallery = await getLetualVariationGallery(variationId, metabaseApiKey);
-  const siblingUrls = gallery.photos
-    .filter((p) => p.matchType !== "own")
-    .map((p) => p.url);
+  const siblingUrls = preferAdminFotoUrls(
+    gallery.photos.filter((p) => p.matchType !== "own").map((p) => p.url)
+  );
   if (!siblingUrls.length) return null;
 
   const sample = prioritizeLetualPickUrls(siblingUrls);
@@ -148,9 +149,10 @@ async function pickFromVariationRow(
   }
 
   try {
+    const urls = preferAdminFotoUrls(row.imageUrls);
     const { best, ranked } = quickPick
-      ? await pickLetualPhotoFast(row.imageUrls)
-      : await pickLetualPhotoWithFallback(row.imageUrls, resolveOpenAiKey(openaiApiKey));
+      ? await pickLetualPhotoFast(urls)
+      : await pickLetualPhotoWithFallback(urls, resolveOpenAiKey(openaiApiKey));
     const picked = pickRowFromVariation(row, best, ranked);
     if (picked.status === "ok") return picked;
 

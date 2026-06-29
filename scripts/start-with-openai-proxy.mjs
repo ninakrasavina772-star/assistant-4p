@@ -1,4 +1,4 @@
-/** Boot Next standalone server with optional OpenAI HTTP proxy (runtime only). */
+/** Boot Next standalone server. OpenAI proxy — только в openaiFetch, не глобально. */
 const proxy = (
   process.env.OPENAI_HTTP_PROXY ??
   process.env.HTTPS_PROXY ??
@@ -7,15 +7,7 @@ const proxy = (
 ).trim();
 
 if (proxy) {
-  try {
-    process.env.HTTP_PROXY = proxy;
-    process.env.HTTPS_PROXY = proxy;
-    const { ProxyAgent, setGlobalDispatcher } = await import("undici");
-    setGlobalDispatcher(new ProxyAgent(proxy));
-    console.log("[openai-proxy] enabled:", proxy);
-  } catch (e) {
-    console.error("[openai-proxy] setup failed, starting without proxy:", e);
-  }
+  console.log("[openai-proxy] configured (per-request OpenAI only):", proxy);
 }
 
 await import("./server.js");

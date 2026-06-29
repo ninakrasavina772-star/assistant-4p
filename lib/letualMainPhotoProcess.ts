@@ -3,14 +3,11 @@ import {
   cropToVisibleProduct,
   preprocessCosmeticsProductBufferEdge
 } from "@/lib/podruzhkaImageProcess";
-import { fetchLetualImageDetailed } from "@/lib/letualFotoQuality";
+import { fetchLetualImageOrThrow } from "@/lib/letualFotoQuality";
 import { compositeLetualMainPhoto } from "@/lib/letualMainPhotoLayout";
 
 export async function downloadImageBuffer(url: string): Promise<Buffer> {
-  const fetched = await fetchLetualImageDetailed(url);
-  if (!fetched?.buf?.length) {
-    throw new Error("Не удалось скачать изображение");
-  }
+  const fetched = await fetchLetualImageOrThrow(url);
   return fetched.buf;
 }
 

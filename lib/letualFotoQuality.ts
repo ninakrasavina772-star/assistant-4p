@@ -50,18 +50,42 @@ function urlCandidates(raw: string): string[] {
   return out;
 }
 
+function formatLetualDownloadError(raw: string): string {
+  const t = raw.replace(/^foto:\s*/, "").trim();
+  if (!t) return "Не удалось скачать изображение";
+  if (/HTTP 403/i.test(t)) {
+    return "Сервер не может скачать foto (HTTP 403) — выберите cdnru.4stand.com в «Другие фото»";
+  }
+  if (/HTTP 404/i.test(t)) return "Фото не найдено (HTTP 404) — ссылка устарела";
+  if (/таймаут|timeout/i.test(t)) return "Таймаут при скачивании foto — попробуйте ещё раз";
+  if (/маленький/i.test(t)) return t;
+  return t.length > 120 ? `${t.slice(0, 120)}…` : t;
+}
+
 /** Скачать фото: нормализованный URL, затем оригинал из БД. */
 export async function fetchLetualImageDetailed(
   rawUrl: string
 ): Promise<{ buf: Buffer; usedUrl: string; originalUrl: string } | null> {
+  try {
+    return await fetchLetualImageOrThrow(rawUrl);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchLetualImageOrThrow(
+  rawUrl: string
+): Promise<{ buf: Buffer; usedUrl: string; originalUrl: string }> {
   const originalUrl = rawUrl.trim();
+  let lastError = "не удалось скачать";
   for (const candidate of urlCandidates(originalUrl)) {
     const fetched = await fetchPodruzhkaProductImageDetailed(candidate);
     if (fetched.buf?.length) {
       return { buf: fetched.buf, usedUrl: candidate, originalUrl };
     }
+    if (fetched.error) lastError = fetched.error;
   }
-  return null;
+  throw new Error(formatLetualDownloadError(lastError));
 }
 
 export function hostPriorityScore(url: string): number {
