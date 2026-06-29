@@ -1,10 +1,5 @@
 /** OpenAI HTTP helpers. Прокси только для запросов к OpenAI, не для foto/CDN. */
 
-type UndiciModule = typeof import("undici");
-
-let proxyAgentPromise: Promise<InstanceType<UndiciModule["ProxyAgent"]> | null> | null =
-  null;
-
 export function openaiApiBase(): string {
   const raw = (process.env.OPENAI_BASE_URL ?? process.env.OPENAI_API_BASE ?? "https://api.openai.com").trim();
   return raw.replace(/\/+$/, "");
@@ -32,23 +27,14 @@ export function openaiImagesUrl(): string {
   return `${openaiApiBase()}/v1/images/generations`;
 }
 
-async function getOpenAiProxyAgent(): Promise<InstanceType<UndiciModule["ProxyAgent"]> | null> {
-  const proxy = openaiHttpProxy();
-  if (!proxy) return null;
-  if (!proxyAgentPromise) {
-    proxyAgentPromise = (async () => {
-      const { ProxyAgent } = await import("undici");
-      return new ProxyAgent(proxy);
-    })();
-  }
-  return proxyAgentPromise;
-}
-
 /** Server fetch to OpenAI через прокси; остальные fetch в приложении — напрямую. */
 export async function openaiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const agent = await getOpenAiProxyAgent();
-  if (!agent) return fetch(url, init);
-  const { fetch: undiciFetch } = await import("undici");
+  const proxy = openaiHttpProxy();
+  if (!proxy || typeof window !== "undefined") {
+    return fetch(url, init);
+  }
+  const { ProxyAgent, fetch: undiciFetch } = await import(/* webpackIgnore: true */ "undici");
+  const agent = new ProxyAgent(proxy);
   return undiciFetch(url, { ...init, dispatcher: agent } as RequestInit);
 }
 
