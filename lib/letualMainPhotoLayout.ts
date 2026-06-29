@@ -6,7 +6,6 @@ import {
   LETUAL_CANVAS_SIZE,
   LETUAL_SIDE_MARGIN_SQUARE,
   LETUAL_SIDE_MARGIN_WIDE_LOW,
-  LETUAL_VERTICAL_MARGIN,
   type LetualLayoutType
 } from "@/lib/letualMainPhotoConstants";
 
@@ -27,7 +26,12 @@ export type LetualPlacement = {
   height: number;
 };
 
-/** Рассчитать размер и позицию товара на квадратном полотне. */
+/**
+ * Рассчитать размер и позицию товара на квадратном полотне.
+ * A (vertical): от верхней до нижней границы, без отступов сверху/снизу.
+ * B (square_wide): по нижней границе, боковые отступы не меньше 130px.
+ * C (wide_low): по нижней границе, боковые отступы не меньше 50px.
+ */
 export function computeLetualPlacement(
   productW: number,
   productH: number,
@@ -38,17 +42,11 @@ export function computeLetualPlacement(
   const marginScale = canvasW / LETUAL_CANVAS_SIZE;
 
   if (layout === "vertical") {
-    const topMargin = Math.round(LETUAL_VERTICAL_MARGIN * marginScale);
-    const bottomMargin = Math.round(LETUAL_VERTICAL_MARGIN * marginScale);
-    const sideMargin = Math.round(LETUAL_SIDE_MARGIN_SQUARE * marginScale);
-    const maxW = canvasW - sideMargin * 2;
-    const maxH = canvasH - topMargin - bottomMargin;
-    const scale = Math.min(maxW / productW, maxH / productH, 1);
+    const scale = canvasH / productH;
     const w = Math.round(productW * scale);
-    const h = Math.round(productH * scale);
+    const h = canvasH;
     const left = Math.round((canvasW - w) / 2);
-    const top = topMargin + Math.round((maxH - h) / 2);
-    return { layout, left, top, width: w, height: h };
+    return { layout, left, top: 0, width: w, height: h };
   }
 
   const sideMargin = Math.round(
@@ -56,7 +54,7 @@ export function computeLetualPlacement(
       marginScale
   );
   const maxW = canvasW - sideMargin * 2;
-  const scale = Math.min(maxW / productW, 1);
+  const scale = Math.min(maxW / productW, canvasH / productH);
   const w = Math.round(productW * scale);
   const h = Math.round(productH * scale);
   const left = Math.round((canvasW - w) / 2);

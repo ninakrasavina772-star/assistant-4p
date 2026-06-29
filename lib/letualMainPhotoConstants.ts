@@ -9,10 +9,10 @@ export const LETUAL_ASPECT_VERTICAL_MIN = 1.15;
 /** Ширина/высота силуэта > 1.15 → широкий низкий (тип C). */
 export const LETUAL_ASPECT_WIDE_LOW_MIN = 1.15;
 
+/** Боковые отступы для квадратных/широких (тип B) — не меньше этого зазора. */
 export const LETUAL_SIDE_MARGIN_SQUARE = 130;
+/** Боковые отступы для широких низких (тип C). */
 export const LETUAL_SIDE_MARGIN_WIDE_LOW = 50;
-/** Верхний и нижний отступ для вертикальных флаконов (тип A). */
-export const LETUAL_VERTICAL_MARGIN = 100;
 
 /** Максимум variation_id за одну сессию в UI. */
 export const LETUAL_BATCH_MAX = 50;
